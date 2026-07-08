@@ -36,7 +36,7 @@
   },
   "overrides": [
     {
-      "includes": ["vite.config.ts"],
+      "includes": ["vite.config.ts", "vitest.config.ts"],
       "linter": {
         "rules": {
           "style": {

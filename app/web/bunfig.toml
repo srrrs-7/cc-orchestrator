@@ -1,0 +1,7 @@
+[install]
+# Shai-Hulud 等のサプライチェーン攻撃対策:
+# 公開から 21 日(1814400 秒)未満のバージョンはインストールしない
+minimumReleaseAge = 1814400
+# 意図的に最新を追う preview パッケージは除外(除外しないと更新が 21 日ブロックされる)
+# @typescript/native-preview = tsgo の日次ビルド
+minimumReleaseAgeExcludes = ["@typescript/native-preview"]

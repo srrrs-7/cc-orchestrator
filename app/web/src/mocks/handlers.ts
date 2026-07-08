@@ -67,6 +67,15 @@ export const handlers = [
     return HttpResponse.json(tasks);
   }),
 
+  http.get("/api/tasks/:id", ({ params }) => {
+    const id = params.id;
+    const task = tasks.find((candidate) => candidate.id === id);
+    if (task === undefined) {
+      return HttpResponse.json({ message: "Task not found" }, { status: 404 });
+    }
+    return HttpResponse.json(task);
+  }),
+
   http.post("/api/tasks", async ({ request }) => {
     const json: unknown = await request.json();
     const body = createTaskRequestSchema.parse(json);
