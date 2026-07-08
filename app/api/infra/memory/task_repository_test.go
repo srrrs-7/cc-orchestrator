@@ -15,7 +15,7 @@ func newTestTask(t *testing.T, title string) *task.Task {
 	if err != nil {
 		t.Fatalf("NewTitle(%q) unexpected error: %v", title, err)
 	}
-	return task.New(tt)
+	return task.New(tt, task.PriorityMedium)
 }
 
 func TestTaskRepository_SaveAndFindByID(t *testing.T) {
@@ -38,6 +38,34 @@ func TestTaskRepository_SaveAndFindByID(t *testing.T) {
 	}
 	if got.Status() != tk.Status() {
 		t.Errorf("Status() = %v, want %v", got.Status(), tk.Status())
+	}
+	// R1: clone (used by Save/FindByID under the hood) preserves priority.
+	if got.Priority() != tk.Priority() {
+		t.Errorf("Priority() = %v, want %v", got.Priority(), tk.Priority())
+	}
+}
+
+// TestTaskRepository_SaveAndFindByID_PreservesPriority is a dedicated
+// R1 regression: a non-default priority set at construction time must
+// survive the Save -> FindByID round trip through clone()/Reconstruct.
+func TestTaskRepository_SaveAndFindByID_PreservesPriority(t *testing.T) {
+	repo := memory.NewTaskRepository()
+	title, err := task.NewTitle("buy milk")
+	if err != nil {
+		t.Fatalf("NewTitle() unexpected error: %v", err)
+	}
+	tk := task.New(title, task.PriorityHigh)
+
+	if err := repo.Save(context.Background(), tk); err != nil {
+		t.Fatalf("Save() unexpected error: %v", err)
+	}
+
+	got, err := repo.FindByID(context.Background(), tk.ID())
+	if err != nil {
+		t.Fatalf("FindByID() unexpected error: %v", err)
+	}
+	if got.Priority() != task.PriorityHigh {
+		t.Errorf("Priority() = %v, want %v", got.Priority(), task.PriorityHigh)
 	}
 }
 

@@ -57,7 +57,7 @@ func TestDuplicateChecker_IsDuplicated(t *testing.T) {
 			name: "matching task is a duplicate",
 			repo: &fakeRepository{
 				findByTitleFunc: func(ctx context.Context, title task.Title) (*task.Task, error) {
-					return task.New(title), nil
+					return task.New(title, task.PriorityMedium), nil
 				},
 			},
 			wantDup: true,

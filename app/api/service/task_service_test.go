@@ -68,7 +68,7 @@ func newTestService() (*service.TaskService, *fakeRepository) {
 func TestTaskService_Create_Success(t *testing.T) {
 	svc, _ := newTestService()
 
-	dto, err := svc.Create(context.Background(), "buy milk")
+	dto, err := svc.Create(context.Background(), "buy milk", "")
 	if err != nil {
 		t.Fatalf("Create() unexpected error: %v", err)
 	}
@@ -78,6 +78,10 @@ func TestTaskService_Create_Success(t *testing.T) {
 	}
 	if dto.Status != task.StatusTodo.String() {
 		t.Errorf("Status = %q, want %q", dto.Status, task.StatusTodo.String())
+	}
+	// R2: an unspecified (empty) priority defaults to medium.
+	if dto.Priority != task.PriorityMedium.String() {
+		t.Errorf("Priority = %q, want %q", dto.Priority, task.PriorityMedium.String())
 	}
 	if dto.ID == "" {
 		t.Error("ID is empty, want non-empty")
@@ -90,14 +94,54 @@ func TestTaskService_Create_Success(t *testing.T) {
 	}
 }
 
+// TestTaskService_Create_Priority covers R2 (an unspecified/empty
+// priority defaults to medium; an explicit priority is honored
+// verbatim) and R5 (an invalid priority string is rejected with
+// ErrInvalidPriority instead of silently defaulting).
+func TestTaskService_Create_Priority(t *testing.T) {
+	tests := []struct {
+		name     string
+		priority string
+		want     string
+		wantErr  error
+	}{
+		{name: "unspecified defaults to medium (R2 boundary)", priority: "", want: task.PriorityMedium.String()},
+		{name: "explicit low", priority: "low", want: task.PriorityLow.String()},
+		{name: "explicit medium", priority: "medium", want: task.PriorityMedium.String()},
+		{name: "explicit high", priority: "high", want: task.PriorityHigh.String()},
+		{name: "invalid priority is rejected (R5)", priority: "urgent", wantErr: task.ErrInvalidPriority},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _ := newTestService()
+
+			dto, err := svc.Create(context.Background(), "buy milk", tt.priority)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Create(_, _, %q) error = %v, want wrapping %v", tt.priority, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Create(_, _, %q) unexpected error: %v", tt.priority, err)
+			}
+			if dto.Priority != tt.want {
+				t.Errorf("Priority = %q, want %q", dto.Priority, tt.want)
+			}
+		})
+	}
+}
+
 func TestTaskService_Create_DuplicateTitle(t *testing.T) {
 	svc, _ := newTestService()
 
-	if _, err := svc.Create(context.Background(), "buy milk"); err != nil {
+	if _, err := svc.Create(context.Background(), "buy milk", ""); err != nil {
 		t.Fatalf("setup Create() unexpected error: %v", err)
 	}
 
-	_, err := svc.Create(context.Background(), "buy milk")
+	_, err := svc.Create(context.Background(), "buy milk", "")
 	if !errors.Is(err, task.ErrDuplicateTitle) {
 		t.Fatalf("Create() error = %v, want wrapping %v", err, task.ErrDuplicateTitle)
 	}
@@ -117,7 +161,7 @@ func TestTaskService_Create_InvalidTitle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, _ := newTestService()
 
-			_, err := svc.Create(context.Background(), tt.title)
+			_, err := svc.Create(context.Background(), tt.title, "")
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Create(%q) error = %v, want wrapping %v", tt.title, err, tt.wantErr)
 			}
@@ -128,7 +172,7 @@ func TestTaskService_Create_InvalidTitle(t *testing.T) {
 func TestTaskService_Get(t *testing.T) {
 	t.Run("existing task is found", func(t *testing.T) {
 		svc, _ := newTestService()
-		created, err := svc.Create(context.Background(), "buy milk")
+		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
 		}
@@ -172,10 +216,10 @@ func TestTaskService_List(t *testing.T) {
 		t.Fatalf("List() on empty repo = %d items, want 0", len(got))
 	}
 
-	if _, err := svc.Create(context.Background(), "buy milk"); err != nil {
+	if _, err := svc.Create(context.Background(), "buy milk", ""); err != nil {
 		t.Fatalf("setup Create() unexpected error: %v", err)
 	}
-	if _, err := svc.Create(context.Background(), "walk dog"); err != nil {
+	if _, err := svc.Create(context.Background(), "walk dog", ""); err != nil {
 		t.Fatalf("setup Create() unexpected error: %v", err)
 	}
 
@@ -191,7 +235,7 @@ func TestTaskService_List(t *testing.T) {
 func TestTaskService_Start(t *testing.T) {
 	t.Run("todo transitions to doing", func(t *testing.T) {
 		svc, _ := newTestService()
-		created, err := svc.Create(context.Background(), "buy milk")
+		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
 		}
@@ -207,7 +251,7 @@ func TestTaskService_Start(t *testing.T) {
 
 	t.Run("invalid transition error propagates", func(t *testing.T) {
 		svc, _ := newTestService()
-		created, err := svc.Create(context.Background(), "buy milk")
+		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
 		}
@@ -236,7 +280,7 @@ func TestTaskService_Start(t *testing.T) {
 func TestTaskService_Complete(t *testing.T) {
 	t.Run("doing transitions to done", func(t *testing.T) {
 		svc, _ := newTestService()
-		created, err := svc.Create(context.Background(), "buy milk")
+		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
 		}
@@ -255,7 +299,7 @@ func TestTaskService_Complete(t *testing.T) {
 
 	t.Run("invalid transition from todo propagates", func(t *testing.T) {
 		svc, _ := newTestService()
-		created, err := svc.Create(context.Background(), "buy milk")
+		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
 		}
@@ -274,6 +318,66 @@ func TestTaskService_Complete(t *testing.T) {
 		_, err := svc.Complete(context.Background(), task.NewID().String())
 		if !errors.Is(err, task.ErrNotFound) {
 			t.Fatalf("Complete() error = %v, want wrapping %v", err, task.ErrNotFound)
+		}
+	})
+}
+
+// TestTaskService_ChangePriority covers R3 (a valid priority change
+// is persisted and reflected in the returned DTO, without touching
+// status) and R5 (an invalid priority value is rejected) plus the
+// not-found boundary shared with Start/Complete.
+func TestTaskService_ChangePriority(t *testing.T) {
+	t.Run("changes priority without touching status", func(t *testing.T) {
+		svc, _ := newTestService()
+		created, err := svc.Create(context.Background(), "buy milk", "low")
+		if err != nil {
+			t.Fatalf("setup Create() unexpected error: %v", err)
+		}
+
+		got, err := svc.ChangePriority(context.Background(), created.ID, "high")
+		if err != nil {
+			t.Fatalf("ChangePriority() unexpected error: %v", err)
+		}
+		if got.Priority != task.PriorityHigh.String() {
+			t.Errorf("Priority = %q, want %q", got.Priority, task.PriorityHigh.String())
+		}
+		if got.Status != task.StatusTodo.String() {
+			t.Errorf("Status = %q, want unchanged %q", got.Status, task.StatusTodo.String())
+		}
+	})
+
+	t.Run("invalid priority value is rejected (R5)", func(t *testing.T) {
+		svc, _ := newTestService()
+		created, err := svc.Create(context.Background(), "buy milk", "")
+		if err != nil {
+			t.Fatalf("setup Create() unexpected error: %v", err)
+		}
+
+		_, err = svc.ChangePriority(context.Background(), created.ID, "urgent")
+		if !errors.Is(err, task.ErrInvalidPriority) {
+			t.Fatalf("ChangePriority() error = %v, want wrapping %v", err, task.ErrInvalidPriority)
+		}
+	})
+
+	t.Run("empty priority value is rejected (R5, strict boundary)", func(t *testing.T) {
+		svc, _ := newTestService()
+		created, err := svc.Create(context.Background(), "buy milk", "")
+		if err != nil {
+			t.Fatalf("setup Create() unexpected error: %v", err)
+		}
+
+		_, err = svc.ChangePriority(context.Background(), created.ID, "")
+		if !errors.Is(err, task.ErrInvalidPriority) {
+			t.Fatalf("ChangePriority() error = %v, want wrapping %v", err, task.ErrInvalidPriority)
+		}
+	})
+
+	t.Run("unknown id is not found", func(t *testing.T) {
+		svc, _ := newTestService()
+
+		_, err := svc.ChangePriority(context.Background(), task.NewID().String(), "high")
+		if !errors.Is(err, task.ErrNotFound) {
+			t.Fatalf("ChangePriority() error = %v, want wrapping %v", err, task.ErrNotFound)
 		}
 	})
 }

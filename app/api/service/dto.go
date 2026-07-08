@@ -17,6 +17,7 @@ type TaskDTO struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	Status    string    `json:"status"`
+	Priority  string    `json:"priority"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -27,6 +28,7 @@ func newTaskDTO(t *task.Task) TaskDTO {
 		ID:        t.ID().String(),
 		Title:     t.Title().String(),
 		Status:    t.Status().String(),
+		Priority:  t.Priority().String(),
 		CreatedAt: t.CreatedAt(),
 		UpdatedAt: t.UpdatedAt(),
 	}

@@ -31,6 +31,10 @@ var (
 	// ErrInvalidStatus is returned when a Status cannot be parsed
 	// from a string.
 	ErrInvalidStatus = errors.New("task: invalid status")
+
+	// ErrInvalidPriority is returned when a Priority cannot be parsed
+	// from a string.
+	ErrInvalidPriority = errors.New("task: invalid priority")
 )
 
 // TransitionError indicates an attempt to move a Task from one Status

@@ -18,6 +18,7 @@ func NewRouter(svc *service.TaskService) http.Handler {
 	mux.HandleFunc("GET /tasks/{id}", h.get)
 	mux.HandleFunc("POST /tasks/{id}/start", h.start)
 	mux.HandleFunc("POST /tasks/{id}/complete", h.complete)
+	mux.HandleFunc("POST /tasks/{id}/priority", h.changePriority)
 
 	return mux
 }

@@ -24,6 +24,11 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
+// @title        Task Management API
+// @version      1.0
+// @description  Task management sample API (Go, DDD-layered). This spec is generated from swag
+// @description  annotations on the route package and is the contract of record for app/web codegen.
+// @BasePath     /
 func main() {
 	if err := run(); err != nil {
 		slog.Error("api: fatal error", "error", err)

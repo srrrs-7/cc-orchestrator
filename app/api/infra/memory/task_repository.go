@@ -108,5 +108,5 @@ func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
 // task.Reconstruct, preventing the repository's stored data and the
 // caller's data from aliasing (sharing) the same mutable object.
 func clone(t *task.Task) *task.Task {
-	return task.Reconstruct(t.ID(), t.Title(), t.Status(), t.CreatedAt(), t.UpdatedAt())
+	return task.Reconstruct(t.ID(), t.Title(), t.Status(), t.Priority(), t.CreatedAt(), t.UpdatedAt())
 }

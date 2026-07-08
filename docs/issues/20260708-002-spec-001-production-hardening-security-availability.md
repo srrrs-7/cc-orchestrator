@@ -109,3 +109,7 @@ specs: [SPEC-001]  # 関連Spec ID (例: [SPEC-002])
 - 7 項目すべてを実装ファイルで事実確認し、file:line の根拠を本文に記載(TLS 強制 no-op:`db/main.tf:28-33`、AWS 管理鍵:`logs.tf`/`ecr.tf:13-15`/`db/main.tf:44`、ログ無効:`cdn/main.tf`、ECR MUTABLE:`ecr.tf:7`、state 手動 bootstrap:`versions.tf:15-28`、デフォルト証明書:`cdn/main.tf:167-171`、単一タスク全 Spot:`terraform.tfvars`/`ecs.tf:89-118`)。
 - severity は **low** と判定。判定根拠: これらは SPEC-001 のスコープ(dev 専用・コスト効率重視のリファレンス実装)で **意図的に見送ったトレードオフであり退行バグではない**。サンプルの目標(plan が通る参照実装)は本 Issue の未対応でも達成され、現時点の実害はない(回避策=本番移行時に有効化、あり)。ただし本番相当へ転用する際に未対応だとセキュリティ・可用性の実害につながるため、記録・追跡が必要と判断し low とした(critical/high/medium ではないのは、現行スコープで機能・価値が損なわれていないため)。
 - 次にやること: 本番相当移行を決めた時点で planner に計画化を依頼し、各項目を impl-iac が実装 → tester/checker/review-* を通す(`terraform apply` はユーザー判断)。SPEC-001 側 frontmatter `issues` への相互リンク追記済み。
+
+### 2026-07-09(関連 Issue の相互参照)
+
+- 関連課題として **ISSUE-010**(app/api の全 HTTP ハンドラでリクエストボディサイズ上限と `http.Server` の防御設定が無い、緩やかな DoS への堅牢化不足)を相互参照する。「サーバ堅牢化」という趣旨は本 Issue と近いが、**別課題**として扱う。理由: 本 Issue は `app/iac`(Terraform のインフラ層、修正担当 impl-iac)に閉じたチェックリスト、ISSUE-010 は `app/api`(Go アプリ層の HTTP 受け口、修正担当 impl-api)の堅牢化で、対象コード・修正ファイル・オーナーがいずれも重ならないため。本エントリは相互参照の記録のみで、本 Issue の内容・ステータス(open / low)に変更はない。

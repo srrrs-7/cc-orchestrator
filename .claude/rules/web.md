@@ -18,7 +18,7 @@ paths:
 | test | `bun run test` |
 | build | `bun run build` |
 
-package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `vite build`)、テストランナーは Bun 標準(`test` script の実体は `bun test`)。実行はすべて `app/web` ディレクトリで行う。
+package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `tsgo --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**(`test` script の実体は `vitest run`。RTL / jsdom / MSW と組み合わせるため Bun 標準ランナーではなく Vitest を採用)。実行はすべて `app/web` ディレクトリで行う。
 
 lint / format は **Biome** 単一ツールで行う(`lint` = `biome lint`、`format` / `format:check` = `biome format`。設定は `biome.json`)。**ESLint / Prettier は使わない。**
 
@@ -36,7 +36,7 @@ Shai-Hulud 型の npm サプライチェーン攻撃(公開直後に汚染され
 - strict mode 前提。`any` 禁止(やむを得ない場合は `unknown` + 型ガードで絞り込む)
 - `as` による強制キャストは境界(API レスポンスのパース等)のみ。内部ロジックでは使わない
 - 外部から来るデータ(API・localStorage・URL params)はスキーマバリデーション(zod 等)を通してから型を付ける
-- export は named export のみ。default export 禁止(ルーティング規約が要求する場合を除く)
+- export は named export のみ。default export 禁止(ルーティング規約やビルドツールの設定ファイル(`vite.config.ts` / `vitest.config.ts`)が要求する場合を除く)
 
 ## React
 

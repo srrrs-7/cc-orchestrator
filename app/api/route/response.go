@@ -48,6 +48,8 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "title is too long"})
 	case errors.Is(err, task.ErrInvalidID):
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task id"})
+	case errors.Is(err, task.ErrInvalidPriority):
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid priority"})
 	case errors.As(err, &transitionErr):
 		writeJSON(w, http.StatusConflict, errorResponse{Error: transitionErr.Error()})
 	default:

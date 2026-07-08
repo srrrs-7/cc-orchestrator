@@ -21,12 +21,22 @@ func NewTaskService(repo task.Repository, dupChk *task.DuplicateChecker) *TaskSe
 	return &TaskService{repo: repo, dupChk: dupChk}
 }
 
-// Create builds a new Task from the given title, rejecting duplicate
-// titles, and persists it.
-func (s *TaskService) Create(ctx context.Context, title string) (TaskDTO, error) {
+// Create builds a new Task from the given title and priority,
+// rejecting duplicate titles, and persists it. An empty priority
+// defaults to task.PriorityMedium; a non-empty priority is validated
+// via task.ParsePriority and rejected (ErrInvalidPriority) if unknown.
+func (s *TaskService) Create(ctx context.Context, title, priority string) (TaskDTO, error) {
 	t, err := task.NewTitle(title)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
+	}
+
+	p := task.PriorityMedium
+	if priority != "" {
+		p, err = task.ParsePriority(priority)
+		if err != nil {
+			return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
+		}
 	}
 
 	duplicated, err := s.dupChk.IsDuplicated(ctx, t)
@@ -37,7 +47,7 @@ func (s *TaskService) Create(ctx context.Context, title string) (TaskDTO, error)
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", task.ErrDuplicateTitle)
 	}
 
-	newTask := task.New(t)
+	newTask := task.New(t, p)
 	if err := s.repo.Save(ctx, newTask); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
 	}
@@ -92,6 +102,34 @@ func (s *TaskService) Start(ctx context.Context, id string) (TaskDTO, error) {
 
 	if err := s.repo.Save(ctx, t); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
+	}
+
+	return newTaskDTO(t), nil
+}
+
+// ChangePriority updates the priority of the Task identified by id.
+// It never touches status: priority changes are orthogonal to the
+// todo/doing/done state machine.
+func (s *TaskService) ChangePriority(ctx context.Context, id, priority string) (TaskDTO, error) {
+	taskID, err := task.ParseID(id)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	p, err := task.ParsePriority(priority)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	t, err := s.repo.FindByID(ctx, taskID)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	t.ChangePriority(p)
+
+	if err := s.repo.Save(ctx, t); err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
 	}
 
 	return newTaskDTO(t), nil
