@@ -4,7 +4,7 @@ title: AWS ECS API インフラ(CloudFront → WAF → ECS → PostgreSQL)のサ
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-08
 updated: 2026-07-08
-issues: []
+issues: [ISSUE-001, ISSUE-002]
 supersedes: null
 ---
 
@@ -105,3 +105,5 @@ planner が `docs/plans/SPEC-001-plan.md` を作成する。タスク概要:
 
 - 初版作成。ユーザーから「CloudFront → WAF → API(ECS)→ Postgres のコストパフォーマンスが良い構成を Terraform で組む」という依頼を受けたもの。実装着手の指示を伴うため、作成時点で status: approved とした
 - planner が実装計画 `docs/plans/SPEC-001-plan.md` を作成。impl-iac による実装に着手したため status: in-progress に更新
+- 計画策定中に判明した app/api の課題(ヘルスチェック専用エンドポイント不在・RDS 未接続)を ISSUE-001 として起票し、frontmatter に相互リンク。ALB ヘルスチェックは暫定で `GET /tasks` を使用し、`/healthz` 追加と PostgreSQL 接続は ISSUE-001 で別途対応する
+- レビュー(review-security / review-performance)で挙がった、サンプルスコープでは意図的に見送ったセキュリティ・可用性強化 7 項目(RDS TLS 強制・CMK 暗号化・CloudFront/WAF ログ・ECR IMMUTABLE・state バケット IaC 化・CloudFront 最低 TLS 明示・ECS 単一障害点解消)を、本番相当移行時のチェックリストとして ISSUE-002 に集約起票し、frontmatter に相互リンク。いずれも退行ではなくサンプルの設計方針どおりの省略で、本 Spec のスコープ(dev のサンプル)では対応しない

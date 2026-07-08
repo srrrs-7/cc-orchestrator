@@ -7,18 +7,27 @@ paths:
 
 ## コマンド
 
-実行は対象環境ディレクトリ(`app/iac/envs/<env>`)で行う。checker はこれを実行する。
+`app/iac/Makefile` の make ターゲット経由で実行することを推奨する(環境は `ENV=<env>` で指定、既定は `dev`)。直接 terraform を叩く場合の同等コマンドと実行場所も併記する。checker はこれらを実行する。
 
-| 目的 | コマンド |
-|---|---|
-| format(チェック) | `terraform fmt -check -recursive` |
-| format(自動修正) | `terraform fmt -recursive` |
-| validate | `terraform validate` |
-| lint | `tflint --recursive` |
-| security scan | `trivy config .` |
-| plan(差分確認) | `terraform plan` |
+実行場所には 2 種類ある:
+- **format(fmt / fmt-check)は `app/iac` ルートで全体(modules + envs)を対象に実行する。** `terraform fmt` はディレクトリ構造・モジュール解決に依存せず全 `.tf` を整形するため、env ディレクトリ基点で実行すると `modules/` を再帰対象から外し、整形崩れを見逃す。
+- **validate / plan / init / lint / security scan は対象環境ディレクトリ(`app/iac/envs/<env>`)で実行する**(モジュール解決や env 単位の検証のため)。
 
-**`terraform apply` は agent からは実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
+| 目的 | make ターゲット | 直接コマンド | 実行場所 |
+|---|---|---|---|
+| format(チェック) | `make fmt-check` | `terraform fmt -check -recursive` | `app/iac` ルート |
+| format(自動修正) | `make fmt` | `terraform fmt -recursive` | `app/iac` ルート |
+| init(backend なし) | `make init-local` | `terraform init -backend=false` | `envs/<env>` |
+| validate | `make validate` | `terraform validate` | `envs/<env>` |
+| lint | `make lint` | `tflint --recursive` | `envs/<env>` |
+| security scan | `make security` | `trivy config .` | `envs/<env>` |
+| plan(差分確認) | `make plan` | `terraform plan` | `envs/<env>` |
+| 一括チェック | `make check` | fmt-check → validate → lint → security | — |
+
+- 認証情報や実 backend が無い環境で検証するときは `make init-local`(`-backend=false`)を使う。`envs/dev` の backend は S3 プレースホルダのため、素の `terraform init` は失敗する。
+- `make lint` / `make security` はツール(tflint / trivy)未導入だと失敗する。導入は環境側の前提。
+
+**`terraform apply`(`make apply`)は agent からは実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
 
 ## レイアウト
 
