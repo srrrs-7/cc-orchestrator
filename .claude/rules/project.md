@@ -8,6 +8,7 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 |---|---|
 | `app/web` | フロントエンド (TypeScript / React) |
 | `app/api` | バックエンド API (Go) |
+| `app/auth` | 認証・認可 API (Go / OAuth 2.0 + OIDC)。`app/api` と同一の DDD レイヤ構成 |
 | `app/iac` | インフラ (Terraform) |
 | `docs/specs` | 機能仕様(Spec)。`spec` skill が固定テンプレートで管理。機能開発の起点となる一次情報 |
 | `docs/issues` | 不具合・課題(Issue)。`issue` skill が固定テンプレートで管理。issue-creator agent が起票する |
