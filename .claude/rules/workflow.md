@@ -1,57 +1,36 @@
 # 開発ワークフロー
 
-作業は必ず Issue を単位として進める。orchestrator(メインの Claude)は各フェーズを対応する subagent に委譲する。
+ドキュメントの形式は skill が単一の情報源として管理する。テンプレートをここに重複させない:
+
+- **機能仕様(Spec)**: `docs/specs` — `spec` skill(SPEC-NNN、固定テンプレート)
+- **不具合・課題(Issue)**: `docs/issues` — `issue` skill(ISSUE-NNN、固定テンプレート)
 
 ## パイプライン
 
+機能開発は Spec を、不具合対応は Issue を起点とする。orchestrator(メインの Claude)は各フェーズを対応する subagent に委譲する。
+
 ```
-docs/specs(仕様)
-  → 1. issue-creator : Issue 起票(docs/issues)
-  → 2. planner       : 実装計画の作成(docs/plans)
-  → 3. tester        : 受け入れ条件からテストを先に作成(TDD。計画で後付けを指定した場合は 4 の後)
-  → 4. impl-web / impl-api / impl-iac : 実装(scope が独立していれば並列可)
-  → 5. tester        : テスト実行・不足テストの追加
-  → 6. checker       : format / lint / type check
-  → 7. review-security / review-performance / review-spec : レビュー(並列)
-  → 8. 指摘対応       : Blocker / Major は impl agent に差し戻し、5→7 を再実行
+機能開発: spec skill で Spec を作成(status: approved にしてから着手)
+不具合  : issue-creator agent で Issue を起票
+  → 1. planner  : 実装計画を docs/plans に作成し、起点の Spec / Issue に反映
+  → 2. tester   : 要件からテストを先に作成(TDD。計画で後付けを指定した場合は 3 の後)
+  → 3. impl-web / impl-api / impl-iac : 実装(scope が独立していれば並列可)
+  → 4. tester   : テスト実行・不足テストの追加
+  → 5. checker  : format / lint / type check
+  → 6. review-security / review-performance / review-spec : レビュー(並列)
+  → 7. 指摘対応  : Blocker / Major は impl agent に差し戻し、4→6 を再実行。
+                  今回対応しない指摘は issue-creator が Issue として起票する
+  → 8. 起点の Spec / Issue のステータスと経緯を skill の手順に従って更新し、完了
 ```
 
-- フェーズを飛ばさない。特に 6(checker)が通らない状態で 7(レビュー)に進まない
+- フェーズを飛ばさない。特に 5(checker)が通らない状態で 6(レビュー)に進まない
 - レビュー agent はコードを変更しない。修正は必ず impl agent が行う
+- Spec / Issue を更新するときは必ず各 skill の更新手順(経緯セクションへの追記・frontmatter の status / updated 更新・過去エントリの編集禁止)に従う
 
-## Issue
+## Plan(実装計画)
 
-- ファイル名: `docs/issues/ISSUE-NNN-<slug>.md`(NNN は 3 桁連番、slug は英語 kebab-case)
-- status 遷移: `open → planned → in-progress → in-review → done`
-- テンプレート:
-
-```markdown
----
-id: ISSUE-001
-title: <日本語タイトル>
-status: open
-created: YYYY-MM-DD
-spec: docs/specs/<file>.md
-scope: [web, api, iac]   # 該当するものだけ
-plan: null               # planner が docs/plans のパスを設定
----
-
-## 概要
-
-## 背景 / 目的
-
-## 受け入れ条件
-- [ ] <検証可能な形で書く>
-
-## スコープ外
-
-## 依存関係
-- <先行して完了が必要な Issue があれば ISSUE-NNN を列挙>
-```
-
-## Plan
-
-- ファイル名: `docs/plans/ISSUE-NNN-plan.md`(対象 Issue と同じ NNN)
+- ファイル名: `docs/plans/<ID>-plan.md`(例: `SPEC-001-plan.md`、`ISSUE-003-plan.md`)
+- 起点ドキュメント側(Spec の「5. 実装計画」/ Issue の「対応方針」)にはタスクの要約と plan ファイルへの参照を書き、詳細は plan ファイルに書く
 - 必須セクション:
   - **方針**: 採用するアプローチと、退けた代替案の理由
   - **変更ファイル**: stack ごとの追加・変更ファイル一覧
