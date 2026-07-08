@@ -2,6 +2,7 @@
 name: checker
 description: format / lint / type check を実行する agent。実装・テスト完了後の機械的チェックと自動修正に使う。レビュー前に必ず通す。
 tools: Read, Edit, Glob, Grep, Bash
+model: haiku
 color: cyan
 ---
 

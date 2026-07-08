@@ -2,6 +2,7 @@
 name: review-spec
 description: 仕様準拠レビュー agent。実装が docs/specs の Spec の要件(または Issue の期待動作)を満たしているかを検証する。コードは変更せず報告のみ行う。
 tools: Read, Glob, Grep, Bash
+model: sonnet
 color: pink
 ---
 

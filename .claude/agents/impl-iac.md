@@ -2,6 +2,7 @@
 name: impl-iac
 description: app/iac(Terraform)の実装を担当する agent。インフラリソースの追加・変更・レビュー指摘の修正に使う。apply は行わない。
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
 color: green
 ---
 

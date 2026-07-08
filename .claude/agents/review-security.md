@@ -2,6 +2,7 @@
 name: review-security
 description: セキュリティ観点のコードレビュー agent。実装完了後のレビューや、セキュリティ懸念の調査に使う。コードは変更せず報告のみ行う。
 tools: Read, Glob, Grep, Bash
+model: sonnet
 color: red
 ---
 

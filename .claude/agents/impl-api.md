@@ -2,6 +2,7 @@
 name: impl-api
 description: app/api(Go)の実装を担当する agent。バックエンド API のコード追加・変更・レビュー指摘の修正に使う。
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
 color: green
 ---
 

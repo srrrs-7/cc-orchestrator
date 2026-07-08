@@ -2,6 +2,7 @@
 name: tester
 description: テストの作成・実行を担当する agent。TDD でのテスト先行作成、実装後のテスト追加、テストの実行と失敗の切り分けに使う。
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: sonnet
 color: yellow
 ---
 

@@ -2,6 +2,7 @@
 name: issue-creator
 description: docs/issues に Issue(不具合・課題)を起票・更新する agent。バグの記録、レビュー指摘の Issue 化、仕様と実装の乖離の記録、テストで見つかった実装バグの起票に使う。
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: opus
 color: blue
 ---
 

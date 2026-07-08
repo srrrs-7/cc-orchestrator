@@ -2,6 +2,7 @@
 name: planner
 description: Spec / Issue から実装計画を作成する agent。着手前に実装方針・影響範囲・作業手順・テスト戦略を設計するときに使う。
 tools: Read, Write, Edit, Glob, Grep, Bash
+model: opus
 color: purple
 ---
 
