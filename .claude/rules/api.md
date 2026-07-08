@@ -7,15 +7,16 @@ paths:
 
 ## コマンド
 
-実行はすべて `app/api` ディレクトリで行う。checker / tester はこれを実行する。
+実行はすべて `app/api` ディレクトリで行う。checker / tester はこれを実行する。各ターゲットの実体は `app/api/Makefile` が単一の情報源。
 
 | 目的 | コマンド |
 |---|---|
-| format(チェック) | `test -z "$(gofmt -l .)"` |
-| format(自動修正) | `gofmt -w . && goimports -w .` |
-| lint | `golangci-lint run ./...` |
-| type check 相当 | `go vet ./...` && `go build ./...` |
-| test | `go test ./...` |
+| format(チェック) | `make fmt-check` |
+| format(自動修正) | `make fmt` |
+| lint | `make lint` |
+| type check 相当 | `make vet` && `make build` |
+| test | `make test`(race 検査は `make test-race`) |
+| 上記すべて | `make check` |
 
 ## レイアウト
 
