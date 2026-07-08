@@ -7,7 +7,7 @@
 
 ## パイプライン
 
-機能開発は Spec を、不具合対応は Issue を起点とする。orchestrator(メインの Claude)は各フェーズを対応する subagent に委譲する。
+機能開発は Spec を、不具合対応は Issue を起点とする。admin(メインセッションの Claude。役割と強制事項は `orchestration.md` 参照)は各フェーズを対応する subagent に委譲する。
 
 ```
 機能開発: spec skill で Spec を作成(status: approved にしてから着手)
