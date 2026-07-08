@@ -8,21 +8,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## リポジトリ概要
 
-cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワークフロー全体(Spec → 計画 → TDD → 実装 → チェック → レビュー → 記録)を回すための monorepo。`app/{web,api,iac}` は現状空のプレースホルダで、実体は `.claude/` の agents / rules / skills 定義と `docs/` のドキュメント体系。
+cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワークフロー全体(Spec → 計画 → TDD → 実装 → チェック → レビュー → 記録)を回すための monorepo。中核は `.claude/` の agents / rules / skills 定義と `docs/` のドキュメント体系で、`app/` はそのワークフローで開発する題材。
+
+実装状況(スナップショット。正確な現状は各ディレクトリを参照):
+
+- `app/api` — Go(標準ライブラリのみ)の DDD サンプル(タスク管理)。実体のあるコードの中心
+- `app/iac` — Terraform モジュール(`modules/network` / `modules/db`)。SPEC-001 のインフラを実装中(`envs/` は未作成)
+- `app/auth` — OAuth 2.0 + OIDC の Go サービス。rules は整備済み・コードは未実装のプレースホルダ
+- `app/web` — TypeScript / React。rules は整備済み・コードは未実装のプレースホルダ
 
 - パイプラインの全フェーズと agent の役割分担: `.claude/rules/workflow.md`(常時ロード)
 - ディレクトリ構成と共通原則: `.claude/rules/project.md`(常時ロード)
 
+## 実装アーキテクチャ(app/api)
+
+app/api は Evans の DDD レイヤ化アーキテクチャの Go サンプル。詳細は `app/api/README.md` が正。要点だけ:
+
+- 依存の向きは一方向 `route → service → domain`。`domain` はどの層にも依存しない
+- 永続化は `domain/task/repository.go` の `Repository` interface で抽象化し、`infra/memory` が実装する(依存性逆転)。DB 実装を足すときはこの interface を満たす形で `infra/` に追加する
+- `cmd/api/main.go` はコンポジションルート(配線のみ・ロジックを持たない)
+- 集約ルート `Task` はフィールド非公開で、状態遷移は振る舞いメソッド(`Start` / `Complete` 等)経由のみ。ドメインエラーは sentinel / カスタム型 + `errors.Is` / `errors.As` で判定する
+- `app/auth` も同一のレイヤ構成(`domain` / `service` / `infra` / `route` / `cmd`)を踏襲する(`.claude/rules/auth.md`)
+
 ## ルールのロード構造
 
-`.claude/rules/{web,api,iac,testing}.md` は frontmatter の `paths` により、対象パス(`app/<stack>/**`)のファイルを扱うときだけ自動ロードされる。orchestrator として計画・委譲・コマンド実行を行うときは、対象 stack の rules を明示的に Read すること。各 rules の「コマンド」表は checker / tester が実行するコマンドの契約(例: `app/web/package.json` は表の scripts を必ず提供する)。
+`.claude/rules/{web,api,auth,iac,testing}.md` は frontmatter の `paths` により、対象パス(`app/<stack>/**`)のファイルを扱うときだけ自動ロードされる。orchestrator として計画・委譲・コマンド実行を行うときは、対象 stack の rules を明示的に Read すること。各 rules の「コマンド」表は checker / tester が実行するコマンドの契約(例: `app/web/package.json` は表の scripts を必ず提供する)。
 
 ## コマンド早見表(正は各 rules ファイルの「コマンド」表)
 
 | stack | 実行場所 | ツール |
 |---|---|---|
 | web | `app/web` | pnpm — `pnpm run format:check` / `format` / `lint` / `typecheck` / `test` / `build` |
-| api | `app/api` | `gofmt` / `goimports` / `golangci-lint run ./...` / `go vet ./...` / `go build ./...` / `go test ./...` |
+| api / auth | `app/api` / `app/auth` | make(実体は各 stack の `Makefile`)— `make check`(= fmt-check + lint + vet + build + test)、個別に `make fmt` / `fmt-check` / `lint` / `vet` / `build` / `test` / `test-race` / `run`。単一テストは `go test -run '^TestName$' ./path/...` |
 | iac | `app/iac/envs/<env>` | `terraform fmt` / `terraform validate` / `tflint --recursive` / `trivy config .` / `terraform plan` |
 
 **`terraform apply` は実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
@@ -31,5 +48,7 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 
 - 機能仕様は `docs/specs/`、不具合・課題は `docs/issues/` に時系列で記録する(命名規則と読み方は各ディレクトリの README 参照)
 - 仕様の作成・更新は `/spec`、課題の起票・更新は `/issue` スキルを必ず使う(直接ファイルを作らない)。テンプレートと更新手順は `.claude/skills/{spec,issue}/` が唯一の情報源
+- PR の作成は `/github-pr` スキルを使う(本文は最小限の概要のみを固定テンプレートで記載)
+- リリース PR は `/release-pr vX.Y.Z base=<branch>` スキルを使う(main HEAD から `vX.Y.Z` を切り、`base..main` の変更・ユーザー影響・関連 PR/Issue・インフラのデプロイ要件をテーブルで集約)
 - ファイル名 `YYYYMMDD-NNN-<slug>.md` の連番 NNN が ID(SPEC-NNN / ISSUE-NNN)。採番は既存ファイルの連番最大値 +1
 - 現状把握: 各ファイルの frontmatter の `status` と、「経緯」セクションの末尾が最新状態。経緯は追記のみで、過去エントリは編集しない
