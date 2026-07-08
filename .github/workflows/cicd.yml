@@ -1,0 +1,197 @@
+# CI pipeline for the cc-orchestrator monorepo.
+#
+# This workflow runs CI only (format / lint / type check / test / build per
+# stack). It intentionally contains NO deploy / CD steps and never runs
+# `terraform apply` (see .claude/rules/iac.md).
+#
+# The commands each job runs are the contract defined in
+# .claude/rules/{web,api,auth,iac,testing}.md — do not invent commands here.
+# Monorepo strategy: a `changes` job detects which stacks changed, and each
+# stack job runs only when its paths changed (or on manual dispatch), keeping
+# stacks independent.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref (e.g. new push to a PR branch).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Pinned tool / runtime versions (single source of truth for the whole file).
+# Action refs are pinned inline and kept fresh by Dependabot (github-actions);
+# the tool binary versions below are managed here manually.
+env:
+  GO_VERSION: "1.24"
+  BUN_VERSION: "1.2.21"
+  TERRAFORM_VERSION: "1.10.5"
+  GOLANGCI_LINT_VERSION: "1.64.8"
+  TFLINT_VERSION: "v0.55.1"
+  TRIVY_VERSION: "v0.58.1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Detect which stacks changed so each stack job can be skipped when untouched.
+  # The workflow file itself is added to every filter so CI changes re-run all.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed stacks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      api: ${{ steps.filter.outputs.api }}
+      auth: ${{ steps.filter.outputs.auth }}
+      iac: ${{ steps.filter.outputs.iac }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'app/web/**'
+              - '.github/workflows/cicd.yml'
+            api:
+              - 'app/api/**'
+              - '.github/workflows/cicd.yml'
+            auth:
+              - 'app/auth/**'
+              - '.github/workflows/cicd.yml'
+            iac:
+              - 'app/iac/**'
+              - '.github/workflows/cicd.yml'
+
+  # ---------------------------------------------------------------------------
+  # web (TypeScript / React) — Bun runtime/pm, Biome, tsgo, Vitest, Vite.
+  # Contract: .claude/rules/web.md (package.json scripts).
+  # ---------------------------------------------------------------------------
+  web:
+    name: web (TypeScript / React)
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      # --frozen-lockfile installs exactly what bun.lock pins; the
+      # bunfig.toml minimumReleaseAge gate only affects resolving new versions,
+      # so locked deps are unaffected in CI.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Format check
+        run: bun run format:check
+      - name: Lint
+        run: bun run lint
+      - name: Type check
+        run: bun run typecheck
+      - name: Test
+        run: bun run test
+      - name: Build
+        run: bun run build
+
+  # ---------------------------------------------------------------------------
+  # api (Go) — `make check` = fmt-check + lint + vet + build + test.
+  # golangci-lint is not preinstalled on the runner, so CI installs it (pinned)
+  # before invoking `make check`. Contract: .claude/rules/api.md (Makefile).
+  # ---------------------------------------------------------------------------
+  api:
+    name: api (Go)
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # stdlib-only module (no go.sum); nothing external to cache.
+          cache: false
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "v${GOLANGCI_LINT_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Check (fmt-check + lint + vet + build + test)
+        run: make check
+
+  # ---------------------------------------------------------------------------
+  # auth (Go) — identical toolchain to api. Contract: .claude/rules/auth.md.
+  # ---------------------------------------------------------------------------
+  auth:
+    name: auth (Go)
+    needs: changes
+    if: ${{ needs.changes.outputs.auth == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
+            | sh -s -- -b "$(go env GOPATH)/bin" "v${GOLANGCI_LINT_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Check (fmt-check + lint + vet + build + test)
+        run: make check
+
+  # ---------------------------------------------------------------------------
+  # iac (Terraform) — `make check ENV=dev` = fmt-check (root) + validate
+  # (init -backend=false) + lint (tflint) + security (trivy). NO apply.
+  # CI installs terraform / tflint / trivy (pinned). Contract: .claude/rules/iac.md.
+  # ---------------------------------------------------------------------------
+  iac:
+    name: iac (Terraform)
+    needs: changes
+    if: ${{ needs.changes.outputs.iac == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/iac
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # Disable the output-wrapper so `make`/`terraform` exit codes pass
+          # through cleanly.
+          terraform_wrapper: false
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+      # Prepare tflint plugins (no-op today: envs/dev has no .tflint.hcl, but
+      # this keeps CI working if a plugin config is added later).
+      - name: Init tflint
+        run: tflint --init
+        working-directory: app/iac/envs/dev
+      - uses: aquasecurity/setup-trivy@v0.2.3
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+      - name: Check (fmt-check + validate + lint + security)
+        run: make check ENV=dev

@@ -29,6 +29,7 @@
 | 実装・修正(app/web) | impl-web | |
 | 実装・修正(app/api) | impl-api | |
 | 実装・修正(app/iac) | impl-iac | |
+| CI/CD・リポジトリツーリング設定(`.github/`) | impl-ci | GitHub Actions workflow / dependabot / copilot-instructions 等 |
 | テスト作成・実行 | tester | |
 | format / lint / type check | checker | |
 | セキュリティレビュー | review-security | |
@@ -57,5 +58,5 @@
 
 - admin セッションは常に利用可能な最上位モデルで実行する(`/model` で確認・設定)
 - subagent のモデルは各 agent 定義の frontmatter `model:` で固定する:
-  上流(issue-creator / planner)= opus、中流(impl-* / tester / review-*)= sonnet、下流(checker)= haiku
+  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-iac / impl-ci)/ tester / review-*)= sonnet、下流(checker)= haiku
 - モデル割り当てを変える場合は agent 定義の frontmatter を書き換える(このファイルの方針も併せて更新する)
