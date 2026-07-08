@@ -59,7 +59,6 @@ const timeLayout = "2006-01-02T15:04:05Z07:00"
 // @Summary      Create a task
 // @Description  Creates a new task with the given title and an optional priority. An omitted or empty priority defaults to medium.
 // @Tags         tasks
-// @Accept       json
 // @Produce      json
 // @Param        request  body      createTaskRequest  true  "Task to create"
 // @Success      201      {object}  taskResponse
@@ -183,7 +182,6 @@ func (h *taskHandler) complete(w http.ResponseWriter, r *http.Request) {
 // @Summary      Change a task's priority
 // @Description  Updates a task's priority (low, medium, or high) without altering its status.
 // @Tags         tasks
-// @Accept       json
 // @Produce      json
 // @Param        id       path      string                 true  "Task ID"
 // @Param        request  body      changePriorityRequest  true  "New priority"

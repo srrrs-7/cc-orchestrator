@@ -2,6 +2,11 @@
 
 GOIMPORTS := go run golang.org/x/tools/cmd/goimports@latest
 
+# swag v2 is still pre-1.0 (RC); pin the exact tag here so `make openapi`
+# is reproducible. `go run pkg@version` builds/runs the tool without
+# touching this module's go.mod/go.sum (std-lib runtime is preserved).
+SWAG := go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5
+
 .PHONY: help
 help: ## ターゲット一覧を表示する
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -44,3 +49,8 @@ check: fmt-check lint vet build test ## 全チェックを実行する (fmt-chec
 .PHONY: run
 run: ## API サーバーを起動する (PORT 環境変数でポート変更可)
 	go run ./cmd/api
+
+.PHONY: openapi
+openapi: ## OpenAPI 3.1 契約 (docs/openapi.yaml) を swag v2 注釈から生成する (check には含めない)
+	$(SWAG) init -g cmd/api/main.go -o docs -ot yaml --v3.1
+	mv docs/swagger.yaml docs/openapi.yaml
