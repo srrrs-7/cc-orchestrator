@@ -90,9 +90,31 @@ jobs:
       # SPEC-003 R6: fail if regenerating either artifact produced a diff,
       # i.e. someone changed the Go DTOs/annotations or the OpenAPI contract
       # without re-running `make openapi` / `bun run generate` and
-      # committing the result.
+      # committing the result. This must also catch the case where
+      # regeneration produces a brand-new file that was never committed
+      # (e.g. a future @hey-api/openapi-ts version/plugin change emitting an
+      # additional generated file) — plain `git diff --exit-code` is blind
+      # to untracked paths, so it would silently pass that case.
       - name: Fail on contract drift
         run: |
-          git diff --exit-code -- \
+          # `git add -N` (--intent-to-add) registers any currently
+          # untracked paths under the watched locations in the index
+          # (without staging their content), so `git diff` below reports
+          # them as additions instead of ignoring them. Already-tracked,
+          # unmodified files are unaffected.
+          git add -N -- \
             app/api/docs/openapi.yaml \
             app/web/src/features/tasks/api/generated
+
+          if ! git diff --exit-code -- \
+            app/api/docs/openapi.yaml \
+            app/web/src/features/tasks/api/generated; then
+            echo
+            echo "::error::Contract drift detected — the diff above (new/changed files marked '+') was produced by regenerating app/api/docs/openapi.yaml and app/web's generated client from source. Run 'make openapi' in app/api and 'bun run generate' in app/web locally, then commit the result."
+            echo
+            echo "----- git status (watched paths) -----"
+            git status -- \
+              app/api/docs/openapi.yaml \
+              app/web/src/features/tasks/api/generated
+            exit 1
+          fi
