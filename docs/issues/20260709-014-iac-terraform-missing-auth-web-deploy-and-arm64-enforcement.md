@@ -1,7 +1,7 @@
 ---
 id: ISSUE-014
 title: app/iac(Terraform)が SPEC-001(app/api 単体世代)のまま取り残され、コンテナ化された app/auth / app/web を AWS へデプロイする経路が存在しない(IaC ⇄ 3アプリ構成の乖離)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: medium  # critical | high | medium | low
 created: 2026-07-09
 updated: 2026-07-09
@@ -116,3 +116,19 @@ specs: [SPEC-001, SPEC-004]  # 関連Spec ID (例: [SPEC-002])
 - 次にやること: (a) SPEC-001 の「スコープ外」節へのスコープ明記(spec-owner 判断・本 Issue 担当外)、(b) auth / web の AWS インフラ化の新 Spec 化、(c) ARM64 ビルド強制の検討。planner による計画化を推奨。SPEC-001 側 frontmatter の `issues` への相互リンク追記と経緯追記は連動して実施。
 - 本 Issue の対応(b)として、auth / web の AWS デプロイ経路を設計する **SPEC-004**(`docs/specs/20260709-004-auth-web-aws-deploy.md`)を起票し、双方向に相互リンクした(本 Issue frontmatter `specs` に SPEC-004 を追加。SPEC-004 側は `issues: [ISSUE-014]`)。本 Issue の実解消(auth / web が AWS にデプロイできる状態)は SPEC-004 の実装で行う。
 - SPEC-004 の方針: サンプルグレード(HTTP・CloudFront デフォルトドメイン)を維持し、web = S3 + CloudFront、auth = 2 つ目の ECS(ARM64)をパスベースルーティングで既存 ALB 配下に追加する。SPEC-004 は現在 status: draft(ユーザー承認待ち)。本 Issue は実解消が SPEC-004 実装後になるため status は open のまま維持する。
+
+### 2026-07-09(SPEC-004 実装完了で解消 → resolved)
+
+- **SPEC-004(`docs/specs/20260709-004-auth-web-aws-deploy.md`)の実装完了により、本 Issue が指す乖離(app/auth・app/web の AWS デプロイ経路が無い / ARM64 未強制)が IaC コードレベルで解消した。** status を open → **resolved** に更新。
+- 解消内容(IaC コード):
+  - **auth**: 汎用 `modules/service` を新設し、`envs/dev` の `service_auth` として配線(ECS Fargate ARM64・専用 Target Group / ECR・health check `/.well-known/openid-configuration`・`desired_count=1`)。これで auth 用の ECS service / ECR / タスク定義が IaC に存在するようになり、現象「app/auth の AWS 配置が無い」を解消。
+  - **web**: `modules/cdn` を拡張し、S3 を非公開化 + OAC を付与、単一 CloudFront に 3 オリジン / behavior(web 静的配信・api・auth)と SPA フォールバック用 CloudFront Function を追加。これで web(SPA)の AWS 配信経路が存在するようになり、現象「app/web の配信経路が無い」を解消。
+  - **ARM64 強制**: root `Makefile` の `push-images`(`docker buildx --platform linux/arm64`)と `.github/workflows/deploy.yml`(workflow_dispatch)で、ビルド経路として ARM64 を強制。現象「ARM64 のビルド強制が無い」および対応方針 (c) を解消。ECR への build/push CI 経路(対応方針 (c'))も deploy.yml で用意。
+  - **R5(auth issuer 整合)**: CloudFront 側で prefix-strip する方式を採り、app/auth のコードは無改修で issuer を整合(担当外 stack の app/auth を変更せずに解決)。
+- 検証:
+  - checker: `terraform fmt -check` / `terraform validate` が green(tflint / trivy は本環境に未導入のため未実行)。
+  - review-security / review-performance / review-spec の 3 レビューを実施。
+  - review-spec が検出した Major(`modules/service` への汎用化により api の ForceNew リソース名がずれ、`moved` ブロックが実 replace になる恐れ)は、override 変数で旧リソース名を復元して解消済み。
+- **残る確認(ユーザー作業・本 Issue のスコープ外)**: AWS 認証情報での `terraform plan`(api リソースが move / no-op に収まり replace されないこと、auth / web リソースが新規作成として出ること)と apply、tflint / trivy の実行。これらは SPEC-001 と同様に人間判断に委ねる(`.claude/rules/iac.md`:`terraform apply` は実行しない)。
+- 対応方針 (a)(SPEC-001「スコープ外」節へのスコープ明記・spec-owner 判断)は本 Issue の担当外で、SPEC-004 の実装とは独立。本 Issue の主眼(auth / web の AWS デプロイ経路と ARM64 強制)は解消したため resolved とし、(a) は SPEC-001 側 / spec-owner の判断に委ねる。
+- 関連: SPEC-004。相互リンク(本 Issue frontmatter `specs: [SPEC-001, SPEC-004]` / SPEC-004 側 `issues: [ISSUE-014]`)は維持。SPEC-004 実装で新設・省略した本番相当の強化項目は **ISSUE-002** に追記した(本番移行チェックリストへ集約)。
