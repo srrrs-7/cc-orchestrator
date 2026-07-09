@@ -15,7 +15,7 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 - `app/api` — Go(標準ライブラリのみ)の DDD サンプル(タスク管理)。`domain/task` + `service` + `infra/memory` + `route` を実装済みで、実体のあるコードの中心
 - `app/auth` — OAuth 2.0 + OIDC 認可サーバー(Go / 標準ライブラリのみ)。`app/api` と同じ DDD レイヤ構成で authorize / token / userinfo / discovery と JWT(RS256 / JWKS / PKCE S256)を実装済み(AUTH-001)
 - `app/web` — TypeScript / React。feature-sliced な SPA(`features/tasks` に domain / api / hooks / components、`shared/`、MSW モック、Vitest)を実装済み
-- `app/iac` — Terraform。`modules/{network,db,app,cdn}` と `envs/dev`(ルートモジュール)を実装済み(SPEC-001)
+- `app/iac` — Terraform。`modules/{network,db,platform,service,cdn}` と `envs/dev`(ルートモジュール)を実装済み(SPEC-001 / SPEC-004)。`platform` は共有基盤(ECS クラスタ / ALB 等)、`service` は 1 サービス分の定義で api・auth の 2 回インスタンス化する
 
 - パイプラインの全フェーズと agent の役割分担: `.claude/rules/workflow.md`(常時ロード)
 - ディレクトリ構成と共通原則: `.claude/rules/project.md`(常時ロード)
@@ -49,13 +49,15 @@ app/api(Go)と app/web(TypeScript)の request/response 型は **単一の OpenAP
 |---|---|---|
 | web | `app/web` | Bun(runtime / pm)で `bun run <script>` — `format:check` / `format`(Biome)/ `lint`(Biome)/ `typecheck`(tsgo、`tsc` ではない)/ `test`(Vitest + RTL)/ `build`(tsgo + Vite)。単一テストは `bun run test <path>` |
 | api / auth | `app/api` / `app/auth` | make(実体は各 stack の `Makefile`)— `make check`(= fmt-check + lint + vet + build + test)、個別に `make fmt` / `fmt-check` / `lint` / `vet` / `build` / `test` / `test-race` / `run`。単一テストは `go test -run '^TestName$' ./path/...` |
-| iac | `app/iac/envs/<env>` | `terraform fmt` / `terraform validate` / `tflint --recursive` / `trivy config .` / `terraform plan` |
+| iac | `app/iac`(fmt)/ `envs/<env>`(validate 等) | make(実体は `app/iac/Makefile`、環境は `ENV=<env>` 既定 dev)— `make check`(= fmt-check + validate + lint + security)、個別に `make fmt` / `fmt-check` / `init-local` / `validate` / `lint` / `security` / `plan`。**fmt は `app/iac` ルート全体(modules + envs)、validate 以降は `envs/<env>` 基点**で実行する |
 
 **`terraform apply` は実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
 
 ## ローカル実行(全スタック)
 
 リポジトリルートの `Makefile` + `compose.yml` で 3 サービス(各 `app/*/Dockerfile` をビルド)をまとめて起動する: `make up`(フォアグラウンド)/ `make up-d`(バックグラウンド)/ `make down` / `make logs` / `make ps`。起動後は web `http://localhost:8080` / api `http://localhost:8081` / auth `http://localhost:8082`(ホストは `127.0.0.1` のみバインド)。全ターゲットは `make help`。
+
+ルート `Makefile` には AWS デプロイ用の `push-images`(api/auth を ARM64 で ECR に build & push)/ `deploy-web`(web を build して S3 sync + CloudFront invalidation)もある(SPEC-004)。**これらは `terraform apply` 済み + AWS 認証情報を前提とする手動実行ターゲットで、agent は実行しない。**
 
 ## ドキュメント規約
 
