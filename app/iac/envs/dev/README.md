@@ -30,6 +30,17 @@ cross-module `moved` ブロックで吸収しており、`terraform plan` 上は
 伴わない)として現れる想定(非退行。詳細は `moved.tf` のコメントと
 `docs/plans/SPEC-004-plan.md`)。
 
+`modules/service` は既定でリソース名に `service_name`(`api` / `auth`)を含めるため
+(`"<name_prefix>-<service_name>-*"`)、そのままでは api の一部 ForceNew リソース名
+(ターゲットグループ / タスク実行ロール / タスクロール / シークレット読み取りインラインポリシー)
+が旧 `modules/app` 時代の名前(サービス修飾なし)からズレ、`moved` があっても実質 replace に
+なってしまう。これを避けるため、`module.service_api` 呼び出しでは
+`target_group_name` / `task_execution_role_name` / `task_role_name` / `secrets_policy_name`
+の 4 変数に旧名を明示的に渡し、api の全リソース名が SPEC-001 時点と文字列一致するようにしている
+(詳細は `modules/service/README.md` の「ForceNew なリソース名を呼び出し側から上書きできる理由」)。
+auth はこれらの変数を渡さず既定(`<name_prefix>-auth-*`)のままでよい(新規リソースのため
+replace の概念が無い)。
+
 ## 事前準備: S3 backend バケットの作成(bootstrap)
 
 `versions.tf` の `backend "s3"` はプレースホルダ値(`bucket = "REPLACE_WITH_TERRAFORM_STATE_BUCKET_NAME"`)

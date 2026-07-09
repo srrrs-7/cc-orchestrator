@@ -110,6 +110,26 @@ api はこの制約を受けないため複数タスク可。
 になる(`for_each` でリポジトリを複数まとめて定義する形も等価だが、サービス関連リソースを
 モジュールに閉じたほうが凝集度が高いためこの形を採る)。
 
+## ForceNew なリソース名を呼び出し側から上書きできる理由
+
+ターゲットグループ名(`aws_lb_target_group.name`)、タスク実行/タスク IAM ロール名
+(`aws_iam_role.name`)、実行ロールのインラインシークレット読み取りポリシー名
+(`aws_iam_role_policy.name`)はいずれも AWS プロバイダ上 ForceNew(rename API が無く、
+`name` を変えると replace になる)。既定ではすべて `"<name_prefix>-<service_name>-*"` の
+命名だが、`target_group_name` / `task_execution_role_name` / `task_role_name` /
+`secrets_policy_name` の 4 変数(いずれも既定 `null`)で個別に上書きできる。
+
+これは、`modules/app`(旧, SPEC-001)を `modules/platform` + `modules/service` に分解した際、
+api の一部リソース名にサービス修飾(`-api-`)が入ることで意図せず旧名からズレ、`moved` を
+使っても実 `terraform plan` では replace になってしまう問題への対処(`envs/dev/main.tf` の
+`module.service_api` 呼び出しで 4 変数すべてに旧 `modules/app` 時代の名前
+(`<name_prefix>-tg` 等、サービス修飾なし)を明示的に渡している)。ECR リポジトリ名 / ロググループ名 /
+ECS サービス名・タスクファミリは元々 `service_name = "api"` を含んでいたため旧名と一致しており、
+上書きは不要。auth は新規リソースなので replace の概念が無く、4 変数とも既定
+(`<name_prefix>-auth-*`)のままでよい。**単一の base 変数で一括置換する設計は採らない**:
+リソースごとに旧サフィックス規則が異なり(ECR やロググループは元々 `-api` を含む一方、TG は
+含まない、等)、一括置換では正確な旧名復元ができないため。
+
 ## CloudFront ⇔ ALB 間が HTTP である点のトレードオフ
 
 本サンプルはカスタムドメイン / ACM 証明書を使わない(Spec スコープ外)ため ALB は HTTP(80)の

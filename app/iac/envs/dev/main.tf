@@ -95,6 +95,19 @@ module "service_api" {
   listener_arn      = module.platform.listener_arn
   listener_priority = 20
 
+  # Preserve the exact resource names api's ForceNew resources had under the
+  # pre-SPEC-004 modules/app (e.g. "<name_prefix>-tg", not the module's
+  # default "<name_prefix>-api-tg"), so moved.tf's cross-module `moved`
+  # blocks resolve to a plain move/no-op instead of a replace (see
+  # modules/service's target_group_name/task_execution_role_name/
+  # task_role_name/secrets_policy_name variables and README "モジュール構成の
+  # 変遷"). auth is a new instance and keeps the module's default
+  # "<name_prefix>-auth-*" names below.
+  target_group_name        = "${local.name_prefix}-tg"
+  task_execution_role_name = "${local.name_prefix}-ecs-task-execution"
+  task_role_name           = "${local.name_prefix}-ecs-task"
+  secrets_policy_name      = "${local.name_prefix}-secrets-read"
+
   container_image = var.container_image
   container_port  = var.container_port
   task_cpu        = var.task_cpu

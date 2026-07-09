@@ -15,10 +15,10 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
 }
 
 resource "aws_iam_role" "task_execution" {
-  name               = "${var.name_prefix}-${var.service_name}-ecs-task-execution"
+  name               = local.task_execution_role_name
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}-ecs-task-execution" })
+  tags = merge(var.tags, { Name = local.task_execution_role_name })
 }
 
 resource "aws_iam_role_policy_attachment" "task_execution_managed" {
@@ -44,14 +44,14 @@ data "aws_iam_policy_document" "task_execution_secrets" {
 resource "aws_iam_role_policy" "task_execution_secrets" {
   for_each = data.aws_iam_policy_document.task_execution_secrets
 
-  name   = "${var.name_prefix}-${var.service_name}-secrets-read"
+  name   = local.secrets_policy_name
   role   = aws_iam_role.task_execution.id
   policy = each.value.json
 }
 
 resource "aws_iam_role" "task" {
-  name               = "${var.name_prefix}-${var.service_name}-ecs-task"
+  name               = local.task_role_name
   assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}-ecs-task" })
+  tags = merge(var.tags, { Name = local.task_role_name })
 }

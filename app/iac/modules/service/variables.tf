@@ -125,6 +125,30 @@ variable "secret_read_arns" {
   default     = []
 }
 
+variable "target_group_name" {
+  type        = string
+  description = "Override for the ALB target group's `name` (and its Name tag). aws_lb_target_group.name is ForceNew (no rename API), so leave unset (default null) to use \"<name_prefix>-<service_name>-tg\" for a fresh service instance, or pass an existing name to preserve it across a module refactor without a replace (e.g. api reuses the \"<name_prefix>-tg\" name it had under the pre-SPEC-004 modules/app, see envs/dev/main.tf and moved.tf)."
+  default     = null
+}
+
+variable "task_execution_role_name" {
+  type        = string
+  description = "Override for the ECS task execution IAM role's `name` (and its Name tag). aws_iam_role.name is ForceNew, so leave unset (default null) to use \"<name_prefix>-<service_name>-ecs-task-execution\", or pass an existing name to preserve it (see target_group_name)."
+  default     = null
+}
+
+variable "task_role_name" {
+  type        = string
+  description = "Override for the ECS task IAM role's `name` (and its Name tag). aws_iam_role.name is ForceNew, so leave unset (default null) to use \"<name_prefix>-<service_name>-ecs-task\", or pass an existing name to preserve it (see target_group_name)."
+  default     = null
+}
+
+variable "secrets_policy_name" {
+  type        = string
+  description = "Override for the task execution role's inline secrets-read IAM policy `name`. aws_iam_role_policy.name is ForceNew, so leave unset (default null) to use \"<name_prefix>-<service_name>-secrets-read\", or pass an existing name to preserve it (see target_group_name)."
+  default     = null
+}
+
 variable "health_check_path" {
   type        = string
   description = "ALB target group health check path (e.g. \"/tasks\" for api, \"/.well-known/openid-configuration\" for auth; matcher = 200)."

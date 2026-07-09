@@ -5,7 +5,7 @@
 # listener_rule.tf).
 
 resource "aws_lb_target_group" "this" {
-  name        = "${var.name_prefix}-${var.service_name}-tg"
+  name        = local.target_group_name
   port        = var.container_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
@@ -22,5 +22,5 @@ resource "aws_lb_target_group" "this" {
     unhealthy_threshold = 3
   }
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}-tg" })
+  tags = merge(var.tags, { Name = local.target_group_name })
 }
