@@ -3,8 +3,8 @@ id: SPEC-001
 title: AWS ECS API インフラ(CloudFront → WAF → ECS → PostgreSQL)のサンプル実装
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-08
-updated: 2026-07-08
-issues: [ISSUE-001, ISSUE-002]
+updated: 2026-07-09
+issues: [ISSUE-001, ISSUE-002, ISSUE-014]
 supersedes: null
 ---
 
@@ -107,3 +107,8 @@ planner が `docs/plans/SPEC-001-plan.md` を作成する。タスク概要:
 - planner が実装計画 `docs/plans/SPEC-001-plan.md` を作成。impl-iac による実装に着手したため status: in-progress に更新
 - 計画策定中に判明した app/api の課題(ヘルスチェック専用エンドポイント不在・RDS 未接続)を ISSUE-001 として起票し、frontmatter に相互リンク。ALB ヘルスチェックは暫定で `GET /tasks` を使用し、`/healthz` 追加と PostgreSQL 接続は ISSUE-001 で別途対応する
 - レビュー(review-security / review-performance)で挙がった、サンプルスコープでは意図的に見送ったセキュリティ・可用性強化 7 項目(RDS TLS 強制・CMK 暗号化・CloudFront/WAF ログ・ECR IMMUTABLE・state バケット IaC 化・CloudFront 最低 TLS 明示・ECS 単一障害点解消)を、本番相当移行時のチェックリストとして ISSUE-002 に集約起票し、frontmatter に相互リンク。いずれも退行ではなくサンプルの設計方針どおりの省略で、本 Spec のスコープ(dev のサンプル)では対応しない
+
+### 2026-07-09
+
+- プロジェクト全体レビューで、本 Spec の IaC(app/api 単体世代)が、その後 DOCKER-001 でコンテナ化された `app/auth` / `app/web` を含む 3 アプリ構成に追従していない構造的乖離が判明。ECS / ECR は api 単体のみ・CloudFront origin は ALB のみ・ARM64 ビルド強制なし、を事実として ISSUE-014 に起票し、frontmatter の `issues` に相互リンク(updated を 2026-07-09 に更新)
+- ISSUE-014 の対応候補として、本 Spec の「スコープ外」節に「AWS デプロイ対象は `app/api` のみ。`app/auth` / `app/web` の AWS インフラ化は別 Spec とする」と明記する案が挙がっている(spec-owner 判断)。本エントリ時点では方針の記録のみで、スコープ外節本文の追記は未実施
