@@ -1,0 +1,132 @@
+---
+id: SPEC-004
+title: app/auth・app/web の AWS デプロイ経路(SPEC-001 の 3 アプリ拡張)
+status: draft  # draft | approved | in-progress | done | dropped | superseded
+created: 2026-07-09
+updated: 2026-07-09
+issues: [ISSUE-014]       # 関連Issue ID
+supersedes: null # 置き換える旧Spec ID
+---
+
+# SPEC-004: app/auth・app/web の AWS デプロイ経路(SPEC-001 の 3 アプリ拡張)
+
+## 1. ユーザー価値(なぜ作るか)
+
+> **このリポジトリで 3 アプリ(api / auth / web)を AWS 上に展開したい開発者** が **`app/auth`(OIDC 認可サーバー)と `app/web`(SPA)も `app/iac` の Terraform だけでデプロイできるようになり**、**現在 api 単体世代で止まっている IaC が実プロジェクト(3 アプリ)全体をカバーし、web/auth を AWS でどう出すか分からないという空白** を無くす。
+
+- **対象ユーザー**: `app/iac` を使って cc-orchestrator の 3 アプリを AWS に展開・参照したい開発者(および同じ構成を再利用する人)
+- **解決する課題**: SPEC-001 で作った `app/iac` は **app/api 単体世代**のまま。その後 DOCKER-001 で `app/auth` / `app/web` がコンテナ化・ローカル(compose)では 3 アプリ完結する一方、AWS 側は auth 用 ECS/ECR も web 用の静的配信経路も存在しない(ISSUE-014)。この IaC だけでは現リポジトリの 3 アプリを本番相当にデプロイできない。
+- **得られる価値**:
+  - `app/iac/envs/dev` の `terraform plan` に auth サービス(ECS)と web(S3 + CloudFront)が現れ、3 アプリを一貫した 1 つの IaC で扱える
+  - ARM64/Graviton 向けイメージのビルド強制 + ECR への push、web の `dist` ビルド + S3 配置が手順化され、「amd64 で誤ビルドして ECS タスクが起動しない」フットガン(ISSUE-014)が塞がる
+  - SPEC-001 のサンプルグレード方針(HTTP・デフォルトドメイン・低コスト)と一貫した拡張になり、既存モジュールの資産を活かせる
+- **価値の検証方法**: 以下がすべて満たされたら成功とみなす。
+  1. `envs/dev` で `terraform fmt -check` / `terraform validate` / `tflint --recursive` / `trivy config .` が全て通る
+  2. (AWS 認証情報がある環境で)`terraform plan` が **api・auth の 2 ECS サービス**と **web の S3 + CloudFront 配信**を含む差分をエラーなく出力する
+  3. 単一 CloudFront ディストリビューションで `default → web(S3)` / `/api/* → api` / `/auth/* → auth` のルーティングが定義されている
+  4. ARM64 イメージの build-push 手順(api / auth)と web の `dist` ビルド + S3 配置手順が Makefile/CI として提供され、ECS の `runtime_platform`(ARM64)と齟齬しない
+  5. ISSUE-014 が指す「auth/web の AWS デプロイ経路が無い」乖離が解消したと確認できる
+
+## 2. ユーザー体験(何ができるようになるか)
+
+### ユーザーストーリー
+
+- **インフラ利用者**として、`app/iac/envs/dev` で `terraform plan` を打つと api だけでなく auth と web の配信リソースも差分に出てほしい。なぜなら 3 アプリを 1 つの IaC で一貫して管理したいから。
+- **デプロイ担当**として、`make` 系の 1 コマンドで ARM64 イメージ(api / auth)をビルドして ECR に push し、web の `dist` を S3 に配置したい。なぜならアーキ不一致や手動手順の抜けで起動失敗したくないから。
+- **レビュアー**として、auth/web の追加リソースが既存モジュールの延長(ALB 共用・単一 CloudFront)として最小コストで定義されていることをコードで確認したい。なぜならサンプルのコスト方針(SPEC-001)を崩したくないから。
+
+### 利用フロー
+
+1. 開発者が api / auth の ARM64 イメージをビルドして ECR に push、web を `bun run build` して `dist` を得る(build-push 手順)
+2. 開発者が `app/iac/envs/dev` で `terraform plan` を実行し、api/auth の ECS サービスと web の S3+CloudFront を確認する
+3. 開発者(人間)が判断して `terraform apply` を実行する(agent は実行しない)
+4. web の `dist` を S3 に配置(sync)し、CloudFront をインバリデートする
+5. CloudFront のドメイン経由で web(SPA)にアクセスでき、`/api/*` は api、`/auth/*` は auth に到達する
+
+## 3. 要件(何を満たすべきか)
+
+### 機能要件
+
+- [ ] R1: `app/auth` を **ECS Fargate(ARM64)サービス**として既存 ALB 配下に追加する。専用 target group + ヘルスチェック(`GET /.well-known/openid-configuration` 200)、専用 ECR リポジトリを定義する
+- [ ] R2: `app/web`(SPA)を **S3(非公開)+ CloudFront(OAC)** で静的配信する。SPA フォールバック(存在しないパスを `/index.html` に解決)を CloudFront 側で担保する
+- [ ] R3: **単一 CloudFront ディストリビューション**で `default → web(S3 オリジン)` / `/api/* → ALB(api target group)` / `/auth/* → ALB(auth target group)` のパスベースルーティングを定義する(既存 `modules/cdn` / `modules/app` の拡張)
+- [ ] R4: **ARM64/Graviton 向けイメージビルドの強制**と ECR への push 経路を提供する(api / auth を `docker buildx --platform linux/arm64` 等で必ず arm64 生成 → ECR)。web は `dist` ビルド + `aws s3 sync` + CloudFront invalidation を手順化する。実体は Makefile ターゲット(and/or `.github` の任意ジョブ)とし、`apply` と実配置は人間判断
+- [ ] R5: auth の **OIDC issuer / discovery の絶対 URL 整合**を保つ。`/auth/*` パスプレフィックス配下で `ISSUER` と各エンドポイント URL が実アクセス経路と一致すること(解決方式は §4 / §リスクで planner が確定。app/auth の base-path 対応が要るなら cross-stack 課題として扱う)
+- [ ] R6: 秘密情報の平文記載なし・NAT Gateway 不使用など SPEC-001 のコスト/セキュリティ方針を維持し、ALB は既存 1 本を共用(auth 用に別 ALB を増やさない)
+- [ ] R7: `modules/` + `envs/dev` のレイアウトを維持し、環境差分は変数・tfvars のみで表現する。各モジュール README にコスト/設計理由(採用・不採用)を追記する
+
+### 非機能要件
+
+- **サンプルグレード維持**: SPEC-001 と同じく HTTP・CloudFront/ALB のデフォルトドメイン・カスタムドメイン/ACM なしを前提とする。auth の issuer もサンプル用途の HTTP とする(本番 OIDC 用の HTTPS issuer + ドメインはスコープ外・将来対応)
+- **コスト**: 既存 ALB / CloudFront を共用し、auth 用に増えるのは小さい Fargate タスク 1 + target group + ECR。web は S3 + 既存 CloudFront で追加固定費が小さい(3 つ目の常時稼働 ECS を増やさない)
+- **`.claude/rules/iac.md` 準拠**: バージョン固定・`for_each`/変数駆動・type/description 必須・タグ付与・remote backend 前提
+- **既存の非退行**: SPEC-001 の api デプロイ経路(CloudFront → WAF → ALB → ECS → RDS)を壊さない。web/auth の追加は既存 api 経路の上に重ねる
+
+### スコープ外(やらないこと)
+
+- `terraform apply` の実行・実際の image push / S3 配置(手順の提供まで。実行は人間判断)
+- 本番グレードの HTTPS issuer / カスタムドメイン / Route53 / ACM 証明書(SPEC-001 のサンプル方針を踏襲し HTTP + デフォルトドメイン)
+- CI からの自動 apply / 自動デプロイ(build-push は手動 Make/任意ジョブとして提供するが、apply は自動化しない)
+- prod 環境の実体化(`envs/dev` のみ)
+- app/auth / app/web の**機能追加**(R5 の issuer 整合のために app/auth の base-path 対応が必要になった場合の**最小限のコード対応は本 Spec の依存**として扱うが、それ以外の業務機能は対象外)
+- RDS への app/api 実接続(ISSUE-001 の領域。本 Spec は auth/web の配信経路に集中する)
+
+## 4. 設計(どう実現するか)
+
+### 方針
+
+**SPEC-001 のサンプルグレード設計(HTTP・デフォルトドメイン・低コスト・NAT なし)を崩さず、既存モジュール(`network` / `cdn` / `app` / `db`)を拡張して auth/web を「重ねる」。** 新規に ALB や CloudFront を増やさず、共用インフラにサービスとオリジンを足すことで追加固定費を最小化する。
+
+### アーキテクチャ / データ / インターフェース
+
+```
+Internet → CloudFront(単一ディストリビューション, + WAFv2)
+   ├─ default (/*)     → S3(web / SPA, OAC・非公開)   ← 新規(web 配信)
+   ├─ /api/*           → ALB → api  ECS Fargate(ARM64) → RDS   ← 既存(SPEC-001)
+   └─ /auth/*          → ALB → auth ECS Fargate(ARM64)         ← 新規(auth 配信)
+                          (ALB listener rule でパスごとに target group を振り分け)
+build-push:
+   api/auth: docker buildx --platform linux/arm64 → ECR(リポジトリはアプリごと)
+   web:      bun run build → dist/ → aws s3 sync → CloudFront invalidation
+```
+
+- **auth(`modules/app` の一般化 or 複数呼び出し)**: 既存 `modules/app` は api 専用に固定されている。サービス名 / コンテナポート / ヘルスチェックパス / イメージ / ALB リスナールール(パス)を変数化して **api と auth の 2 サービス**を表現できるようにする(汎用化して 2 回呼ぶ、あるいは変数駆動で 2 サービス定義)。正確なリファクタ形は planner が決める。auth の health check は `/.well-known/openid-configuration`。
+- **web(`modules/cdn` の拡張、または `modules/web` 新設)**: S3(非公開)+ CloudFront OAC。CloudFront の default behavior を S3 オリジンに、`/api/*` と `/auth/*` の behavior を ALB オリジンに向ける。SPA フォールバックは CloudFront の custom error response(403/404 → `/index.html`, 200)または CloudFront Function で実装(方式は planner)。**AWS では nginx は不要**(S3+CloudFront がリバースプロキシと静的配信を担う)。DOCKER-001 の nginx は**ローカル compose 専用**であり本 Spec とは別物、という二重性を README に明記する。
+- **ECR**: アプリごとにリポジトリ(api / auth)。`for_each` で複数リポジトリを定義。
+- **build-push**: Terraform は ECR リポジトリと S3 バケットの「箱」まで(SPEC-001 の「イメージのビルド・プッシュは対象外」を踏襲)。実ビルド/push/sync は Makefile ターゲット(`docker buildx --platform linux/arm64 ... --push`、`bun run build && aws s3 sync dist s3://...`、`aws cloudfront create-invalidation`)and/or `.github` の任意ジョブとして提供。ARM64 を明示指定して amd64 誤ビルドを防ぐ。
+- **issuer 整合(R5)**: `/auth/*` パスプレフィックス配下では、`ISSUER` を `http://<cloudfront-domain>/auth` とし、discovery/authorize/token/userinfo/jwks の各 URL がその配下に載る必要がある。app/auth はルートに各エンドポイントを登録するため、(i) ALB/CloudFront でプレフィックスを剥がさず app/auth を **base-path 対応**にする、(ii) プレフィックスを剥がして ISSUER にはドメイン直下を使う、のいずれかを選ぶ。ドメイン直下だと api と衝突するため、サンプルでは (i) を第一候補とし、app/auth への最小限の base-path 対応(env で mount prefix を受ける等)を本 Spec の依存とする。**確定は planner + spec-owner**(§リスク)。
+
+### 検討した代替案と不採用理由
+
+| 案 | 不採用理由 |
+|---|---|
+| auth/web にそれぞれ別 ALB を立てる | ALB は 1 本 約$16/月。共用 1 本 + リスナールールで振り分ければ追加固定費ゼロ。サンプルのコスト方針(SPEC-001)に反する |
+| web を 3 つ目の ECS(nginx コンテナ)で配信 | 常時稼働 Fargate が 1 増える。SPA は S3+CloudFront が標準かつ安価で、nginx リバースプロキシ役は CloudFront の behavior が代替できる。DOCKER-001 の nginx はローカル専用に留める |
+| カスタムドメイン + ACM + HTTPS issuer(本番相当) | SPEC-001 が明示的にスコープ外とした方針を踏襲。ドメイン所有が前提になりサンプルの再現性を下げる。本番 OIDC issuer 化は将来別対応 |
+| host ベースルーティング(auth を別サブドメイン) | サブドメインにはカスタムドメインが要る(サンプル外)。パスベース `/auth/*` で単一ディストリビューション内に収める |
+| Terraform(docker/null provider)でイメージ build/push まで内包 | SPEC-001 の「ビルド・プッシュは対象外(ECR の用意まで)」と整合させ、build-push は Make/CI の手順として分離。IaC は箱の定義に集中 |
+| `modules/app` を api 専用のままコピーして auth 用モジュールを新設 | 定義の二重化はメンテコストと乖離を生む(`.claude/rules/iac.md` の変数駆動方針)。変数化して再利用する |
+
+## 5. 実装計画
+
+詳細は planner が `docs/plans/SPEC-004-plan.md` に作成する(方針・変更ファイル・手順・テスト戦略・リスクは同ファイルが正)。概要タスク:
+
+- [ ] T1: (planner) モジュール設計の確定 — `modules/app` の一般化方式(汎用化して 2 呼び出し or 変数駆動 2 サービス)、`modules/cdn` への S3 オリジン + behaviors + SPA フォールバック方式、ECR 複数リポジトリ、build-push 方式(Make/CI)、**R5 の auth issuer/base-path 解決の確定**(app/auth 変更の要否を含む)
+- [ ] T2: (impl-iac) `modules/app`・`modules/cdn`(or `modules/web` 新設)・ECR・`envs/dev` の配線を実装。既存 api 経路を壊さない
+- [ ] T3: (impl-ci) ARM64 build-push 自動化(`docker buildx --platform linux/arm64` → ECR、web の `dist` ビルド + `aws s3 sync` + CloudFront invalidation)を Makefile ターゲット and/or `.github` ジョブとして追加
+- [ ] T2.5: (impl-api・条件付き) R5 の解決で app/auth の base-path 対応が必要と確定した場合のみ、env 駆動の mount prefix 対応を最小限で実装(std-lib 維持)
+- [ ] T4: (checker) `terraform fmt -check` / `validate` / `tflint --recursive` / `trivy config .`
+- [ ] T5: (review-security / review-performance / review-spec) レビュー(並列)。`apply` は行わず plan で検証
+- [ ] T6: 指摘対応(Blocker/Major は impl へ差し戻し)、各モジュール README 更新、本 Spec と ISSUE-014 のステータス・経緯更新
+
+> 注: T2(iac)と T3(build-push)は概ね並行可。T2.5 は R5 の確定(T1)に依存する。`terraform apply` はスコープ外(plan まで)。
+
+## 6. 経緯(時系列・追記のみ)
+
+### 2026-07-09
+
+- 初版作成。プロジェクト全体レビューで特定した **ISSUE-014**(`app/iac` が SPEC-001 の api 単体世代のまま、DOCKER-001 でコンテナ化された auth/web の AWS デプロイ経路が無い乖離)を起点に、auth/web を AWS に展開する経路を設計するもの。
+- 推奨デフォルトとして以下をユーザー提示前提で置いた(approved 時に確定): **(1) サンプルグレード維持**(SPEC-001 と同じく HTTP・デフォルトドメイン・ACM/カスタムドメインなし)/ **(2) web = S3 + CloudFront(OAC)静的配信**で既存 `modules/cdn` を拡張(nginx はローカル compose 専用に留める)/ **(3) auth = 2 つ目の ECS Fargate(ARM64)サービス**を既存 ALB 配下にパスベースルーティング(`/auth/*`)で追加。別 ALB / 3 つ目の常時稼働 ECS / カスタムドメインは、いずれもコスト・サンプル再現性の観点で不採用(§4 代替案表)。
+- **未確定(要 planner + spec-owner 確定)**: R5 の auth issuer/base-path 整合。`/auth/*` プレフィックス配下で `ISSUER` と各 OIDC エンドポイント URL を一致させるには app/auth の base-path 対応(cross-stack の最小コード変更)が要る可能性がある。ここを確定するまで T2.5 の要否が決まらない。
+- status は `draft`。ユーザー承認(approved)後に planner へ実装計画作成を委譲し、着手する(機能開発は Spec を approved にしてから着手、の原則に従う)。
+- ISSUE-014 と相互リンク(frontmatter `issues: [ISSUE-014]`)。ISSUE-014 側の対応方針は本 Spec の設計・approved 判断と同期させる。

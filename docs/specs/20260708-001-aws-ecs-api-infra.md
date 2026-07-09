@@ -55,6 +55,7 @@ supersedes: null
 
 ### スコープ外(やらないこと)
 
+- **AWS デプロイ対象は `app/api` のみ**。`app/auth` / `app/web` の AWS インフラ化は本 Spec のスコープ外とし、別 Spec(**SPEC-004**)で扱う(本 Spec 作成時点では 3 アプリ体制ではなかった。3 アプリ構成との乖離の記録は ISSUE-014)
 - `terraform apply` の実行(plan まで。apply はユーザー判断)
 - カスタムドメイン / Route53 / ACM 証明書(サンプルは CloudFront デフォルトドメインを使用。CloudFront → ALB 間は HTTP とし、トレードオフを README に明記)
 - CI/CD パイプライン、監視・アラート、prod 環境の実体化(`envs/dev` のみ作成)
@@ -112,3 +113,4 @@ planner が `docs/plans/SPEC-001-plan.md` を作成する。タスク概要:
 
 - プロジェクト全体レビューで、本 Spec の IaC(app/api 単体世代)が、その後 DOCKER-001 でコンテナ化された `app/auth` / `app/web` を含む 3 アプリ構成に追従していない構造的乖離が判明。ECS / ECR は api 単体のみ・CloudFront origin は ALB のみ・ARM64 ビルド強制なし、を事実として ISSUE-014 に起票し、frontmatter の `issues` に相互リンク(updated を 2026-07-09 に更新)
 - ISSUE-014 の対応候補として、本 Spec の「スコープ外」節に「AWS デプロイ対象は `app/api` のみ。`app/auth` / `app/web` の AWS インフラ化は別 Spec とする」と明記する案が挙がっている(spec-owner 判断)。本エントリ時点では方針の記録のみで、スコープ外節本文の追記は未実施
+- 上記の対応を実施: §3「スコープ外」に「AWS デプロイ対象は `app/api` のみ。`app/auth` / `app/web` の AWS インフラ化は別 Spec(SPEC-004)」を明記した。auth/web の AWS デプロイ経路は新規 **SPEC-004**(`docs/specs/20260709-004-auth-web-aws-deploy.md`)として起票し、設計を委ねる。ISSUE-014 の実解消は SPEC-004 の実装で行う(本 Spec は api 単体のスコープを維持)
