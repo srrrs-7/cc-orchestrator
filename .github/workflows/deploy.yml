@@ -1,0 +1,187 @@
+# Manual AWS deploy for the cc-orchestrator sample apps (SPEC-004).
+#
+# This workflow is the CI/CD-tooling equivalent of the root Makefile's
+# `push-images` / `deploy-web` targets: it builds api/auth as ARM64 images
+# and pushes them to ECR, and builds app/web and syncs it to S3 + invalidates
+# CloudFront. It is intentionally NOT wired to any automatic trigger (no
+# push/pull_request) — it only runs via manual `workflow_dispatch`, and never
+# runs `terraform apply` (see .claude/rules/iac.md). It assumes
+# app/iac/envs/dev has already been applied by a human and that the ECR
+# repos / S3 bucket / CloudFront distribution referenced below already exist.
+#
+# Kept separate from .github/workflows/cicd.yml (CI only, no AWS access, no
+# deploy steps) so CI never needs deploy credentials.
+#
+# ECR repository URLs / S3 bucket name / CloudFront distribution id are read
+# from `terraform output` in app/iac/envs/dev rather than duplicated here —
+# the output names below (api_ecr_repository_url / auth_ecr_repository_url /
+# web_bucket_name / cloudfront_distribution_id) are the contract defined by
+# app/iac/envs/dev/outputs.tf (SPEC-004 plan).
+#
+# ARM64 is explicit on every image build (docker/setup-qemu-action +
+# `platforms: linux/arm64`) so this can never silently produce an amd64
+# image that fails to start on the ECS ARM64 task definition (ISSUE-014).
+name: Deploy (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "api/auth コンテナイメージの ECR タグ"
+        required: false
+        default: "latest"
+      deploy_images:
+        description: "api/auth イメージを ARM64 で build & ECR push する"
+        type: boolean
+        required: false
+        default: true
+      deploy_web:
+        description: "web を build して S3 sync + CloudFront invalidation する"
+        type: boolean
+        required: false
+        default: true
+
+# Manual deploys should not be auto-cancelled by a newer dispatch of the same
+# workflow while one is in flight (unlike cicd.yml's PR/push concurrency
+# group, which cancels superseded runs).
+concurrency:
+  group: deploy-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  TERRAFORM_VERSION: "1.10.5"
+  BUN_VERSION: "1.2.21"
+  TF_ENV_DIR: app/iac/envs/dev
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # api/auth — ARM64 build & push to ECR (root Makefile `push-images` in CI form).
+  # ---------------------------------------------------------------------------
+  push-images:
+    name: Build & push api/auth images (ARM64)
+    if: ${{ inputs.deploy_images }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write # required for aws-actions/configure-aws-credentials OIDC AssumeRole
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # OIDC AssumeRole — no long-lived AWS credentials stored in the repo.
+      # secrets.AWS_DEPLOY_ROLE_ARN must be configured as a repository/
+      # environment secret; the role ARN (and the AWS account id it embeds)
+      # is never written in this file.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # Real backend (not init-local): app/iac/envs/dev is assumed already
+      # applied, and the deploy role is assumed to have read access to the
+      # terraform state backend.
+      - name: terraform init (real backend)
+        working-directory: ${{ env.TF_ENV_DIR }}
+        run: terraform init
+
+      - name: Resolve ECR repository URLs
+        id: tf
+        working-directory: ${{ env.TF_ENV_DIR }}
+        run: |
+          echo "api_repo=$(terraform output -raw api_ecr_repository_url)" >> "$GITHUB_OUTPUT"
+          echo "auth_repo=$(terraform output -raw auth_ecr_repository_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Amazon ECR
+        run: |
+          registry="$(echo "${{ steps.tf.outputs.api_repo }}" | cut -d/ -f1)"
+          aws ecr get-login-password --region "${{ env.AWS_REGION }}" | docker login --username AWS --password-stdin "$registry"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # NOTE: ubuntu-latest runners are amd64, so linux/arm64 is built under
+      # QEMU emulation here (slower than native). See SPEC-004 plan risks —
+      # an arm64-native runner (e.g. self-hosted / GitHub larger runner) is
+      # the recommended upgrade path if this workflow sees regular use.
+      - name: Build & push api image (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: app/api
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.tf.outputs.api_repo }}:${{ inputs.image_tag }}
+
+      - name: Build & push auth image (linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: app/auth
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.tf.outputs.auth_repo }}:${{ inputs.image_tag }}
+
+  # ---------------------------------------------------------------------------
+  # web — build & sync to S3 + CloudFront invalidation (root Makefile `deploy-web`).
+  # ---------------------------------------------------------------------------
+  deploy-web:
+    name: Build web & sync to S3 + CloudFront invalidation
+    if: ${{ inputs.deploy_web }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write # required for aws-actions/configure-aws-credentials OIDC AssumeRole
+      contents: read
+    defaults:
+      run:
+        working-directory: app/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # --frozen-lockfile installs exactly what bun.lock pins (see cicd.yml).
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Contract: .claude/rules/web.md (`bun run build` = tsgo --noEmit && vite build).
+      - name: Build
+        run: bun run build
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init (real backend)
+        working-directory: app/iac/envs/dev
+        run: terraform init
+
+      - name: Resolve web bucket / distribution id
+        id: tf
+        working-directory: app/iac/envs/dev
+        run: |
+          echo "bucket=$(terraform output -raw web_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(terraform output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync dist/ to S3
+        run: aws s3 sync dist "s3://${{ steps.tf.outputs.bucket }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: aws cloudfront create-invalidation --distribution-id "${{ steps.tf.outputs.distribution_id }}" --paths '/*'
