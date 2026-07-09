@@ -19,7 +19,7 @@ export function TaskFilters() {
   const navigate = useNavigate({ from: "/" });
 
   return (
-    <fieldset className="flex gap-2 border-0 p-0">
+    <fieldset className="flex flex-wrap gap-2 border-0 p-0">
       <legend className="sr-only">Task status filter</legend>
       {STATUS_OPTIONS.map((option) => (
         <button
@@ -29,8 +29,8 @@ export function TaskFilters() {
           onClick={() => navigate({ search: { status: option.value } })}
           className={
             status === option.value
-              ? "rounded bg-blue-600 px-3 py-1 text-sm text-white"
-              : "rounded bg-gray-100 px-3 py-1 text-sm text-gray-700 hover:bg-gray-200"
+              ? "rounded bg-blue-600 px-3 py-1 text-sm text-white pointer-coarse:min-h-11 pointer-coarse:px-4"
+              : "rounded bg-gray-100 px-3 py-1 text-sm text-gray-700 hover:bg-gray-200 pointer-coarse:min-h-11 pointer-coarse:px-4"
           }
         >
           {option.label}

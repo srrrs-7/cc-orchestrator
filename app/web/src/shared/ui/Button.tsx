@@ -22,7 +22,7 @@ export function Button({ variant = "primary", className, children, ...rest }: Bu
   return (
     <button
       {...rest}
-      className={`rounded px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${composedClassName}`}
+      className={`rounded px-3 py-1.5 text-sm font-medium transition-colors motion-reduce:transition-none disabled:cursor-not-allowed pointer-coarse:min-h-11 pointer-coarse:px-4 ${composedClassName}`}
     >
       {children}
     </button>

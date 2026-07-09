@@ -31,21 +31,21 @@ export function TaskItem({ task }: TaskItemProps) {
   };
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded border border-gray-200 bg-white p-3">
-      <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-3 rounded border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="flex min-w-0 flex-col gap-1">
         <Link
           to="/tasks/$taskId"
           params={{ taskId: task.id }}
-          className="font-medium hover:underline"
+          className="break-words font-medium hover:underline"
         >
           {task.title}
         </Link>
-        <div className="flex gap-2 text-xs text-gray-500">
+        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
           <span>status: {task.status}</span>
           <span>priority: {task.priority}</span>
         </div>
       </div>
-      <div className="flex gap-2">
+      <div className="flex shrink-0 flex-wrap gap-2">
         <Button
           variant="secondary"
           onClick={handleStart}

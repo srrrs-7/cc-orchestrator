@@ -37,7 +37,7 @@ export function CreateTaskForm() {
         <input
           id="title"
           type="text"
-          className="rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
           {...register("title")}
         />
         {errors.title ? (
@@ -52,7 +52,7 @@ export function CreateTaskForm() {
         </label>
         <select
           id="priority"
-          className="rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
           {...register("priority")}
         >
           {TASK_PRIORITIES.map((priority) => (
