@@ -18,7 +18,7 @@ export type RouteCreateTaskRequest = {
 };
 
 export type RouteErrorResponse = {
-    error?: string;
+    error: string;
 };
 
 export type RouteTaskResponse = {

@@ -20,7 +20,7 @@ export const zRouteCreateTaskRequest = z.object({
 });
 
 export const zRouteErrorResponse = z.object({
-    error: z.string().optional()
+    error: z.string()
 });
 
 export const zRouteTaskResponse = z.object({

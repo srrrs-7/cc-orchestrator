@@ -14,7 +14,7 @@ import (
 
 // errorResponse is the JSON body returned for any failed request.
 type errorResponse struct {
-	Error string `json:"error"`
+	Error string `json:"error" validate:"required"`
 }
 
 // writeJSON encodes v as JSON with the given status code.
