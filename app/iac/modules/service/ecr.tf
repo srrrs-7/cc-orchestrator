@@ -1,9 +1,10 @@
-# ECR repository for the app/api container image. Building/pushing the image
-# is out of scope for this module (see README); only the repository itself
-# is provisioned.
+# ECR repository for this service's container image (one repository per
+# service instance, e.g. "<name_prefix>-api" / "<name_prefix>-auth").
+# Building/pushing the image is out of scope for this module (see README);
+# only the repository itself is provisioned.
 
 resource "aws_ecr_repository" "this" {
-  name                 = "${var.name_prefix}-api"
+  name                 = "${var.name_prefix}-${var.service_name}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
@@ -14,7 +15,7 @@ resource "aws_ecr_repository" "this" {
     encryption_type = "AES256"
   }
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
+  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}" })
 }
 
 resource "aws_ecr_lifecycle_policy" "this" {

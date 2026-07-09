@@ -8,10 +8,11 @@ locals {
   }
 }
 
-# Single generation point for the CloudFront <-> ALB origin-verify secret
-# shared between the app and cdn modules (see modules/app and modules/cdn
-# README for the two-layer defense this implements, R3). Alphanumeric-only
-# to avoid characters that are invalid in HTTP header values.
+# Single generation point for the CloudFront <-> ALB origin-verify secret,
+# shared between the cdn module and every modules/service instance (see
+# modules/service and modules/cdn README for the two-layer defense this
+# implements, R3). Alphanumeric-only to avoid characters that are invalid in
+# HTTP header values.
 resource "random_password" "origin_verify" {
   length  = 32
   special = false
@@ -48,36 +49,13 @@ module "db" {
   tags                    = local.common_tags
 }
 
-module "app" {
-  source = "../../modules/app"
+module "platform" {
+  source = "../../modules/platform"
 
   name_prefix       = local.name_prefix
   vpc_id            = module.network.vpc_id
   public_subnet_ids = module.network.public_subnet_ids
   alb_sg_id         = module.network.alb_sg_id
-  ecs_sg_id         = module.network.ecs_sg_id
-
-  container_image = var.container_image
-  container_port  = var.container_port
-  task_cpu        = var.task_cpu
-  task_memory     = var.task_memory
-  desired_count   = var.desired_count
-
-  use_fargate_spot    = var.use_fargate_spot
-  fargate_base        = var.fargate_base
-  fargate_weight      = var.fargate_weight
-  fargate_spot_weight = var.fargate_spot_weight
-
-  origin_verify_header_name  = var.origin_verify_header_name
-  origin_verify_header_value = random_password.origin_verify.result
-
-  db_secret_arn = module.db.master_user_secret_arn
-  db_endpoint   = module.db.db_endpoint
-  db_port       = module.db.db_port
-  db_name       = module.db.db_name
-
-  health_check_path  = var.health_check_path
-  log_retention_days = var.log_retention_days
 
   tags = local.common_tags
 }
@@ -91,13 +69,110 @@ module "cdn" {
   }
 
   name_prefix  = local.name_prefix
-  alb_dns_name = module.app.alb_dns_name
+  alb_dns_name = module.platform.alb_dns_name
 
   origin_verify_header_name  = var.origin_verify_header_name
   origin_verify_header_value = random_password.origin_verify.result
 
+  auth_route_header_name  = var.auth_route_header_name
+  auth_route_header_value = var.auth_route_header_value
+
   waf_rate_limit = var.waf_rate_limit
   price_class    = var.price_class
+
+  tags = local.common_tags
+}
+
+module "service_api" {
+  source = "../../modules/service"
+
+  name_prefix       = local.name_prefix
+  service_name      = "api"
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  ecs_sg_id         = module.network.ecs_sg_id
+  ecs_cluster_id    = module.platform.ecs_cluster_id
+  listener_arn      = module.platform.listener_arn
+  listener_priority = 20
+
+  container_image = var.container_image
+  container_port  = var.container_port
+  task_cpu        = var.task_cpu
+  task_memory     = var.task_memory
+  desired_count   = var.desired_count
+
+  use_fargate_spot    = var.use_fargate_spot
+  fargate_base        = var.fargate_base
+  fargate_weight      = var.fargate_weight
+  fargate_spot_weight = var.fargate_spot_weight
+
+  route_conditions = [
+    { header_name = var.origin_verify_header_name, values = [random_password.origin_verify.result] },
+  ]
+
+  environment = [
+    { name = "PORT", value = tostring(var.container_port) },
+    { name = "DB_HOST", value = module.db.db_endpoint },
+    { name = "DB_PORT", value = tostring(module.db.db_port) },
+    { name = "DB_NAME", value = module.db.db_name },
+  ]
+
+  secrets = [
+    { name = "DB_CREDENTIALS", valueFrom = module.db.master_user_secret_arn },
+  ]
+
+  secret_read_arns = [module.db.master_user_secret_arn]
+
+  health_check_path  = var.health_check_path
+  log_retention_days = var.log_retention_days
+
+  tags = local.common_tags
+}
+
+module "service_auth" {
+  source = "../../modules/service"
+
+  name_prefix       = local.name_prefix
+  service_name      = "auth"
+  vpc_id            = module.network.vpc_id
+  public_subnet_ids = module.network.public_subnet_ids
+  ecs_sg_id         = module.network.ecs_sg_id
+  ecs_cluster_id    = module.platform.ecs_cluster_id
+  listener_arn      = module.platform.listener_arn
+  listener_priority = 10
+
+  container_image = var.auth_container_image
+  container_port  = var.auth_container_port
+  task_cpu        = var.auth_task_cpu
+  task_memory     = var.auth_task_memory
+  desired_count   = var.auth_desired_count
+
+  use_fargate_spot    = var.auth_use_fargate_spot
+  fargate_base        = var.auth_fargate_base
+  fargate_weight      = var.auth_fargate_weight
+  fargate_spot_weight = var.auth_fargate_spot_weight
+
+  route_conditions = [
+    { header_name = var.origin_verify_header_name, values = [random_password.origin_verify.result] },
+    { header_name = var.auth_route_header_name, values = [var.auth_route_header_value] },
+  ]
+
+  # ISSUER carries the /auth prefix that CloudFront's alb-auth behavior
+  # strips before forwarding to this service (R5 strip method, see
+  # modules/cdn). app/auth is unmodified: it derives every absolute OIDC URL
+  # (authorize/token/userinfo/jwks) by concatenating this issuer string, so
+  # each resolves back to a path actually reachable through the /auth/*
+  # behavior.
+  environment = [
+    { name = "PORT", value = tostring(var.auth_container_port) },
+    { name = "ISSUER", value = "http://${module.cdn.cloudfront_domain_name}/auth" },
+  ]
+
+  secrets          = []
+  secret_read_arns = []
+
+  health_check_path  = var.auth_health_check_path
+  log_retention_days = var.log_retention_days
 
   tags = local.common_tags
 }

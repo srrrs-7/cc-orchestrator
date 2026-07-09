@@ -1,9 +1,11 @@
-# ECS cluster, Fargate task definition (ARM64) and service.
+# Fargate task definition (ARM64) and ECS service for this service instance.
+# The ECS cluster itself is shared and lives in modules/platform
+# (var.ecs_cluster_id).
 #
 # Cost/design notes:
 #   - runtime_platform.cpu_architecture = ARM64 (Graviton) is cheaper per
-#     vCPU/GB than x86_64 Fargate (R5). Any image pushed to the ECR
-#     repository must be built for linux/arm64.
+#     vCPU/GB than x86_64 Fargate. Any image pushed to the ECR repository
+#     must be built for linux/arm64 (R4).
 #   - capacity_provider_strategy mixes FARGATE (on-demand baseline) and
 #     FARGATE_SPOT so that dev workloads can run mostly/entirely on Spot
 #     capacity for further savings; see variables.tf and README for the
@@ -12,24 +14,8 @@
 #     a NAT Gateway (R6); egress is restricted to the security group defined
 #     in the network module.
 
-resource "aws_ecs_cluster" "this" {
-  name = "${var.name_prefix}-cluster"
-
-  setting {
-    name  = "containerInsights"
-    value = "disabled"
-  }
-
-  tags = merge(var.tags, { Name = "${var.name_prefix}-cluster" })
-}
-
-resource "aws_ecs_cluster_capacity_providers" "this" {
-  cluster_name       = aws_ecs_cluster.this.name
-  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
-}
-
 resource "aws_ecs_task_definition" "this" {
-  family                   = "${var.name_prefix}-api"
+  family                   = "${var.name_prefix}-${var.service_name}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = tostring(var.task_cpu)
@@ -44,7 +30,7 @@ resource "aws_ecs_task_definition" "this" {
 
   container_definitions = jsonencode([
     {
-      name      = "api"
+      name      = var.service_name
       image     = local.container_image
       essential = true
 
@@ -55,40 +41,31 @@ resource "aws_ecs_task_definition" "this" {
         }
       ]
 
-      environment = [
-        { name = "PORT", value = tostring(var.container_port) },
-        { name = "DB_HOST", value = var.db_endpoint },
-        { name = "DB_PORT", value = tostring(var.db_port) },
-        { name = "DB_NAME", value = var.db_name },
-      ]
-
-      # Injects the Secrets Manager JSON secret (username/password) as the
-      # DB_CREDENTIALS env var at container start; the container never
-      # receives a plaintext credential via Terraform state or tfvars.
-      secrets = [
-        {
-          name      = "DB_CREDENTIALS"
-          valueFrom = var.db_secret_arn
-        }
-      ]
+      # Caller-supplied plain env vars (e.g. PORT, DB_HOST, ISSUER) and
+      # Secrets Manager-backed secrets (e.g. DB_CREDENTIALS); which
+      # env/secrets to inject differs per service (see envs/dev/main.tf), so
+      # this module stays a thin pass-through and never hardcodes an
+      # application's variable names.
+      environment = var.environment
+      secrets     = var.secrets
 
       logConfiguration = {
         logDriver = "awslogs"
         options = {
           "awslogs-group"         = aws_cloudwatch_log_group.this.name
           "awslogs-region"        = data.aws_region.current.name
-          "awslogs-stream-prefix" = "api"
+          "awslogs-stream-prefix" = var.service_name
         }
       }
     }
   ])
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
+  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}" })
 }
 
 resource "aws_ecs_service" "this" {
-  name            = "${var.name_prefix}-api"
-  cluster         = aws_ecs_cluster.this.id
+  name            = "${var.name_prefix}-${var.service_name}"
+  cluster         = var.ecs_cluster_id
   task_definition = aws_ecs_task_definition.this.arn
   desired_count   = var.desired_count
 
@@ -118,14 +95,14 @@ resource "aws_ecs_service" "this" {
   }
 
   load_balancer {
-    target_group_arn = aws_lb_target_group.app.arn
-    container_name   = "api"
+    target_group_arn = aws_lb_target_group.this.arn
+    container_name   = var.service_name
     container_port   = var.container_port
   }
 
   # Ensure the listener rule (and therefore the listener/target group) exists
   # before the service tries to register tasks with the target group.
-  depends_on = [aws_lb_listener_rule.verified_origin]
+  depends_on = [aws_lb_listener_rule.this]
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}-api" })
+  tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}" })
 }

@@ -1,8 +1,34 @@
 # envs/dev
 
-`app/iac` の dev 環境ルートモジュール。`modules/network` / `modules/db` / `modules/app` /
-`modules/cdn` を呼び出し、CloudFront → WAF → ALB → ECS(Fargate)→ RDS PostgreSQL の
-一式を構成する(SPEC-001)。
+`app/iac` の dev 環境ルートモジュール。`modules/network` / `modules/db` / `modules/platform` /
+`modules/cdn` / `modules/service`(api・auth の 2 回呼び出し)を呼び出し、次の 3 アプリの配信経路
+一式を構成する(SPEC-001 の api 単体世代を SPEC-004 で auth/web に拡張):
+
+```
+Internet → CloudFront(単一ディストリビューション, + WAFv2)
+   ├─ default (/*)  → S3(web SPA, OAC・非公開)
+   ├─ /api/*        → ALB(共用)→ api  ECS Fargate(ARM64) → RDS PostgreSQL
+   └─ /auth/*       → ALB(共用)→ auth ECS Fargate(ARM64)
+```
+
+呼び出しの依存順序(循環回避の DAG。詳細は `modules/platform/README.md`):
+
+```
+network → platform(ALB+listener+cluster) → cdn(S3+CloudFront, 依存は ALB DNS のみ)
+                    │                          │
+                    └──────────────┬───────────┘
+                                   ▼
+                        service_api / service_auth
+```
+
+## モジュール構成の変遷(SPEC-001 → SPEC-004)
+
+旧 `modules/app`(ALB + ECS 1 サービスを一体化)は、api/auth の 2 サービス化にあたり
+`modules/platform`(共有 ALB/リスナー/ECS クラスタ)+ `modules/service`(汎用サービス、
+api/auth で 2 回呼ぶ)に分解した。api 関連リソースのアドレス変更は `moved.tf` の
+cross-module `moved` ブロックで吸収しており、`terraform plan` 上は `move`(create/destroy を
+伴わない)として現れる想定(非退行。詳細は `moved.tf` のコメントと
+`docs/plans/SPEC-004-plan.md`)。
 
 ## 事前準備: S3 backend バケットの作成(bootstrap)
 
@@ -37,30 +63,56 @@ terraform plan
 ```
 
 - `terraform plan` で、NAT Gateway に該当するリソースが計画に現れないこと(R6)、
-  および意図しない `replace` / `destroy` が無いことを確認する
+  auth の ECS サービス・auth 用ターゲットグループ・auth 用 ECR・S3・OAC・3 behavior が
+  新規に現れること、api 関連リソースが `moved`(move)として扱われ意図しない `replace` /
+  `destroy` が無いことを確認する
 - **`terraform apply` は agent からは実行しない。** plan の内容を確認したうえで、
   人間が判断して apply を実行すること
 
 ## コンテナイメージについて
 
-`var.container_image` は既定で空文字列(`""`)であり、その場合 `modules/app` はこの環境自身の
-ECR リポジトリ(`module.app.ecr_repository_url`)の `:latest` タグを参照する。ただし
-**Terraform はイメージのビルド・push を行わない**(Spec スコープ外)ため、実際にイメージを
-`docker push` するまで ECS サービスは健全な状態にならない。push するイメージは
-`runtime_platform = ARM64` に合わせて **linux/arm64 でビルド**すること。
+`var.container_image`(api)/ `var.auth_container_image`(auth)はいずれも既定で空文字列
+(`""`)であり、その場合対応する `modules/service` インスタンスはこの環境自身の ECR
+リポジトリ(`module.service_api.ecr_repository_url` / `module.service_auth.ecr_repository_url`、
+`envs/dev` の output では `api_ecr_repository_url` / `auth_ecr_repository_url`)の `:latest`
+タグを参照する。ただし **Terraform はイメージのビルド・push を行わない**(Spec スコープ外)
+ため、実際にイメージを `docker push` するまで該当 ECS サービスは健全な状態にならない。
+push するイメージは `runtime_platform = ARM64` に合わせて **必ず linux/arm64 でビルド**する
+こと(R4。build-push 手順は root `Makefile` を参照)。
+
+## web(SPA)のデプロイについて
+
+Terraform は web 用 S3 バケット(`web_bucket_name` output)と CloudFront の「箱」までしか
+用意しない。`apply` 後、別途 `app/web` を `bun run build` して `dist/` を
+`aws s3 sync dist s3://$(terraform output -raw web_bucket_name) --delete` で同期し、
+`aws cloudfront create-invalidation --distribution-id $(terraform output -raw cloudfront_distribution_id) --paths '/*'`
+でキャッシュを無効化する必要がある(root `Makefile` の `deploy-web` ターゲット参照)。
+
+## auth の issuer が単一 `apply` で解決する理由
+
+`ISSUER` 環境変数(`http://<cloudfront-domain>/auth`)は `module.cdn.cloudfront_domain_name`
+に依存し、`module.cdn` は `module.platform.alb_dns_name` にのみ依存する(ECS サービスの
+登録状態には依存しない)。そのため `platform → cdn → service_auth` の一方向 DAG が成立し、
+初回 `apply` 一発で auth タスクに実際の CloudFront ドメインを注入できる(`module.app` を
+経由した循環にならない設計。詳細は `modules/platform/README.md`)。auth は
+プロセス起動ごとに RSA 署名鍵を生成するため(`app/auth` の既知の性質)、`desired_count = 1`
+を既定にしている(`modules/service/README.md` 参照)。
 
 ## 概算コスト目安
 
-dev 環境で概ね $50/月 前後を想定(非機能要件)。主な内訳(東京リージョン目安、詳細な
-選定理由は各モジュールの README を参照):
+dev 環境で概ね $55〜60/月 前後を想定(非機能要件。SPEC-001 の api 単体世代($50/月 前後)に
+auth Fargate タスク 1 本(数$/月)+ S3/CloudFront 追加分(数$/月未満)が上乗せされる)。主な
+内訳(東京リージョン目安、詳細な選定理由は各モジュールの README を参照):
 
 - RDS `db.t4g.micro`(single-AZ): 約$12/月
-- Fargate(ARM64, 256/512, Spot 中心): 数$/月〜(稼働時間・Spot 単価による)
-- Public IPv4(ECS タスクに付与。タスク数に比例、1タスクあたり約$3.65/月): 既定の
-  `desired_count=1` では約$3.65/月。NAT Gateway の固定費と異なりタスク数に応じて線形に増える
-  (詳細は `modules/network/README.md`)
-- ALB: 約$16〜20/月(固定 + LCU)
-- CloudFront + WAF: 数$/月(リクエスト量・マネージドルール数による)
+- Fargate(ARM64, api + auth 2 サービス、256/512、Spot 中心): 数$/月〜(稼働時間・Spot 単価による)
+- Public IPv4(ECS タスクに付与。タスク数に比例、1タスクあたり約$3.65/月): api・auth 各
+  `desired_count=1` では合計 約$7.30/月。NAT Gateway の固定費と異なりタスク数に応じて
+  線形に増える(詳細は `modules/network/README.md`)
+- ALB: 約$16〜20/月(固定 + LCU)。api/auth で共用のため 1 本ぶんのみ
+- S3(web): 数十セント/月(サンプル規模の静的アセット容量・リクエスト数では小さい)
+- CloudFront + WAF: 数$/月(リクエスト量・マネージドルール数による)。CloudFront Function の
+  実行コストは非常に小さい(Lambda@Edge より安価)
 - NAT Gateway は使用しないため 0 円(R6)
 
 実測値は `terraform plan` では出力されないため、AWS Pricing Calculator 等での別途見積りを

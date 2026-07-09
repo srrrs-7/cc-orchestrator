@@ -39,5 +39,21 @@ origin_verify_header_name = "X-Origin-Verify"
 health_check_path         = "/tasks"
 log_retention_days        = 14
 
+# auth (app/auth). desired_count is fixed at 1: app/auth generates a new RSA
+# signing key per process, so multiple concurrent tasks would break
+# token/userinfo verification across tasks (see modules/service/README.md).
+auth_container_image     = ""
+auth_container_port      = 8080
+auth_task_cpu            = 256
+auth_task_memory         = 512
+auth_desired_count       = 1
+auth_use_fargate_spot    = true
+auth_fargate_base        = 0
+auth_fargate_weight      = 0
+auth_fargate_spot_weight = 1
+auth_health_check_path   = "/.well-known/openid-configuration"
+auth_route_header_name   = "X-Target-Service"
+auth_route_header_value  = "auth"
+
 waf_rate_limit = 2000
 price_class    = "PriceClass_100"
