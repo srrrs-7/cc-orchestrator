@@ -119,12 +119,12 @@ build-push:
 タスク(担当と依存は plan の「手順」が正):
 
 - [x] T1: (planner) 設計確定(上記)。plan 作成・R5 確定。
-- [ ] T2: (impl-iac) `modules/platform` 抽出 → `modules/service` 汎用実装 → api 再配線(+`moved` で非退行)→ `modules/cdn` 拡張 → auth 追加 + behavior 切替。README 更新。
-- [ ] T3: (impl-ci) root `Makefile` build-push 追加 + `.github/workflows/deploy.yml`(workflow_dispatch)。**T2 と並列可**(output 名の契約を先に固定)。
-- [ ] ~~T2.5: (impl-api) app/auth base-path 対応~~ → **不発火**(R5 の strip 方式で無改修)。
-- [ ] T4: (checker) `make check`(fmt-check / validate / tflint / trivy)。
-- [ ] T5: (review-security / review-performance / review-spec) レビュー(並列)。`apply` は行わず plan で検証。
-- [ ] T6: 指摘対応(Blocker/Major は impl へ差し戻し)、各 module README 更新、本 Spec と ISSUE-014 のステータス・経緯更新。
+- [x] T2: (impl-iac) `modules/platform` 抽出 → `modules/service` 汎用実装 → api 再配線(+`moved` で非退行)→ `modules/cdn` 拡張 → auth 追加 + behavior 切替。README 更新。(commit `3afdf9f`)
+- [x] T3: (impl-ci) root `Makefile` build-push 追加 + `.github/workflows/deploy.yml`(workflow_dispatch)。(commit `9e19531`)
+- [x] ~~T2.5: (impl-api) app/auth base-path 対応~~ → **不発火**(R5 の strip 方式で無改修。実コードで無改修を確認)。
+- [x] T4: (checker) `fmt-check` / `validate` green。tflint / trivy は環境未導入(レビューで手動補完)。
+- [x] T5: (review-security / review-performance / review-spec) レビュー実施。security / performance はクリーン、spec は Major 1 件を検出。
+- [x] T6: Major(ForceNew 名ドリフトで `moved` が実 replace)を impl-iac が override 変数で修正(commit `6b7b0ac`)→ review-spec 再検証で解消確認。ISSUE-014 を resolved・ISSUE-002 に本番移行項目を追記。
 
 > 注: T2(iac)と T3(build-push)は並列可。T2.5 は不発火。`terraform apply` はスコープ外(plan まで)。
 
@@ -145,3 +145,10 @@ build-push:
   - **build-push**: root `Makefile` に `push-images`(`docker buildx --platform linux/arm64 --push`)/ `deploy-web`(`bun run build`→`aws s3 sync`→invalidation)、任意で `.github/workflows/deploy.yml`(`workflow_dispatch` のみ・自動 apply 無し)。impl-ci 担当。impl-iac(T2)と並列可。
   - **auth の運用制約**: app/auth は起動毎に RSA 鍵を生成しトークンが発行インスタンス限定のため、auth サービスは `desired_count=1` 既定とする(既知の app/auth 性質。マルチタスク化・鍵外部化はサンプル範囲外)。
   - **残余**: web を OIDC RP として auth に実接続する配線(redirect_uri 登録等)は本 Spec スコープ外。`terraform apply` はスコープ外(plan/静的検証まで)。
+- 実装・レビューを完了した(status は `in-progress` を維持。理由は末尾)。
+  - **実装**: impl-iac が `app/iac` を再構成・拡張(`modules/platform` 抽出 / `modules/service` 汎用化(api・auth の 2 呼び出し)/ `modules/cdn` に S3+OAC+3 オリジン/behavior+CloudFront Function 2 本 / `envs/dev` 配線 + `moved.tf` 網羅、commit `3afdf9f`)。impl-ci が build-push ツーリング(root `Makefile` の `push-images`(`docker buildx --platform linux/arm64`)/ `deploy-web`、`.github/workflows/deploy.yml`(workflow_dispatch のみ)、commit `9e19531`)。R5 の結論どおり **app/auth・app/api は無改修**(実コードで確認)。
+  - **checker**: `terraform fmt -check -recursive` / `terraform validate`(`init -backend=false`)が green。**tflint / trivy は本環境に未導入**のため未実行(セキュリティ観点はレビューで手動補完)。
+  - **レビュー(3 並列)**: review-security = Blocker/Major 0(二層防御(prefix-list SG + `X-Origin-Verify`)・S3 非公開+OAC(SourceArn 限定)・WAF 継続・秘密平文なし・IAM 最小権限を api/auth 両経路で確認)。review-performance = Blocker/Major/Minor 0(追加固定費は auth の最小 Fargate 1 本に収まり ALB/CloudFront 共用・NAT 不使用を維持)。review-spec = R1〜R7・スコープ外遵守・R5(app/auth 無改修)を満たすが、**Major 1 件**を検出。
+  - **Major の対応**: `modules/service` 汎用化で api の 4 ForceNew リソース名(TG / task_execution role / task role / secrets inline policy)がずれ、`moved` を張っても実 `plan` では replace になる欠陥。impl-iac が per-resource の name override 変数を追加し api インスタンスに SPEC-001 の旧名を厳密復元(auth は別名維持)、commit `6b7b0ac`。review-spec の再検証で **解消を確認**(旧名と文字列一致、fmt/validate green)。
+  - **トリアージ**: 残る Minor/Info(strip_prefix のパストラバーサル apply 後検証 / deploy.yml の OIDC 信頼ポリシー範囲 / GitHub Environment 承認ゲート / S3・CloudFront アクセスログ・バージョニング未設定 / CloudWatch Logs KMS / CloudFront↔ALB HTTP / auth の desired_count=1+Spot=SPOF)は、いずれも「退行ではなくサンプル省略 / apply 後検証」として **ISSUE-002(本番移行チェックリスト)に追記**。**ISSUE-014 は `resolved`** に更新(IaC コードレベルで auth/web デプロイ経路が実装・レビュー済み)。
+  - **`done` にしない理由**: 「価値の検証方法」のうち tflint/trivy(環境未導入)と `terraform plan`(AWS 認証情報が必要)は本環境で実行できず未達。SPEC-001 と同様、認証情報のある環境での `terraform plan`(api が move/no-op で replace されないこと、auth/web リソースが新規に出ること)と apply、tflint/trivy 実行は**ユーザーの手動確認**として残す。それらが満たされた時点で `done` に更新する。
