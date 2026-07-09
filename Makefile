@@ -12,11 +12,11 @@ build: ## 全サービスのイメージをビルドする
 	$(COMPOSE) build
 
 .PHONY: up
-up: ## ビルドしてフォアグラウンドで起動する
+up: migrate ## postgres を起動・マイグレーション適用した上でビルドしてフォアグラウンドで起動する
 	$(COMPOSE) up --build
 
 .PHONY: up-d
-up-d: ## ビルドしてデタッチ(バックグラウンド)で起動する
+up-d: migrate ## postgres を起動・マイグレーション適用した上でビルドしてデタッチ(バックグラウンド)で起動する
 	$(COMPOSE) up -d --build
 
 .PHONY: down
@@ -38,6 +38,31 @@ restart: ## 全サービスを再起動する
 .PHONY: clean
 clean: ## 停止・コンテナ・volume を削除する
 	$(COMPOSE) down -v
+
+# ---------------------------------------------------------------------------
+# ローカル Postgres(SPEC-005)
+#
+# api/auth はどちらも起動時に DB_HOST の有無で永続化先を選ぶ fail-closed な
+# 配線になっている(app/{api,auth}/infra/postgres/db.go の SelectMode)。
+# compose.yml は api/auth に DB_HOST=postgres 他の DB_* を注入済みのため、
+# `up`/`up-d` は必ず Postgres 経路を使う(memory 経路には戻らない)。
+# マイグレーション未適用のテーブル欠如でクラッシュループしないよう、
+# `up`/`up-d` は `migrate`(→ `db-up`)を前提ターゲットにしている。
+#
+# `migrate` は app/api・app/auth 各 Makefile の `migrate-up`(goose を
+# `go run` する)を呼ぶため、この 2 ターゲットの実行にはホストに Go
+# ツールチェーンが必要(app/api・app/auth の `make check` 等と同じ前提)。
+# docker のみで完結しない点に注意。
+# ---------------------------------------------------------------------------
+
+.PHONY: db-up
+db-up: ## postgres のみを起動し healthy になるまで待つ
+	$(COMPOSE) up -d --wait postgres
+
+.PHONY: migrate
+migrate: db-up ## api/auth のマイグレーションをローカル compose の postgres に適用する (db-up を前提として実行)
+	$(MAKE) -C app/api migrate-up
+	$(MAKE) -C app/auth migrate-up
 
 # ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004)

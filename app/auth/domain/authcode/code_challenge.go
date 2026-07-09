@@ -79,6 +79,16 @@ func (c CodeChallenge) Method() CodeChallengeMethod {
 	return c.method
 }
 
+// Challenge returns the underlying, already-transformed PKCE
+// code_challenge string (never the code_verifier, which this
+// authorization server never stores). Exposed primarily so
+// infrastructure-layer repositories can persist a CodeChallenge and
+// later reconstruct it (via NewCodeChallenge) when loading an
+// AuthorizationCode from storage.
+func (c CodeChallenge) Challenge() string {
+	return c.challenge
+}
+
 // Verify reports whether codeVerifier, once transformed using the
 // bound method, reproduces this CodeChallenge's challenge value (RFC
 // 7636 4.6). It first validates codeVerifier's length and character

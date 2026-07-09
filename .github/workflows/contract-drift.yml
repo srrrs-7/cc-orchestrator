@@ -59,8 +59,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          # stdlib-only module (no go.sum); nothing external to cache.
-          cache: false
+          # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
+          # runtime dependency (previously stdlib-only, no go.sum); cache
+          # the module download layer keyed off go.sum. This job never
+          # touches Postgres itself (`make openapi` only parses swag
+          # annotations), but the module graph resolution below still
+          # benefits from the cache.
+          cache: true
+          cache-dependency-path: app/api/go.sum
 
       - uses: oven-sh/setup-bun@v2
         with:

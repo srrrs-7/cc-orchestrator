@@ -10,7 +10,7 @@ color: purple
 
 ## 手順
 
-1. 各 stack の rules(`.claude/rules/{web,api,auth,iac,testing}.md`)の「コマンド」表を読む。**CI が実行するコマンドはこの表が唯一の契約**であり、勝手なコマンドを発明しない
+1. 各 stack の rules(`.claude/rules/{web,api,auth,iac,db,testing}.md`)の「コマンド」表を読む。**CI が実行するコマンドはこの表が唯一の契約**であり、勝手なコマンドを発明しない
 2. 起点の Spec / Issue と計画(`docs/plans/<ID>-plan.md`)があれば読み、担当部分を把握する
 3. 既存のリポジトリ構成(stack ごとの実行場所・ツール・バージョン)を調査し、それに合わせて実装する
 4. 実装後、YAML の構文と論理(job 依存・条件・working-directory・トリガー)が妥当か自己検証する

@@ -35,6 +35,10 @@ env:
   GOLANGCI_LINT_VERSION: "1.64.8"
   TFLINT_VERSION: "v0.55.1"
   TRIVY_VERSION: "v0.58.1"
+  # SPEC-005 Postgres service container image for the api-integration /
+  # auth-integration jobs below. Pinned (not `postgres:16` / `latest`) so
+  # the schema-bootstrap step's `docker run` can reuse this exact tag.
+  POSTGRES_VERSION: "16.6-alpine"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -124,8 +128,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          # stdlib-only module (no go.sum); nothing external to cache.
-          cache: false
+          # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
+          # runtime dependency (previously stdlib-only, no go.sum); cache
+          # the module download layer keyed off go.sum.
+          cache: true
+          cache-dependency-path: app/api/go.sum
       - name: Install golangci-lint
         run: |
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
@@ -135,7 +142,101 @@ jobs:
         run: make check
 
   # ---------------------------------------------------------------------------
-  # auth (Go) — identical toolchain to api. Contract: .claude/rules/auth.md.
+  # api (Go) — Postgres integration tests (SPEC-005). Spins up a pinned
+  # postgres service container, bootstraps the "api" schema (goose migrations
+  # assume the schema already exists — schema creation is deliberately
+  # outside goose, see docs/plans/SPEC-005-plan.md §0 "スキーマ分離機構"),
+  # applies migrations with an up->down->up health check, then runs the
+  # `integration`-tagged suite. Contract: .claude/rules/db.md + app/api's
+  # Makefile (`make migrate-up` / `make migrate-down` / `make
+  # test-integration`), which is the single source of truth for the pinned
+  # goose/sqlc versions — nothing here invents a different command.
+  # ---------------------------------------------------------------------------
+  api-integration:
+    name: api (Postgres integration)
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/api
+    services:
+      postgres:
+        # `services.<id>.image` cannot reference the `env` context (only
+        # github/inputs/matrix/needs/strategy/vars are available here) —
+        # unlike the `run:` steps below, which do use env.POSTGRES_VERSION.
+        # Keep this literal in sync with env.POSTGRES_VERSION above.
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_DB: app
+          POSTGRES_USER: app
+          # Disposable credential for this job's ephemeral, throwaway
+          # service container only — it never leaves this CI run and has
+          # no relation to any real environment. Production DB credentials
+          # come from Secrets Manager (see .claude/rules/db.md "セキュリ
+          # ティ"); no secret is written here.
+          POSTGRES_PASSWORD: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Discrete DB_* settings (SPEC-005 R6) matching app/api/Makefile's own
+      # local-dev defaults and this job's postgres service above — not a
+      # coincidence, both are meant to describe the same disposable local
+      # Postgres. `make migrate-up` / `make test-integration` read these via
+      # the environment (Makefile's `?=` only applies when the variable is
+      # unset).
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: app
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+      DB_SCHEMA: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: app/api/go.sum
+
+      # Schema creation happens outside goose (plan §0), so it is done here
+      # as a job step rather than a goose migration — mirroring what the
+      # local compose bootstrap (docker/postgres/initdb, impl-db) does.
+      # Reuses the exact same pinned postgres image as the service
+      # container above (its bundled psql client) instead of installing a
+      # separate, unpinned postgresql-client package on the runner.
+      - name: Create "api" schema (bootstrap; outside goose per plan §0)
+        run: |
+          docker run --rm --network host \
+            -e PGPASSWORD="$DB_PASSWORD" \
+            "postgres:${{ env.POSTGRES_VERSION }}" \
+            psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+              -c 'CREATE SCHEMA IF NOT EXISTS api;'
+
+      - name: Migrate up
+        run: make migrate-up
+
+      # Migration health check (R8): prove the down migration is also
+      # sound, not just up. Only one migration file exists today
+      # (000001_create_tasks.sql), so `migrate-down` fully unwinds the
+      # schema before `migrate-up` reapplies it.
+      - name: Migration health check (up -> down -> up)
+        run: |
+          make migrate-down
+          make migrate-up
+
+      - name: Integration tests (build tag "integration")
+        run: make test-integration
+
+  # ---------------------------------------------------------------------------
+  # auth (Go) — identical toolchain/flow to api. Contract: .claude/rules/auth.md.
   # ---------------------------------------------------------------------------
   auth:
     name: auth (Go)
@@ -151,7 +252,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: false
+          # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
+          # runtime dependency (previously stdlib-only, no go.sum); cache
+          # the module download layer keyed off go.sum.
+          cache: true
+          cache-dependency-path: app/auth/go.sum
       - name: Install golangci-lint
         run: |
           curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
@@ -159,6 +264,79 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Check (fmt-check + lint + vet + build + test)
         run: make check
+
+  # ---------------------------------------------------------------------------
+  # auth (Go) — Postgres integration tests (SPEC-005). Same shape as
+  # api-integration above, own schema ("auth") and own postgres service
+  # container (each job gets its own throwaway container; api and auth never
+  # share one, keeping the two stacks independent per project convention).
+  # ---------------------------------------------------------------------------
+  auth-integration:
+    name: auth (Postgres integration)
+    needs: changes
+    if: ${{ needs.changes.outputs.auth == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/auth
+    services:
+      postgres:
+        # `services.<id>.image` cannot reference the `env` context (only
+        # github/inputs/matrix/needs/strategy/vars are available here) —
+        # unlike the `run:` steps below, which do use env.POSTGRES_VERSION.
+        # Keep this literal in sync with env.POSTGRES_VERSION above.
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_DB: app
+          POSTGRES_USER: app
+          # See api-integration above: disposable, job-scoped credential
+          # only, not a real secret.
+          POSTGRES_PASSWORD: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: app
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+      DB_SCHEMA: auth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: app/auth/go.sum
+
+      - name: Create "auth" schema (bootstrap; outside goose per plan §0)
+        run: |
+          docker run --rm --network host \
+            -e PGPASSWORD="$DB_PASSWORD" \
+            "postgres:${{ env.POSTGRES_VERSION }}" \
+            psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" \
+              -c 'CREATE SCHEMA IF NOT EXISTS auth;'
+
+      - name: Migrate up
+        run: make migrate-up
+
+      # Migration health check (R8): only one migration file exists today
+      # (000001_create_auth.sql), so `migrate-down` fully unwinds the
+      # schema before `migrate-up` reapplies it.
+      - name: Migration health check (up -> down -> up)
+        run: |
+          make migrate-down
+          make migrate-up
+
+      - name: Integration tests (build tag "integration")
+        run: make test-integration
 
   # ---------------------------------------------------------------------------
   # iac (Terraform) — `make check ENV=dev` = fmt-check (root) + validate

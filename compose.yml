@@ -1,13 +1,55 @@
 services:
+  # SPEC-005: single local Postgres instance backing both app/api and
+  # app/auth, each in its own schema (docker/postgres/initdb creates
+  # "api"/"auth" on first boot; app/api and app/auth's own goose
+  # migrations then run unqualified DDL against whichever schema their
+  # connection's search_path selects -- see each stack's
+  # infra/postgres/db.go and db/migrations/*.sql). The credentials
+  # below are fixed, non-secret local-only defaults (they also match
+  # app/api/Makefile and app/auth/Makefile's DB_* defaults, so `make
+  # migrate-up` works against this container with no env overrides) --
+  # never reused for any real environment.
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+
   api:
     build:
       context: ./app/api
     image: cc-orchestrator/api:local
     ports:
       - "127.0.0.1:8081:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: app
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+      DB_SCHEMA: api
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   auth:
     build:
@@ -17,9 +59,19 @@ services:
       - "127.0.0.1:8082:8080"
     environment:
       ISSUER: http://localhost:8082
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: app
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+      DB_SCHEMA: auth
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   web:
     build:
@@ -33,3 +85,6 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+volumes:
+  pgdata:

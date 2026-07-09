@@ -7,6 +7,49 @@ GOIMPORTS := go run golang.org/x/tools/cmd/goimports@latest
 # touching this module's go.mod/go.sum (std-lib runtime is preserved).
 SWAG := go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5
 
+# SPEC-005: goose (migrations) and sqlc (query codegen) are run as
+# `go run pkg@version` CLIs -- like SWAG above -- so this module's
+# go.mod/go.sum only ever gains the Postgres driver (pgx) as a runtime
+# dependency, never the tool binaries themselves. This Makefile is the
+# single source of truth for the pinned versions
+# (docs/plans/SPEC-005-plan.md §0 "版固定").
+#
+# sqlc v1.28.0 (the plan's baseline) fails to build from source on this
+# machine's toolchain (macOS SDK / Xcode clang rejects a `strchrnul`
+# redeclaration inside the vendored pg_query_go/v5 C parser -- a known
+# upstream issue on newer macOS SDKs, fixed once sqlc moved to
+# pg_query_go/v6). v1.31.1 is the nearest stable release that resolves
+# and builds cleanly here; it is used in place of the plan's baseline
+# per the plan's own escape hatch ("resolve 不可なら最寄りの stable patch に
+# 調整して Makefile に確定記載する"). goose v3.24.1 (the plan's baseline)
+# builds without issue and is used as-is.
+GOOSE_VERSION := v3.24.1
+SQLC_VERSION := v1.31.1
+
+GOOSE := go run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
+SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+MIGRATIONS_DIR := db/migrations
+
+# Discrete DB_* settings (SPEC-005 R6). These defaults match the local
+# compose Postgres (impl-db's compose.yml + docker/postgres/initdb) and
+# carry no meaningful secret; real environments override every one of
+# them via the environment (never edit them into this file).
+DB_HOST ?= 127.0.0.1
+DB_PORT ?= 5432
+DB_NAME ?= app
+DB_USER ?= app
+DB_PASSWORD ?= app
+DB_SSLMODE ?= disable
+DB_SCHEMA ?= api
+
+# goose's own connection string (distinct from infra/postgres/db.go's
+# Config.DSN, which the running binary uses): search_path selects the
+# "api" schema so goose's version-tracking table (goose_db_version)
+# lives inside it, not "public", keeping api/auth migrations from
+# colliding in the same database (docs/plans/SPEC-005-plan.md §6.2 R-f).
+GOOSE_DBSTRING := postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=$(DB_SSLMODE)&search_path=$(DB_SCHEMA)
+
 .PHONY: help
 help: ## ターゲット一覧を表示する
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -54,3 +97,28 @@ run: ## API サーバーを起動する (PORT 環境変数でポート変更可)
 openapi: ## OpenAPI 3.1 契約 (docs/openapi.yaml) を swag v2 注釈から生成する (check には含めない)
 	$(SWAG) init -g cmd/api/main.go -o docs -ot yaml --v3.1
 	mv docs/swagger.yaml docs/openapi.yaml
+
+.PHONY: sqlc
+sqlc: ## sqlc でクエリ (db/queries) からコード (infra/postgres/sqlcgen) を生成する (生成であり検査ではないため check には含めない)
+	$(SQLC) generate
+
+.PHONY: migrate-up
+migrate-up: ## goose でマイグレーションを最新まで適用する (DB_* env で接続先を指定。既定はローカル compose の postgres)
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(GOOSE_DBSTRING)" up
+
+.PHONY: migrate-down
+migrate-down: ## goose でマイグレーションを1つ戻す
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(GOOSE_DBSTRING)" down
+
+.PHONY: migrate-status
+migrate-status: ## マイグレーションの適用状況を表示する
+	$(GOOSE) -dir $(MIGRATIONS_DIR) postgres "$(GOOSE_DBSTRING)" status
+
+.PHONY: migrate-create
+migrate-create: ## 新しいマイグレーションファイルを作成する (例: make migrate-create name=add_foo_column)
+	@if [ -z "$(name)" ]; then echo "usage: make migrate-create name=<slug>"; exit 1; fi
+	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
+
+.PHONY: test-integration
+test-integration: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。事前に migrate-up が必要。DB_* env で接続先を指定)
+	go test -tags=integration ./infra/postgres/...

@@ -110,6 +110,12 @@ variable "db_backup_retention_period" {
   default     = 1
 }
 
+variable "db_sslmode" {
+  type        = string
+  description = "libpq sslmode used by both api and auth to connect to RDS (SPEC-005 R6, injected as the DB_SSLMODE env var). Defaults to \"require\", which encrypts the connection (RDS PostgreSQL endpoints always offer TLS) without verifying the server certificate against a CA bundle; \"verify-full\" would additionally need the RDS CA bundle distributed into both app images, which is out of scope here."
+  default     = "require"
+}
+
 # --- app -----------------------------------------------------------------------
 
 variable "container_image" {

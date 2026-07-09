@@ -4,8 +4,8 @@ title: デモユーザーのパスワードが平文保持・平文比較(将来
 status: open  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
-updated: 2026-07-08
-specs: []  # 関連Spec ID (例: [SPEC-002])
+updated: 2026-07-09
+specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 ---
 
 # ISSUE-005: デモユーザーのパスワードが平文保持・平文比較(将来ログイン/同意画面を実装して VerifyPassword を配線する際はハッシュ化+定数時間比較が必須)
@@ -75,6 +75,8 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - [ ] ハッシュ用の外部依存を導入する場合は、計画の「外部依存ゼロ」方針との整合を planner/レビューで確認する(`golang.org/x/crypto/bcrypt` 採用可否を含めて判断)
 - [ ] `Password()` getter が平文ハッシュ以外を漏らさないこと、ログ・エラーに資格情報が出ないことを確認する
 - [ ] ログイン失敗時の応答・タイミングがユーザー存在有無を漏らさないことを確認する
+- [ ] (SPEC-005 で追加された永続化面) `users.password` 列(`app/auth/db/migrations/000001_create_auth.sql:37-43` の `password text NOT NULL`)に平文を保存しない。ハッシュ化に合わせて列名を `password_hash` に改名し、`app/auth/infra/postgres/seed.go:72-84`(`SeedUser` の `u.Password()` 平文 UPSERT)・`db/queries/users.sql` の Upsert・sqlc 生成コードを更新する
+- [ ] `users.password` 列を扱うマイグレーションは破壊的変更(列改名・内容変更)を含むため、SPEC-005 の「マイグレーション安全性」に沿ってレビューで明示・報告する
 
 ### 再発防止
 
@@ -88,3 +90,10 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - 事実確認: `app/auth/domain/user/user.go:14`(平文 `password`)・`:41-43`(`candidate == u.password` の平文比較)を確認。`VerifyPassword` は `app/auth/service/authorization_service.go:164-180` の `resolveOwner` から呼ばれておらず未配線で、現時点の実害はゼロ。
 - severity は **low** と判定。判定根拠: `VerifyPassword` が未配線でパスワードが検証に一切使われないため現行の実害なし。将来ログイン認証を配線したときにのみ資格情報保護・タイミング攻撃の実害となる予防的ハードニング。回避策(配線時にハッシュ化+定数時間比較へ置換)ありのため low(critical/high/medium ではないのは現に価値が損なわれていないため)。
 - 次にやること: ログイン/同意画面の実装を決めた時点で planner に計画化を依頼し、ハッシュ化+定数時間比較を impl-api/tester/checker/review-security で実施する。
+
+### 2026-07-09
+
+- SPEC-005(app/api・app/auth の Postgres 永続化)により、本 Issue が指摘する平文パスワードが `infra/memory`(再起動でリセット)から Postgres の恒久ストレージへ移った。`app/auth/db/migrations/000001_create_auth.sql:37-43` が `users.password text NOT NULL` を定義し、`app/auth/infra/postgres/seed.go:72-84` の `SeedUser` が `u.Password()` を平文のまま UPSERT する(`:78`)。SPEC-005 plan §6.1 R-b で「現状踏襲・ハッシュ化は将来 Issue」と明示評価され、review-security(E3)で本 Issue に集約して追跡すると判断された。
+- 対応(将来ログイン実装時)チェックリストに、平文を at-rest 保存しないための Postgres 面の項目(列名 `password`→`password_hash` 改名、`seed.go` / `db/queries/users.sql` / sqlc 生成の更新、破壊的マイグレーションのレビュー)を追記した。frontmatter の `specs` に SPEC-005 を相互リンク、`updated` を 2026-07-09 に更新した。
+- severity は **low** を維持。判定根拠: `VerifyPassword` は依然として未配線で、seed される demo password は起動毎に生成され検証に一切使われないため現行の実害はゼロ。Postgres 化で「再起動による自然消去」が失われた点は将来の footgun を増すが、現行フローで資格情報が実際に保護対象として使われていない状況は変わらないため low を据え置く。
+- 次にやること: 変更なし(ログイン/同意画面の実装を決めた時点で planner に計画化を依頼)。その計画では SPEC-005 の永続化面(列改名・seed / query / 生成コード更新)も同時に実施する。

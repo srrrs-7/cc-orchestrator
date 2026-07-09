@@ -28,8 +28,10 @@
 | 実装計画の作成 | planner | |
 | 実装・修正(app/web) | impl-web | |
 | 実装・修正(app/api) | impl-api | |
+| 実装・修正(app/auth) | impl-auth | domain / service / route。永続化(infra/postgres)は impl-db |
 | 実装・修正(app/iac) | impl-iac | |
 | CI/CD・リポジトリツーリング設定(`.github/`) | impl-ci | GitHub Actions workflow / dependabot / copilot-instructions 等 |
+| 実装・修正(DB/永続化層: migrations / sqlc / infra/postgres, app/api・app/auth 横断) | impl-db | ポート(`Repository` interface)は domain 側(impl-api / auth)、実装は `infra/postgres` 側で分担。概念で担当を切る(impl-ci と同型) |
 | テスト作成・実行 | tester | |
 | format / lint / type check | checker | |
 | セキュリティレビュー | review-security | |
@@ -58,5 +60,5 @@
 
 - admin セッションは常に利用可能な最上位モデルで実行する(`/model` で確認・設定)
 - subagent のモデルは各 agent 定義の frontmatter `model:` で固定する:
-  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-iac / impl-ci)/ tester / review-*)= sonnet、下流(checker)= haiku
+  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-auth / impl-iac / impl-ci / impl-db)/ tester / review-*)= sonnet、下流(checker)= haiku
 - モデル割り当てを変える場合は agent 定義の frontmatter を書き換える(このファイルの方針も併せて更新する)

@@ -114,15 +114,40 @@ variable "secrets" {
     name      = string
     valueFrom = string
   }))
-  description = "Secrets Manager/SSM-backed environment variables injected into the container at start, in ECS container definition \"secrets\" format (e.g. DB_CREDENTIALS). Never contains a plaintext value; valueFrom is an ARN resolved by the ECS agent using the task execution role."
+  description = "Secrets Manager/SSM-backed environment variables injected into the container at start, in ECS container definition \"secrets\" format (e.g. DB_USER/DB_PASSWORD, each a \"<secret-arn>:<json-key>::\" valueFrom referencing one JSON key of a shared secret). Never contains a plaintext value; valueFrom is an ARN resolved by the ECS agent using the task execution role."
   default     = []
   sensitive   = true
 }
 
 variable "secret_read_arns" {
   type        = list(string)
-  description = "ARNs of Secrets Manager secrets the task execution role must be able to read (secretsmanager:GetSecretValue), matching the valueFrom ARNs referenced in var.secrets. Leave empty (default) if the service has no secrets (e.g. auth)."
+  description = "ARNs of Secrets Manager secrets the task execution role must be able to read (secretsmanager:GetSecretValue), matching the valueFrom ARNs referenced in var.secrets and var.migration_secrets. Leave empty (default) if the service has no secrets."
   default     = []
+}
+
+variable "migration_image" {
+  type        = string
+  description = "Container image URI (repository:tag) for the pre-start migration (init) container that runs the database bootstrap/migration step (`CREATE SCHEMA IF NOT EXISTS <schema>` + `goose up`) before the app container starts (SPEC-005 R5). Leave empty (default) to use this module's own ECR repository at the \":migrate\" tag -- a separate image built from app/{api,auth}/Dockerfile.migrate (pinned goose CLI + db/migrations baked in; see module README \"マイグレーション init コンテナ\"). Only used when var.migration_environment is non-empty."
+  default     = ""
+}
+
+variable "migration_environment" {
+  type = list(object({
+    name  = string
+    value = string
+  }))
+  description = "Plain (non-secret) environment variables for the migration init container (typically DB_HOST/DB_PORT/DB_NAME/DB_SSLMODE/DB_SCHEMA). Leave empty (default, the zero value) to omit the migration init container entirely -- its presence is what enables the container and the app container's dependsOn wiring (see module README)."
+  default     = []
+}
+
+variable "migration_secrets" {
+  type = list(object({
+    name      = string
+    valueFrom = string
+  }))
+  description = "Secrets Manager-backed environment variables for the migration init container (typically DB_USER/DB_PASSWORD), in the same ECS container definition \"secrets\" format as var.secrets. Every ARN referenced here must also be present in var.secret_read_arns so the task execution role can resolve it. Ignored (no effect) when var.migration_environment is empty."
+  default     = []
+  sensitive   = true
 }
 
 variable "target_group_name" {

@@ -8,8 +8,8 @@ Follow the conventions below when suggesting or editing code.
 | Path | Stack | Tooling |
 |---|---|---|
 | `app/web` | Frontend (TypeScript / React) | Bun, Biome, tsgo, Vitest, Vite |
-| `app/api` | Backend API (Go, DDD) | Go 1.24 (stdlib only), Make |
-| `app/auth` | Auth API (Go, OAuth 2.0 + OIDC) | Go 1.24 (stdlib only), Make |
+| `app/api` | Backend API (Go, DDD) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
+| `app/auth` | Auth API (Go, OAuth 2.0 + OIDC) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
 | `app/iac` | Infrastructure (Terraform / AWS) | Terraform `>= 1.10`, tflint, trivy |
 | `docs/` | Specs / issues / plans | Markdown |
 
@@ -18,13 +18,13 @@ Do not change code outside the stack you are working in.
 ## Commands (per stack — do not invent others)
 
 - **web** (`app/web`): `bun install`, `bun run format:check` / `format` / `lint` / `typecheck` / `test` / `build`.
-- **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`.
+- **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`. Postgres persistence (SPEC-005, not part of `make check`): `make sqlc` (generate `infra/postgres/sqlcgen` from `db/queries`; commit the output), `make migrate-up` / `migrate-down` / `migrate-status` / `migrate-create name=<slug>` (goose, `db/migrations`), `make test-integration` (build tag `integration`, requires a migrated Postgres reachable via `DB_*` env vars).
 - **iac** (`app/iac`): `make check ENV=dev` (= `fmt-check` + `validate` + `lint` + `security`). Never run `terraform apply`.
 
 ## Go (`app/api`, `app/auth`)
 
 - DDD layered architecture with a one-way dependency `route → service → domain`. `domain` depends on nothing and is framework-free and unit-testable.
-- Standard library only (no third-party frameworks). `cmd/<binary>/main.go` is the composition root (wiring only, no logic).
+- Standard library only, with one deliberate exception: `infra/postgres` depends on `github.com/jackc/pgx/v5` (the sole runtime dependency in `go.mod`/`go.sum`) as a `database/sql` driver for the Postgres-backed `Repository` implementations (SPEC-005). `domain` / `service` / `route` remain stdlib-only; `infra/memory` (the default/test persistence) is unaffected. Migration (goose) and codegen (sqlc) tools run via `go run pkg@pinned` (see each stack's `Makefile`) and never become `go.mod` dependencies. `cmd/<binary>/main.go` is the composition root (wiring only, no logic) — including the memory/Postgres persistence selection.
 - Package by domain (split packages per aggregate/domain, not per technical layer). Both `app/api` and `app/auth` use top-level layer directories (`domain` / `service` / `infra` / `route` / `cmd`) and do not use an `internal/` tree.
 - `context.Context` is the first argument, never stored on a struct.
 - Wrap errors with `fmt.Errorf("...: %w", err)`. For branchable errors define sentinel (`var ErrX = errors.New(...)`) or custom types and match with `errors.Is` / `errors.As`. Never use `panic` for error handling.

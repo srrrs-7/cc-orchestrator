@@ -91,6 +91,27 @@ terraform plan
 push するイメージは `runtime_platform = ARM64` に合わせて **必ず linux/arm64 でビルド**する
 こと(R4。build-push 手順は root `Makefile` を参照)。
 
+## Postgres 永続化・マイグレーション init コンテナについて(SPEC-005)
+
+`module.service_api` / `module.service_auth` はいずれも `module.db`(RDS PostgreSQL、単一
+データベースを api/auth で共有・別スキーマ)への接続情報を `DB_HOST` / `DB_PORT` / `DB_NAME` /
+`DB_SSLMODE`(`var.db_sslmode`、既定 `"require"`)/ `DB_SCHEMA`(api=`"api"` / auth=`"auth"`)の
+plain env と、`DB_USER` / `DB_PASSWORD`(`module.db.master_user_secret_arn` の JSON key を
+ECS `secrets` の `:username::` / `:password::` で個別参照)として受け取る(R6。詳細な設計判断は
+`modules/db/README.md` を参照)。
+
+さらに両サービスとも、アプリ本体の起動前に `goose up`(+ スキーマの `CREATE SCHEMA IF NOT
+EXISTS`)を実行する **migrate init コンテナ**(`var.migration_environment` / `migration_secrets`
+/ `migration_image`)を配線している(R5。方式・並行実行の注意・代替案は
+`modules/service/README.md` の「マイグレーション init コンテナ」を参照)。
+
+**apply 前の前提条件**: `var.migration_image` は既定で各サービス自身の ECR リポジトリの
+`:migrate` タグを指すが、このタグにイメージはまだ push されていない(`Dockerfile.migrate` の
+push 経路は本 Spec の範囲外として後続に委ねられている、SPEC-005 plan §6.2 R-h)。**`:migrate`
+イメージを両サービス分 push してから `apply` すること**。push せずに `apply` すると、新しい
+デプロイのタスクが migrate コンテナのイメージ pull に失敗して起動できず、ロールアウトが
+詰まる(既存の running タスクはそのまま残るため、既存の可用性への直接影響は無い)。
+
 ## web(SPA)のデプロイについて
 
 Terraform は web 用 S3 バケット(`web_bucket_name` output)と CloudFront の「箱」までしか

@@ -13,6 +13,85 @@
 #   - ECS tasks run in public subnets with assign_public_ip = true instead of
 #     a NAT Gateway (R6); egress is restricted to the security group defined
 #     in the network module.
+#
+# SPEC-005 migration init container (see README "マイグレーション init
+# コンテナ"): when var.migration_environment is non-empty, a second,
+# non-essential container ("<service_name>-migrate") is prepended to
+# container_definitions and the app container gets a `dependsOn: [{...,
+# condition: "SUCCESS"}]` entry pointing at it. ECS starts the migrate
+# container first, waits for it to *exit 0* (SUCCESS; a non-zero exit blocks
+# the app container from ever starting and the task/deployment fails), then
+# starts the app container -- this is ECS's sidecar-based equivalent of a
+# Kubernetes initContainer (there is no separate "init container" primitive
+# in the ECS task definition schema). When var.migration_environment is
+# empty (default), local.migration_container_defs is [] and this resource is
+# byte-for-byte the pre-SPEC-005 single-container shape.
+
+locals {
+  migration_container_name = "${var.service_name}-migrate"
+
+  # Only produced when the caller opts in via var.migration_environment; see
+  # variables.tf and the README section referenced above for why presence of
+  # this variable (rather than a separate boolean) is the enable switch.
+  migration_container_defs = length(var.migration_environment) > 0 ? [
+    {
+      name      = local.migration_container_name
+      image     = local.migration_image
+      essential = false
+
+      # No portMappings: this container runs to completion (goose up) and
+      # exits, it never serves traffic.
+      environment = var.migration_environment
+      secrets     = var.migration_secrets
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.this.name
+          "awslogs-region"        = data.aws_region.current.name
+          "awslogs-stream-prefix" = local.migration_container_name
+        }
+      }
+    }
+  ] : []
+
+  app_container = merge(
+    {
+      name      = var.service_name
+      image     = local.container_image
+      essential = true
+
+      portMappings = [
+        {
+          containerPort = var.container_port
+          protocol      = "tcp"
+        }
+      ]
+
+      # Caller-supplied plain env vars (e.g. PORT, DB_HOST, ISSUER) and
+      # Secrets Manager-backed secrets (e.g. DB_USER/DB_PASSWORD); which
+      # env/secrets to inject differs per service (see envs/dev/main.tf), so
+      # this module stays a thin pass-through and never hardcodes an
+      # application's variable names.
+      environment = var.environment
+      secrets     = var.secrets
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.this.name
+          "awslogs-region"        = data.aws_region.current.name
+          "awslogs-stream-prefix" = var.service_name
+        }
+      }
+    },
+    length(local.migration_container_defs) > 0 ? {
+      dependsOn = [
+        { containerName = local.migration_container_name, condition = "SUCCESS" }
+      ]
+    } : {}
+  )
+}
 
 resource "aws_ecs_task_definition" "this" {
   family                   = "${var.name_prefix}-${var.service_name}"
@@ -28,37 +107,7 @@ resource "aws_ecs_task_definition" "this" {
     operating_system_family = "LINUX"
   }
 
-  container_definitions = jsonencode([
-    {
-      name      = var.service_name
-      image     = local.container_image
-      essential = true
-
-      portMappings = [
-        {
-          containerPort = var.container_port
-          protocol      = "tcp"
-        }
-      ]
-
-      # Caller-supplied plain env vars (e.g. PORT, DB_HOST, ISSUER) and
-      # Secrets Manager-backed secrets (e.g. DB_CREDENTIALS); which
-      # env/secrets to inject differs per service (see envs/dev/main.tf), so
-      # this module stays a thin pass-through and never hardcodes an
-      # application's variable names.
-      environment = var.environment
-      secrets     = var.secrets
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.this.name
-          "awslogs-region"        = data.aws_region.current.name
-          "awslogs-stream-prefix" = var.service_name
-        }
-      }
-    }
-  ])
+  container_definitions = jsonencode(concat(local.migration_container_defs, [local.app_container]))
 
   tags = merge(var.tags, { Name = "${var.name_prefix}-${var.service_name}" })
 }

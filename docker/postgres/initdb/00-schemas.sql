@@ -1,0 +1,22 @@
+-- SPEC-005: local compose's single Postgres database ("app", per
+-- compose.yml's POSTGRES_DB) holds both app/api and app/auth in
+-- separate schemas, keeping their tables and each stack's own goose
+-- version table (goose_db_version) from colliding (plan §0 "スキーマ
+-- 分離機構"). Schema creation is deliberately kept outside goose (see
+-- app/api/db/migrations and app/auth/db/migrations' header comments):
+-- goose's own bookkeeping table needs to live inside a schema that
+-- already exists, so schema creation must happen first and separately.
+--
+-- The Postgres image runs every *.sql file under
+-- /docker-entrypoint-initdb.d in lexical order, but only on a first
+-- boot against an empty data directory (an existing named volume is
+-- left untouched). IF NOT EXISTS makes this idempotent for local
+-- resets that recreate the container without recreating the volume.
+--
+-- app/api's migrations apply into "api" (DB_SCHEMA default in
+-- app/api/Makefile / infra/postgres/db.go), app/auth's into "auth"
+-- (same defaulting in app/auth/Makefile / infra/postgres/db.go) --
+-- both via the connecting client's search_path, never a
+-- schema-qualified table name.
+CREATE SCHEMA IF NOT EXISTS api;
+CREATE SCHEMA IF NOT EXISTS auth;

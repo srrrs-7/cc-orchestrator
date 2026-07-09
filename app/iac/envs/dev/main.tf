@@ -123,18 +123,61 @@ module "service_api" {
     { header_name = var.origin_verify_header_name, values = [random_password.origin_verify.result] },
   ]
 
+  # SPEC-005 R6 discrete DB_* contract (app/api's infra/postgres/db.go
+  # ConfigFromEnv): host/port/name/sslmode/schema are plain env, user/password
+  # come from the RDS master secret's JSON keys via `secrets` below so no
+  # plaintext credential ever appears here, in tfvars or in state (R6 /
+  # module db's manage_master_user_password). DB_SCHEMA="api" is this
+  # stack's namespace within the single shared database (module.db.db_name);
+  # see the schema-bootstrap note on module.service_api's
+  # migration_environment below for how that schema comes to exist before
+  # api's own migration/app containers ever connect to it.
   environment = [
     { name = "PORT", value = tostring(var.container_port) },
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
     { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_SSLMODE", value = var.db_sslmode },
+    { name = "DB_SCHEMA", value = "api" },
   ]
 
+  # ":username::" / ":password::" select the individual JSON keys of the
+  # master secret (ECS's `secret-arn:json-key::` valueFrom syntax) rather
+  # than injecting the whole secret blob as one env var, matching
+  # infra/postgres/db.go's separate DB_USER/DB_PASSWORD fields. Both keys
+  # live in the same secret (module.db.master_user_secret_arn), so only one
+  # ARN needs to be readable -- see secret_read_arns below.
   secrets = [
-    { name = "DB_CREDENTIALS", valueFrom = module.db.master_user_secret_arn },
+    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
   ]
 
   secret_read_arns = [module.db.master_user_secret_arn]
+
+  # SPEC-005 R5 migration init container: runs before the app container
+  # (modules/service/ecs.tf's dependsOn/condition=SUCCESS wiring), using the
+  # same DB_* contract as the app container above (master credentials, since
+  # the migrate image also needs to CREATE SCHEMA IF NOT EXISTS "api" before
+  # applying db/migrations -- see modules/service/README.md
+  # "マイグレーション init コンテナ" for why that create-schema step lives in
+  # the migrate image's entrypoint rather than in a goose migration file or a
+  # Terraform postgresql-provider resource, and docs/plans/SPEC-005-plan.md
+  # §6.2 R-g/R-h for the concurrency caveat and the deferred image-push
+  # wiring). var.migration_image defaults to this service's own ECR
+  # repository at ":migrate", which is NOT yet pushed anywhere as of this
+  # plan -- see the SPEC-005 section of this file's README before applying.
+  migration_environment = [
+    { name = "DB_HOST", value = module.db.db_endpoint },
+    { name = "DB_PORT", value = tostring(module.db.db_port) },
+    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_SSLMODE", value = var.db_sslmode },
+    { name = "DB_SCHEMA", value = "api" },
+  ]
+
+  migration_secrets = [
+    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+  ]
 
   health_check_path  = var.health_check_path
   log_retention_days = var.log_retention_days
@@ -176,13 +219,50 @@ module "service_auth" {
   # (authorize/token/userinfo/jwks) by concatenating this issuer string, so
   # each resolves back to a path actually reachable through the /auth/*
   # behavior.
+  # SPEC-005 R6 discrete DB_* contract (app/auth's infra/postgres/db.go
+  # ConfigFromEnv), same single RDS database as api but DB_SCHEMA="auth" --
+  # api and auth share one database (module.db.db_name) and are namespaced
+  # only by connection search_path (see module.service_api's environment
+  # comment above and modules/db/README.md "既知の制約" for why this is a
+  # namespace boundary, not a permission boundary, under the shared master
+  # user both services connect as).
   environment = [
     { name = "PORT", value = tostring(var.auth_container_port) },
     { name = "ISSUER", value = "http://${module.cdn.cloudfront_domain_name}/auth" },
+    { name = "DB_HOST", value = module.db.db_endpoint },
+    { name = "DB_PORT", value = tostring(module.db.db_port) },
+    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_SSLMODE", value = var.db_sslmode },
+    { name = "DB_SCHEMA", value = "auth" },
   ]
 
-  secrets          = []
-  secret_read_arns = []
+  # Same master secret / JSON-key selection as module.service_api; see that
+  # block's comment for the ECS `secret-arn:json-key::` syntax.
+  secrets = [
+    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+  ]
+
+  secret_read_arns = [module.db.master_user_secret_arn]
+
+  # SPEC-005 R5 migration init container; see module.service_api's
+  # migration_environment comment above for the full rationale (schema
+  # bootstrap, concurrency caveat, deferred image push). auth's own
+  # Dockerfile.migrate bakes in app/auth/db/migrations and only ever touches
+  # the "auth" schema, so it cannot race with api's migrate container even
+  # though both attach to the same database.
+  migration_environment = [
+    { name = "DB_HOST", value = module.db.db_endpoint },
+    { name = "DB_PORT", value = tostring(module.db.db_port) },
+    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_SSLMODE", value = var.db_sslmode },
+    { name = "DB_SCHEMA", value = "auth" },
+  ]
+
+  migration_secrets = [
+    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+  ]
 
   health_check_path  = var.auth_health_check_path
   log_retention_days = var.log_retention_days
