@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { Button } from "../../../shared/ui/Button";
 import type { Task } from "../domain/task";
-import { canComplete, canStart, completeTask, startTask } from "../domain/task";
-import { useUpdateTaskStatus } from "../hooks/useTasks";
+import { canComplete, canStart } from "../domain/task";
+import { useCompleteTask, useStartTask } from "../hooks/useTasks";
 
 type TaskItemProps = {
   readonly task: Task;
@@ -11,22 +11,23 @@ type TaskItemProps = {
 /**
  * Renders a single task. Holds no business logic itself: whether the
  * Start/Complete buttons are enabled comes from domain predicates
- * (canStart/canComplete), and the next status to persist comes from
- * the domain transition functions (startTask/completeTask).
+ * (canStart/canComplete). Which endpoint to call (POST .../start or
+ * .../complete, D2) is implicit in which button was clicked, so no
+ * domain transition function is needed here to compute a "next status"
+ * to send.
  */
 export function TaskItem({ task }: TaskItemProps) {
-  const updateStatus = useUpdateTaskStatus();
+  const startTask = useStartTask();
+  const completeTask = useCompleteTask();
 
   const handleStart = () => {
     if (!canStart(task)) return;
-    const next = startTask(task);
-    updateStatus.mutate({ id: task.id, status: next.status });
+    startTask.mutate(task.id);
   };
 
   const handleComplete = () => {
     if (!canComplete(task)) return;
-    const next = completeTask(task);
-    updateStatus.mutate({ id: task.id, status: next.status });
+    completeTask.mutate(task.id);
   };
 
   return (
@@ -48,11 +49,11 @@ export function TaskItem({ task }: TaskItemProps) {
         <Button
           variant="secondary"
           onClick={handleStart}
-          disabled={!canStart(task) || updateStatus.isPending}
+          disabled={!canStart(task) || startTask.isPending}
         >
           Start
         </Button>
-        <Button onClick={handleComplete} disabled={!canComplete(task) || updateStatus.isPending}>
+        <Button onClick={handleComplete} disabled={!canComplete(task) || completeTask.isPending}>
           Complete
         </Button>
       </div>

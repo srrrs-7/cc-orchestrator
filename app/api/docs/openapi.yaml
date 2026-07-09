@@ -3,7 +3,13 @@ components:
     route.changePriorityRequest:
       properties:
         priority:
+          enum:
+          - low
+          - medium
+          - high
           type: string
+      required:
+      - priority
       type: object
     route.createTaskRequest:
       properties:
@@ -11,9 +17,15 @@ components:
           description: |-
             Priority is optional; an empty value defaults to medium
             (applied by service.TaskService.Create).
+          enum:
+          - low
+          - medium
+          - high
           type: string
         title:
           type: string
+      required:
+      - title
       type: object
     route.errorResponse:
       properties:
@@ -27,13 +39,28 @@ components:
         id:
           type: string
         priority:
+          enum:
+          - low
+          - medium
+          - high
           type: string
         status:
+          enum:
+          - todo
+          - doing
+          - done
           type: string
         title:
           type: string
         updated_at:
           type: string
+      required:
+      - created_at
+      - id
+      - priority
+      - status
+      - title
+      - updated_at
       type: object
 externalDocs:
   description: ""

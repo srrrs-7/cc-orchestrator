@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!dist", "!public/mockServiceWorker.js"]
+    "includes": ["**", "!dist", "!public/mockServiceWorker.js", "!src/features/tasks/api/generated"]
   },
   "formatter": {
     "enabled": true,
@@ -36,7 +36,7 @@
   },
   "overrides": [
     {
-      "includes": ["vite.config.ts", "vitest.config.ts"],
+      "includes": ["vite.config.ts", "vitest.config.ts", "openapi-ts.config.ts"],
       "linter": {
         "rules": {
           "style": {

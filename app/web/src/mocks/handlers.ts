@@ -1,7 +1,7 @@
 import { HttpResponse, http } from "msw";
 import { z } from "zod";
 import type { TaskDto } from "../features/tasks/api/schema";
-import { TASK_PRIORITIES, TASK_STATUSES } from "../features/tasks/domain/task";
+import { TASK_PRIORITIES } from "../features/tasks/domain/task";
 
 // Request bodies are external data too (they arrive as JSON over the
 // wire, even in this in-memory mock), so they go through zod just
@@ -9,10 +9,6 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../features/tasks/domain/task";
 const createTaskRequestSchema = z.object({
   title: z.string().trim().min(1),
   priority: z.enum(TASK_PRIORITIES),
-});
-
-const updateTaskStatusRequestSchema = z.object({
-  status: z.enum(TASK_STATUSES),
 });
 
 function nowIso(): string {
@@ -23,6 +19,32 @@ function canTransition(from: TaskDto["status"], to: TaskDto["status"]): boolean 
   if (from === "todo" && to === "doing") return true;
   if (from === "doing" && to === "done") return true;
   return false;
+}
+
+/**
+ * Shared transition handler for POST /tasks/:id/start and
+ * /tasks/:id/complete (D2: the Go wire contract has no
+ * `PATCH /tasks/:id/status`). Errors use the `{"error": string}`
+ * envelope (D3: route.errorResponse), not `{"message": string}`.
+ */
+function transitionTo(rawId: string | readonly string[] | undefined, to: TaskDto["status"]) {
+  const id = typeof rawId === "string" ? rawId : undefined;
+  const existing = id === undefined ? undefined : tasks.find((task) => task.id === id);
+  if (existing === undefined) {
+    return HttpResponse.json({ error: "Task not found" }, { status: 404 });
+  }
+
+  if (!canTransition(existing.status, to)) {
+    return HttpResponse.json(
+      { error: `Cannot transition from "${existing.status}" to "${to}"` },
+      { status: 409 },
+    );
+  }
+
+  const updated: TaskDto = { ...existing, status: to, updated_at: nowIso() };
+  tasks = tasks.map((task) => (task.id === id ? updated : task));
+
+  return HttpResponse.json(updated);
 }
 
 let tasks: TaskDto[] = [
@@ -71,7 +93,7 @@ export const handlers = [
     const id = params.id;
     const task = tasks.find((candidate) => candidate.id === id);
     if (task === undefined) {
-      return HttpResponse.json({ message: "Task not found" }, { status: 404 });
+      return HttpResponse.json({ error: "Task not found" }, { status: 404 });
     }
     return HttpResponse.json(task);
   }),
@@ -94,26 +116,11 @@ export const handlers = [
     return HttpResponse.json(task, { status: 201 });
   }),
 
-  http.patch("/api/tasks/:id/status", async ({ request, params }) => {
-    const json: unknown = await request.json();
-    const body = updateTaskStatusRequestSchema.parse(json);
-    const id = params.id;
+  http.post("/api/tasks/:id/start", ({ params }) => {
+    return transitionTo(params.id, "doing");
+  }),
 
-    const existing = tasks.find((task) => task.id === id);
-    if (existing === undefined) {
-      return HttpResponse.json({ message: "Task not found" }, { status: 404 });
-    }
-
-    if (!canTransition(existing.status, body.status)) {
-      return HttpResponse.json(
-        { message: `Cannot transition from "${existing.status}" to "${body.status}"` },
-        { status: 409 },
-      );
-    }
-
-    const updated: TaskDto = { ...existing, status: body.status, updated_at: nowIso() };
-    tasks = tasks.map((task) => (task.id === id ? updated : task));
-
-    return HttpResponse.json(updated);
+  http.post("/api/tasks/:id/complete", ({ params }) => {
+    return transitionTo(params.id, "done");
   }),
 ];

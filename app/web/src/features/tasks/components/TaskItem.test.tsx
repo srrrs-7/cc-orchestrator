@@ -67,18 +67,18 @@ describe("TaskItem", () => {
     }
   });
 
-  it("calls the update-status mutation with the next status when Start is clicked", async () => {
+  // D2: the todo -> doing transition is now a dedicated
+  // POST /tasks/:id/start call (no PATCH .../status + body).
+  it("calls POST /tasks/:id/start when Start is clicked", async () => {
     const user = userEvent.setup();
-    const received: { id?: string; status?: string } = {};
+    const received: { id?: string } = {};
     server.use(
-      http.patch("/api/tasks/:id/status", async ({ request, params }) => {
-        const body = (await request.json()) as { status: string };
+      http.post("/api/tasks/:id/start", ({ params }) => {
         received.id = String(params.id);
-        received.status = body.status;
         return HttpResponse.json({
           id: String(params.id),
           title: "Write tests",
-          status: body.status,
+          status: "doing",
           priority: "medium",
           created_at: "2026-01-01T00:00:00.000Z",
           updated_at: "2026-01-01T00:00:00.000Z",
@@ -90,22 +90,22 @@ describe("TaskItem", () => {
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     await waitFor(() => {
-      expect(received).toEqual({ id: "42", status: "doing" });
+      expect(received).toEqual({ id: "42" });
     });
   });
 
-  it("calls the update-status mutation with the next status when Complete is clicked", async () => {
+  // D2: the doing -> done transition is now a dedicated
+  // POST /tasks/:id/complete call (no PATCH .../status + body).
+  it("calls POST /tasks/:id/complete when Complete is clicked", async () => {
     const user = userEvent.setup();
-    const received: { id?: string; status?: string } = {};
+    const received: { id?: string } = {};
     server.use(
-      http.patch("/api/tasks/:id/status", async ({ request, params }) => {
-        const body = (await request.json()) as { status: string };
+      http.post("/api/tasks/:id/complete", ({ params }) => {
         received.id = String(params.id);
-        received.status = body.status;
         return HttpResponse.json({
           id: String(params.id),
           title: "Write tests",
-          status: body.status,
+          status: "done",
           priority: "medium",
           created_at: "2026-01-01T00:00:00.000Z",
           updated_at: "2026-01-01T00:00:00.000Z",
@@ -117,7 +117,7 @@ describe("TaskItem", () => {
     await user.click(screen.getByRole("button", { name: "Complete" }));
 
     await waitFor(() => {
-      expect(received).toEqual({ id: "42", status: "done" });
+      expect(received).toEqual({ id: "42" });
     });
   });
 
@@ -125,9 +125,13 @@ describe("TaskItem", () => {
     const user = userEvent.setup();
     let called = false;
     server.use(
-      http.patch("/api/tasks/:id/status", () => {
+      http.post("/api/tasks/:id/start", () => {
         called = true;
-        return HttpResponse.json({ message: "should not be called" }, { status: 409 });
+        return HttpResponse.json({ error: "should not be called" }, { status: 409 });
+      }),
+      http.post("/api/tasks/:id/complete", () => {
+        called = true;
+        return HttpResponse.json({ error: "should not be called" }, { status: 409 });
       }),
     );
 

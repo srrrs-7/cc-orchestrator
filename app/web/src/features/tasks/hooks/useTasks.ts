@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ApiError } from "../../../shared/api/errors";
-import { createTask, fetchTaskById, fetchTasks, updateTaskStatus } from "../api/client";
+import { completeTask, createTask, fetchTaskById, fetchTasks, startTask } from "../api/client";
 import type { CreateTaskInput } from "../api/schema";
-import type { Task, TaskStatus } from "../domain/task";
+import type { Task } from "../domain/task";
 
 const tasksQueryKey = ["tasks"] as const;
 
@@ -37,15 +37,28 @@ export function useCreateTask() {
   });
 }
 
-type UpdateTaskStatusInput = {
-  readonly id: string;
-  readonly status: TaskStatus;
-};
-
-export function useUpdateTaskStatus() {
+/**
+ * POST /tasks/:id/start (D2: replaces the old `PATCH .../status`
+ * mutation for the todo -> doing transition).
+ */
+export function useStartTask() {
   const queryClient = useQueryClient();
-  return useMutation<Task, ApiError, UpdateTaskStatusInput>({
-    mutationFn: ({ id, status }) => updateTaskStatus(id, status),
+  return useMutation<Task, ApiError, string>({
+    mutationFn: startTask,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: tasksQueryKey });
+    },
+  });
+}
+
+/**
+ * POST /tasks/:id/complete (D2: replaces the old `PATCH .../status`
+ * mutation for the doing -> done transition).
+ */
+export function useCompleteTask() {
+  const queryClient = useQueryClient();
+  return useMutation<Task, ApiError, string>({
+    mutationFn: completeTask,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: tasksQueryKey });
     },

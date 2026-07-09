@@ -21,4 +21,4 @@ export {
   TASK_STATUSES,
 } from "./domain/task";
 
-export { useCreateTask, useTasksQuery, useUpdateTaskStatus } from "./hooks/useTasks";
+export { useCompleteTask, useCreateTask, useStartTask, useTasksQuery } from "./hooks/useTasks";

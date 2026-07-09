@@ -15,16 +15,16 @@ type taskHandler struct {
 
 // createTaskRequest is the JSON request body for POST /tasks.
 type createTaskRequest struct {
-	Title string `json:"title"`
+	Title string `json:"title" validate:"required"`
 	// Priority is optional; an empty value defaults to medium
 	// (applied by service.TaskService.Create).
-	Priority string `json:"priority"`
+	Priority string `json:"priority" enums:"low,medium,high"`
 }
 
 // changePriorityRequest is the JSON request body for
 // POST /tasks/{id}/priority.
 type changePriorityRequest struct {
-	Priority string `json:"priority"`
+	Priority string `json:"priority" validate:"required" enums:"low,medium,high"`
 }
 
 // taskResponse is the JSON response body representing a single Task.
@@ -32,12 +32,12 @@ type changePriorityRequest struct {
 // start / complete / changePriority) via newTaskResponse, so adding a
 // field here propagates to all of them at once.
 type taskResponse struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Priority  string `json:"priority"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID        string `json:"id" validate:"required"`
+	Title     string `json:"title" validate:"required"`
+	Status    string `json:"status" validate:"required" enums:"todo,doing,done"`
+	Priority  string `json:"priority" validate:"required" enums:"low,medium,high"`
+	CreatedAt string `json:"created_at" validate:"required"`
+	UpdatedAt string `json:"updated_at" validate:"required"`
 }
 
 func newTaskResponse(dto service.TaskDTO) taskResponse {

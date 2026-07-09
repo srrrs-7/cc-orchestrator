@@ -2,9 +2,13 @@ package route_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
@@ -17,6 +21,39 @@ import (
 // each test case starts from an empty store.
 func newTestHandler() http.Handler {
 	repo := memory.NewTaskRepository()
+	dupChk := task.NewDuplicateChecker(repo)
+	svc := service.NewTaskService(repo, dupChk)
+	return route.NewRouter(svc)
+}
+
+// failingRepository is a task.Repository whose every method returns a
+// generic, non-sentinel error. It exists solely to drive route's
+// default writeError branch (500 errorResponse), a wire-contract
+// scenario the happy-path memory.TaskRepository cannot produce.
+type failingRepository struct{}
+
+var _ task.Repository = failingRepository{}
+
+func (failingRepository) Save(context.Context, *task.Task) error {
+	return errors.New("failingRepository: save always fails")
+}
+
+func (failingRepository) FindByID(context.Context, task.ID) (*task.Task, error) {
+	return nil, errors.New("failingRepository: find by id always fails")
+}
+
+func (failingRepository) FindByTitle(context.Context, task.Title) (*task.Task, error) {
+	return nil, errors.New("failingRepository: find by title always fails")
+}
+
+func (failingRepository) FindAll(context.Context) ([]*task.Task, error) {
+	return nil, errors.New("failingRepository: find all always fails")
+}
+
+// newFailingTestHandler wires a router backed by failingRepository,
+// for wire-contract cases that must observe a 500 errorResponse.
+func newFailingTestHandler() http.Handler {
+	repo := failingRepository{}
 	dupChk := task.NewDuplicateChecker(repo)
 	svc := service.NewTaskService(repo, dupChk)
 	return route.NewRouter(svc)
@@ -50,6 +87,17 @@ func doRequest(t *testing.T, h http.Handler, method, target string, body any) *h
 	}
 
 	req := httptest.NewRequest(method, target, reader)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// doRawRequest is like doRequest but sends body verbatim (unmarshaled),
+// so callers can exercise malformed-JSON request bodies.
+func doRawRequest(t *testing.T, h http.Handler, method, target, rawBody string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(method, target, strings.NewReader(rawBody))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -371,5 +419,300 @@ func TestChangePriority_NotFound(t *testing.T) {
 	}
 	if body := decodeError(t, rec); body.Error == "" {
 		t.Error("error response body is empty, want a message")
+	}
+}
+
+// ---------------------------------------------------------------------
+// Wire-contract tests (SPEC-003 T2 / R2).
+//
+// The tests above pin *behavior* (business-rule correctness: exact
+// field values, transition semantics, duplicate detection, ...). The
+// tests below instead pin the *wire shape* that the generated OpenAPI
+// document must describe for every endpoint: the exact success-body
+// field set and casing (route.taskResponse), the exact error-body
+// shape (route.errorResponse), and the status code the implementation
+// actually produces for each scenario. They deliberately do not
+// re-assert field *values* already covered above.
+// ---------------------------------------------------------------------
+
+// wireTaskFields is the exact, snake_case field set of
+// route.taskResponse. Every field must be a JSON string: in
+// particular created_at/updated_at, since the swag annotations
+// reference taskResponse (all-string) rather than the
+// time.Time-typed service.TaskDTO.
+var wireTaskFields = []string{"id", "title", "status", "priority", "created_at", "updated_at"}
+
+// wireErrorFields is the exact field set of route.errorResponse.
+var wireErrorFields = []string{"error"}
+
+// decodeMap decodes rec's body as a generic JSON object, preserving
+// the actual field set and value types (unlike decoding into a typed
+// struct, which silently tolerates missing/extra fields and coerces
+// nothing).
+func decodeMap(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var got map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body as object: %v (body=%q)", err, rec.Body.String())
+	}
+	return got
+}
+
+// assertWireShape verifies body has exactly wantFields as its key set
+// (no missing, no extra) and that every one of those fields is a JSON
+// string.
+func assertWireShape(t *testing.T, body map[string]any, wantFields []string) {
+	t.Helper()
+
+	got := make([]string, 0, len(body))
+	for k := range body {
+		got = append(got, k)
+	}
+	slices.Sort(got)
+
+	want := slices.Clone(wantFields)
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Errorf("field set = %v, want exactly %v", got, want)
+	}
+
+	for _, f := range wantFields {
+		v, ok := body[f]
+		if !ok {
+			continue // already reported by the field-set check above
+		}
+		if _, isString := v.(string); !isString {
+			t.Errorf("field %q = %T(%v), want a JSON string", f, v, v)
+		}
+	}
+}
+
+// TestWireContract_TaskAndErrorShapes covers every Task-returning
+// endpoint (create/get/start/complete/changePriority) and its
+// documented 400/404/409/500 failure modes, pinning:
+//   - success bodies are exactly {id,title,status,priority,
+//     created_at,updated_at}, snake_case, all-string (taskResponse);
+//   - failure bodies are exactly {error} (errorResponse);
+//   - the status code produced for each scenario.
+//
+// GET /tasks (a JSON array, not a single object) is covered
+// separately by TestWireContract_ListResponseFields.
+func TestWireContract_TaskAndErrorShapes(t *testing.T) {
+	tests := []struct {
+		name           string
+		useFailingRepo bool
+		do             func(t *testing.T, h http.Handler) *httptest.ResponseRecorder
+		wantStatus     int
+		wantFields     []string
+	}{
+		// POST /tasks
+		{
+			name: "POST /tasks success -> 201 taskResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "high"})
+			},
+			wantStatus: http.StatusCreated,
+			wantFields: wireTaskFields,
+		},
+		{
+			name: "POST /tasks malformed JSON body -> 400 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRawRequest(t, h, http.MethodPost, "/tasks", "{not-json")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks empty title -> 400 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": ""})
+			},
+			wantStatus: http.StatusBadRequest,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks invalid priority -> 400 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "urgent"})
+			},
+			wantStatus: http.StatusBadRequest,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks duplicate title -> 409 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire dup"})
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire dup"})
+			},
+			wantStatus: http.StatusConflict,
+			wantFields: wireErrorFields,
+		},
+		{
+			name:           "POST /tasks repository failure -> 500 errorResponse",
+			useFailingRepo: true,
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"})
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantFields: wireErrorFields,
+		},
+
+		// GET /tasks/{id}
+		{
+			name: "GET /tasks/{id} success -> 200 taskResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				return doRequest(t, h, http.MethodGet, "/tasks/"+created.ID, nil)
+			},
+			wantStatus: http.StatusOK,
+			wantFields: wireTaskFields,
+		},
+		{
+			name: "GET /tasks/{id} not found -> 404 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodGet, "/tasks/does-not-exist", nil)
+			},
+			wantStatus: http.StatusNotFound,
+			wantFields: wireErrorFields,
+		},
+
+		// POST /tasks/{id}/start
+		{
+			name: "POST /tasks/{id}/start success -> 200 taskResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
+			},
+			wantStatus: http.StatusOK,
+			wantFields: wireTaskFields,
+		},
+		{
+			name: "POST /tasks/{id}/start not found -> 404 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/start", nil)
+			},
+			wantStatus: http.StatusNotFound,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks/{id}/start invalid transition -> 409 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
+			},
+			wantStatus: http.StatusConflict,
+			wantFields: wireErrorFields,
+		},
+
+		// POST /tasks/{id}/complete
+		{
+			name: "POST /tasks/{id}/complete success -> 200 taskResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
+			},
+			wantStatus: http.StatusOK,
+			wantFields: wireTaskFields,
+		},
+		{
+			name: "POST /tasks/{id}/complete not found -> 404 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/complete", nil)
+			},
+			wantStatus: http.StatusNotFound,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks/{id}/complete invalid transition -> 409 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
+			},
+			wantStatus: http.StatusConflict,
+			wantFields: wireErrorFields,
+		},
+
+		// POST /tasks/{id}/priority
+		{
+			name: "POST /tasks/{id}/priority success -> 200 taskResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "low"}))
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "high"})
+			},
+			wantStatus: http.StatusOK,
+			wantFields: wireTaskFields,
+		},
+		{
+			name: "POST /tasks/{id}/priority malformed JSON body -> 400 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				return doRawRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", "{not-json")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks/{id}/priority invalid priority value -> 400 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
+				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "urgent"})
+			},
+			wantStatus: http.StatusBadRequest,
+			wantFields: wireErrorFields,
+		},
+		{
+			name: "POST /tasks/{id}/priority not found -> 404 errorResponse",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/priority", map[string]string{"priority": "high"})
+			},
+			wantStatus: http.StatusNotFound,
+			wantFields: wireErrorFields,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var h http.Handler
+			if tt.useFailingRepo {
+				h = newFailingTestHandler()
+			} else {
+				h = newTestHandler()
+			}
+
+			rec := tt.do(t, h)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			assertWireShape(t, decodeMap(t, rec), tt.wantFields)
+		})
+	}
+}
+
+// TestWireContract_ListResponseFields pins GET /tasks's shape: a JSON
+// array whose every item is a taskResponse (the same exact field set
+// and casing pinned above for the single-object endpoints).
+func TestWireContract_ListResponseFields(t *testing.T) {
+	h := newTestHandler()
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire list task 1", "priority": "low"})
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire list task 2", "priority": "high"})
+
+	rec := doRequest(t, h, http.MethodGet, "/tasks", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var got []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body as array: %v (body=%q)", err, rec.Body.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	for _, item := range got {
+		assertWireShape(t, item, wireTaskFields)
 	}
 }

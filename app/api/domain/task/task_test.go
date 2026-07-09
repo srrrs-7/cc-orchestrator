@@ -262,8 +262,17 @@ func TestTask_ChangePriority(t *testing.T) {
 		if tk.Status() != task.StatusDoing {
 			t.Errorf("Status() after ChangePriority() = %v, want unchanged %v", tk.Status(), task.StatusDoing)
 		}
-		if !tk.UpdatedAt().After(before) {
-			t.Errorf("UpdatedAt() = %v, want after %v", tk.UpdatedAt(), before)
+		// Not a strict After(): two back-to-back time.Now() calls
+		// (Start() then ChangePriority()) can observe the same
+		// instant at typical clock resolutions, which made this
+		// assertion flaky (about 1/4 of runs). ChangePriority's
+		// contract is "never moves updatedAt backwards", not
+		// "always strictly increases it within the same tick", so
+		// assert non-regression (!Before, i.e. >=) instead. See
+		// .claude/rules/testing.md: tests must not depend on real
+		// time precision.
+		if tk.UpdatedAt().Before(before) {
+			t.Errorf("UpdatedAt() = %v, want not before %v", tk.UpdatedAt(), before)
 		}
 	})
 

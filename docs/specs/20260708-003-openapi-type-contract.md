@@ -3,8 +3,8 @@ id: SPEC-003
 title: Go⇄TypeScript 型共有基盤(OpenAPI 契約 / B2 方式)
 status: approved  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-08
-updated: 2026-07-08
-issues: [ISSUE-009]       # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-09
+issues: [ISSUE-009, ISSUE-011, ISSUE-012, ISSUE-013]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -147,3 +147,11 @@ CI: Go→yaml→TS を再生成し git diff --exit-code(ドリフト検査)
 - planner が実装計画 `docs/plans/SPEC-003-plan.md` を作成。調査で Go 実コードと web の wire 契約に 3 ドリフト(D1 priority / D2 遷移エンドポイント / D3 エラー包み)を確認し、生成契約の整合方向を着手前ユーザー判断ゲートとして提示(推奨: D1 は SPEC-002 先行、D2/D3 は Go に合わせる)。R1 の `PATCH /tasks/{id}/status` は実コードに無いため、§3 の endpoint 記述は spec-owner による再整合が必要(申し送り)。
 - ISSUE-009 を相互リンク(frontmatter `issues`)。ISSUE-009 は本 Spec の実装計画が特定した drift **D2**(状態遷移エンドポイント乖離: web `PATCH /tasks/:id/status` ↔ api `POST /tasks/{id}/start|complete`)を独立 Issue として追跡・可視化するもの。D2 の解消方向確定(選択肢 Q / 推奨 Q1)は本 Spec の T3/T4 着手前ゲートであり、ISSUE-009 の対応方針は本 Spec のゲート判断と同期させる。
 - ゲートをユーザー判断で解決: **D1 = SPEC-002(Go に priority 追加)を先行実装してから本 Spec の生成に着手**(web の priority 機能を落とさない)/ **D2・D3 = web を Go に合わせる**(web が `POST …/start`・`…/complete` を呼び、エラーは `{error}` を読む。backend は変更しない)。これに伴い §3 R1 の endpoint 記述を Go 実体(`POST …/start`・`…/complete`)へ訂正した。着手順は **SPEC-002 → 本 Spec**。planner の plan は「D2/D3 = Go 準拠・D1 = SPEC-002 先行」をベースラインとして確定する(再委譲時に反映)。
+
+### 2026-07-09
+
+- 本 Spec 実装のレビューで「今回修正せず追跡する」と判断された指摘 3 件を issue-creator が起票し、frontmatter `issues` に相互リンクした:
+  - **ISSUE-011**(low): 生成 TanStack Query プラグイン出力(`react-query.gen.ts`)が未使用で、hooks は独自に `useQuery`/`useMutation` を組む設計との乖離(R3)。生成 queryOptions が zod 検証 + `toDomain`(R4/R5)を組み込まないため手書き hooks が検証境界を満たす一方、§4「hooks は生成 query オプションを利用する」記述と乖離。方針整理(生成 queryOptions のラップ採用 or `@tanstack/react-query` プラグイン除去 + §4 再整合)は spec-owner / 次サイクルで判断。
+  - **ISSUE-012**(low): hey-api 生成 fetch クライアントが未使用の SSE 実装(`serverSentEvents.gen.ts` 約242行)を常に client に組み込み本番バンドルへ混入(推定 gzip 数KB)。`@hey-api/openapi-ts@0.98.2` に SSE 無効化オプションが無いバージョン制約。上流更新 / 別テンプレート検討。
+  - **ISSUE-013**(low): 推移依存 `js-yaml@4.1.1` の moderate 脆弱性 GHSA-h67p-54hq-rp68(ビルド時のみ・入力はリポジトリ管理下の `openapi.yaml` で信頼済み)。上流更新待ち or `overrides`/`resolutions` 固定(bunfig 21日ゲート要確認)。
+- **ISSUE-009 を `resolved` に更新。** 本 Spec の **D2 解消(web を Go の `POST …/start`・`…/complete` に合わせる)** で状態遷移契約の cross-stack 乖離が解消したことを web 実コード・テストで検証し、R6 ドリフト検査(`.github/workflows/contract-drift.yml`)で再発を機械検出できる状態になったため。

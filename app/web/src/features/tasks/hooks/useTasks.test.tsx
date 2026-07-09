@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { server } from "../../../test/msw-server";
 import { createTestQueryClient } from "../../../test/renderWithQueryClient";
 import type { TaskStatus } from "../domain/task";
-import { useTaskQuery, useUpdateTaskStatus } from "./useTasks";
+import { useCompleteTask, useStartTask, useTaskQuery } from "./useTasks";
 
 /**
  * Builds a wrapper that puts every hook rendered with it on the same
@@ -42,13 +42,17 @@ describe("useTaskQuery", () => {
   });
 });
 
-describe("query invalidation after a status mutation", () => {
+// D2: `useUpdateTaskStatus` (PATCH /tasks/:id/status) no longer exists;
+// it is replaced by `useStartTask`/`useCompleteTask` (POST
+// /tasks/:id/start | /complete), each exercised below for the same
+// invalidation behavior the old single hook was checked for.
+describe("query invalidation after useStartTask", () => {
   it("refetches the ['tasks', id] detail query once the mutation invalidates ['tasks'] (integration)", async () => {
-    let status: TaskStatus = "doing";
+    let status: TaskStatus = "todo";
     server.use(
       http.get("/api/tasks/:id", ({ params }) => {
         if (params.id !== "99") {
-          return HttpResponse.json({ message: "Task not found" }, { status: 404 });
+          return HttpResponse.json({ error: "Task not found" }, { status: 404 });
         }
         return HttpResponse.json({
           id: "99",
@@ -59,12 +63,11 @@ describe("query invalidation after a status mutation", () => {
           updated_at: "2026-01-01T00:00:00.000Z",
         });
       }),
-      http.patch("/api/tasks/:id/status", async ({ request, params }) => {
+      http.post("/api/tasks/:id/start", ({ params }) => {
         if (params.id !== "99") {
-          return HttpResponse.json({ message: "Task not found" }, { status: 404 });
+          return HttpResponse.json({ error: "Task not found" }, { status: 404 });
         }
-        const body = (await request.json()) as { status: TaskStatus };
-        status = body.status;
+        status = "doing";
         return HttpResponse.json({
           id: "99",
           title: "Invalidation target",
@@ -81,17 +84,66 @@ describe("query invalidation after a status mutation", () => {
 
     const detail = renderHook(() => useTaskQuery("99"), { wrapper });
     await waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
-    expect(detail.result.current.data?.status).toBe("doing");
+    expect(detail.result.current.data?.status).toBe("todo");
 
-    const mutation = renderHook(() => useUpdateTaskStatus(), { wrapper });
+    const mutation = renderHook(() => useStartTask(), { wrapper });
     await act(async () => {
-      await mutation.result.current.mutateAsync({ id: "99", status: "done" });
+      await mutation.result.current.mutateAsync("99");
     });
 
     // The mutation's onSuccess invalidates the ["tasks"] query key, which
     // is a prefix of the detail query's ["tasks", "99"] key. If that
     // invalidation reaches the detail query, it refetches and the hook's
     // data reflects the new status without any manual refetch call here.
+    await waitFor(() => expect(detail.result.current.data?.status).toBe("doing"));
+  });
+});
+
+describe("query invalidation after useCompleteTask", () => {
+  it("refetches the ['tasks', id] detail query once the mutation invalidates ['tasks'] (integration)", async () => {
+    let status: TaskStatus = "doing";
+    server.use(
+      http.get("/api/tasks/:id", ({ params }) => {
+        if (params.id !== "100") {
+          return HttpResponse.json({ error: "Task not found" }, { status: 404 });
+        }
+        return HttpResponse.json({
+          id: "100",
+          title: "Invalidation target",
+          status,
+          priority: "medium",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        });
+      }),
+      http.post("/api/tasks/:id/complete", ({ params }) => {
+        if (params.id !== "100") {
+          return HttpResponse.json({ error: "Task not found" }, { status: 404 });
+        }
+        status = "done";
+        return HttpResponse.json({
+          id: "100",
+          title: "Invalidation target",
+          status,
+          priority: "medium",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        });
+      }),
+    );
+
+    const queryClient = createTestQueryClient();
+    const wrapper = wrapperFor(queryClient);
+
+    const detail = renderHook(() => useTaskQuery("100"), { wrapper });
+    await waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
+    expect(detail.result.current.data?.status).toBe("doing");
+
+    const mutation = renderHook(() => useCompleteTask(), { wrapper });
+    await act(async () => {
+      await mutation.result.current.mutateAsync("100");
+    });
+
     await waitFor(() => expect(detail.result.current.data?.status).toBe("done"));
   });
 });

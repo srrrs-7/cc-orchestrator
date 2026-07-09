@@ -19,10 +19,10 @@ export const TASK_STATUSES = ["todo", "doing", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 /**
- * Priority is not part of the app/api Task aggregate today; it is a
- * frontend-only enrichment used to demonstrate derived-value domain
- * functions (sortByPriority). See the implementation report for this
- * deviation.
+ * Priority is part of the app/api Task aggregate and its OpenAPI
+ * contract (added by SPEC-002; see app/api/domain/task/priority.go and
+ * route.taskResponse in app/api/docs/openapi.yaml). It also backs a
+ * frontend-only derived-value domain function (sortByPriority).
  */
 export const TASK_PRIORITIES = ["low", "medium", "high"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
