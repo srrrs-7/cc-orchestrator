@@ -12,13 +12,13 @@
 ### 採用アプローチ
 
 1. **api / auth = multi-stage + distroless 最小イメージ**
-   - build stage: `golang:1.24`(bookworm)で `CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -trimpath` により静的バイナリを生成。標準ライブラリのみ・CGO 不要なので追加ツールは不要。
+   - build stage: `golang:1.24-alpine`(musl)で `CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -trimpath` により静的バイナリを生成。標準ライブラリのみ・CGO 不要なので追加ツールは不要(`CGO_ENABLED=0` の静的ビルドのため build stage の glibc/musl 差は生成バイナリに影響せず無害。両 Dockerfile 内コメントにも意図的選択として明記)。
    - runtime stage: `gcr.io/distroless/static:nonroot`(非 root / shell 無し / 数 MB)。アプリバイナリ 1 個 + ヘルスチェックバイナリ 1 個だけを配置する。
    - アプリは `:8080`(>1024)で待受けるため nonroot でもポートバインドに特権不要。
 2. **web = multi-stage(Bun ビルド)+ nginx 静的配信 + `/api` リバースプロキシ**
    - build stage: `oven/bun:1`(debian ベース / glibc)で `bun install --frozen-lockfile` → `bun run build` を実行し `dist/` を生成。
    - runtime stage: `nginx:alpine` で `dist/` を配信。nginx が `/api/` を api サービスへプロキシ(`proxy_pass http://api:8080/;` の末尾スラッシュで `/api` プレフィックスを剥がし、api の `/tasks` にマッチさせる)。SPA フォールバックは `try_files $uri $uri/ /index.html;`。
-   - **app/web のコードは一切変更しない。** `VITE_API_BASE_URL` を未設定にしておけば `shared/api/http.ts` が `/api` にフォールバックし、実リクエストは `/api/tasks` → nginx が api の `/tasks` へプロキシする(確認済み: `shared/api/http.ts` L3-4)。MSW は `import.meta.env.DEV` ガードで本番ビルドから tree-shake される(確認済み: `src/main.tsx` L13-17)ため、本番イメージにモックは載らない。
+   - **app/web のコードは一切変更しない。** `VITE_API_BASE_URL` を未設定にしておけば `features/tasks/api/client.ts` の `resolveBaseUrl()` が `<origin>/api`(`DEFAULT_BASE_PATH = "/api"`)にフォールバックし `client.setConfig({ baseUrl })` で生成クライアントに適用されるため、実リクエストは `<origin>/api/tasks` → nginx が `/api` を剥がして api の `/tasks` へプロキシする(確認済み: `app/web/src/features/tasks/api/client.ts:16-37`(SPEC-003 移行後)。旧 `shared/api/http.ts` は SPEC-003 の `@hey-api/openapi-ts` 移行で削除され、同等の `/api` フォールバックはこのファイルへ移行済み。挙動は等価)。MSW は `import.meta.env.DEV` ガードで本番ビルドから tree-shake される(確認済み: `src/main.tsx` L13-17)ため、本番イメージにモックは載らない。
 3. **ヘルスチェック = Go の最小静的ヘルパーバイナリ**(distroless に shell / wget / curl が無いため)
    - `app/api/cmd/healthcheck/main.go` と `app/auth/cmd/healthcheck/main.go` を新設(標準ライブラリ `net/http` のみ)。URL を引数で受け、`http.Get` して 2xx なら exit 0、それ以外 / エラーは exit 1。
    - build stage で `CGO_ENABLED=0` で静的ビルドし、最終イメージに `/healthcheck` としてコピー。
@@ -66,7 +66,7 @@
 ## 変更ファイル
 
 ### app/api(impl-api)
-- `app/api/Dockerfile`(新規): multi-stage(golang:1.24 → distroless static:nonroot)。`./cmd/api` と `./cmd/healthcheck` を静的ビルドし、後者を `/healthcheck` として配置。`EXPOSE 8080`、`HEALTHCHECK CMD ["/healthcheck", "http://localhost:8080/tasks"]`、`ENTRYPOINT ["/api"]`。
+- `app/api/Dockerfile`(新規): multi-stage(golang:1.24-alpine → distroless static:nonroot)。`./cmd/api` と `./cmd/healthcheck` を静的ビルドし、後者を `/healthcheck` として配置。`EXPOSE 8080`、`HEALTHCHECK CMD ["/healthcheck", "http://localhost:8080/tasks"]`、`ENTRYPOINT ["/api"]`。
 - `app/api/.dockerignore`(新規): `.git` / `docs/` / `README.md` / `Makefile` 等ビルド不要物を除外(Go ソース・go.mod は残す)。
 - `app/api/cmd/healthcheck/main.go`(新規): 標準ライブラリのみ。URL を `os.Args[1]`(未指定時はデフォルト `http://localhost:8080/tasks`)で受け、`http.Get` → 2xx で exit 0 / それ以外・エラーで exit 1。**golangci-lint に通るクリーンな実装**(エラー処理・レスポンス body の close を行う)。
 
