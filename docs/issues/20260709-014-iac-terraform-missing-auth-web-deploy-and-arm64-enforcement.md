@@ -5,7 +5,7 @@ status: open  # open | investigating | fixing | resolved | closed | wontfix
 severity: medium  # critical | high | medium | low
 created: 2026-07-09
 updated: 2026-07-09
-specs: [SPEC-001]  # 関連Spec ID (例: [SPEC-002])
+specs: [SPEC-001, SPEC-004]  # 関連Spec ID (例: [SPEC-002])
 ---
 
 # ISSUE-014: app/iac(Terraform)が SPEC-001(app/api 単体世代)のまま取り残され、コンテナ化された app/auth / app/web を AWS へデプロイする経路が存在しない(IaC ⇄ 3アプリ構成の乖離)
@@ -114,3 +114,5 @@ specs: [SPEC-001]  # 関連Spec ID (例: [SPEC-002])
 - 切り分け: 現行ランタイムのバグ(退行)ではなく、Spec のスコープが現状に追いついていない設計乖離・技術的負債として記録した。DB 未接続(`modules/db` の RDS が配線済みだが app/api は in-memory のみ)は ISSUE-001 で既に追跡中のため、本 Issue では重複起票せず関連参照に留めた。ISSUE-002 は単一 api アーキテクチャ内のセキュリティ・可用性強化項目であり、auth / web の未デプロイという本乖離とは別。
 - severity は **medium** と判定。判定根拠: 現行ランタイム・SPEC-001 のスコープ(app/api の dev サンプルが `terraform plan` 通ること)の達成は本 Issue で阻害されないため critical / high ではない。一方、(a)3 アプリの AWS 展開に踏み出すと auth / web の配置経路が IaC に無く回避策が無い、(b)ARM64 誤ビルドで ECS タスクが起動しないフットガンが残る、という将来の実害があるため low ではなく medium とした。
 - 次にやること: (a) SPEC-001 の「スコープ外」節へのスコープ明記(spec-owner 判断・本 Issue 担当外)、(b) auth / web の AWS インフラ化の新 Spec 化、(c) ARM64 ビルド強制の検討。planner による計画化を推奨。SPEC-001 側 frontmatter の `issues` への相互リンク追記と経緯追記は連動して実施。
+- 本 Issue の対応(b)として、auth / web の AWS デプロイ経路を設計する **SPEC-004**(`docs/specs/20260709-004-auth-web-aws-deploy.md`)を起票し、双方向に相互リンクした(本 Issue frontmatter `specs` に SPEC-004 を追加。SPEC-004 側は `issues: [ISSUE-014]`)。本 Issue の実解消(auth / web が AWS にデプロイできる状態)は SPEC-004 の実装で行う。
+- SPEC-004 の方針: サンプルグレード(HTTP・CloudFront デフォルトドメイン)を維持し、web = S3 + CloudFront、auth = 2 つ目の ECS(ARM64)をパスベースルーティングで既存 ALB 配下に追加する。SPEC-004 は現在 status: draft(ユーザー承認待ち)。本 Issue は実解消が SPEC-004 実装後になるため status は open のまま維持する。

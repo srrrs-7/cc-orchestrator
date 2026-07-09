@@ -1,7 +1,7 @@
 ---
 id: SPEC-004
 title: app/auth・app/web の AWS デプロイ経路(SPEC-001 の 3 アプリ拡張)
-status: draft  # draft | approved | in-progress | done | dropped | superseded
+status: approved  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-09
 updated: 2026-07-09
 issues: [ISSUE-014]       # 関連Issue ID
@@ -130,3 +130,4 @@ build-push:
 - **未確定(要 planner + spec-owner 確定)**: R5 の auth issuer/base-path 整合。`/auth/*` プレフィックス配下で `ISSUER` と各 OIDC エンドポイント URL を一致させるには app/auth の base-path 対応(cross-stack の最小コード変更)が要る可能性がある。ここを確定するまで T2.5 の要否が決まらない。
 - status は `draft`。ユーザー承認(approved)後に planner へ実装計画作成を委譲し、着手する(機能開発は Spec を approved にしてから着手、の原則に従う)。
 - ISSUE-014 と相互リンク(frontmatter `issues: [ISSUE-014]`)。ISSUE-014 側の対応方針は本 Spec の設計・approved 判断と同期させる。
+- ユーザー承認を得て status を `draft` → **`approved`** に更新した。推奨デフォルト(サンプルグレード維持 / web = S3+CloudFront / auth = 既存 ALB 共用のパスベースルーティング)で確定。planner に実装計画(`docs/plans/SPEC-004-plan.md`)の作成を委譲する。**R5(auth issuer/base-path)は planner が精査**し、`/auth/*` プレフィックス整合のための app/auth 最小変更の要否(T2.5 の発火)を確定する。
