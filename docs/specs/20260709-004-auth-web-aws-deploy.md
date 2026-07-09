@@ -1,7 +1,7 @@
 ---
 id: SPEC-004
 title: app/auth・app/web の AWS デプロイ経路(SPEC-001 の 3 アプリ拡張)
-status: approved  # draft | approved | in-progress | done | dropped | superseded
+status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-09
 updated: 2026-07-09
 issues: [ISSUE-014]       # 関連Issue ID
@@ -109,17 +109,24 @@ build-push:
 
 ## 5. 実装計画
 
-詳細は planner が `docs/plans/SPEC-004-plan.md` に作成する(方針・変更ファイル・手順・テスト戦略・リスクは同ファイルが正)。概要タスク:
+詳細は **`docs/plans/SPEC-004-plan.md`(planner 作成済み)が正**(方針・変更ファイル・手順・テスト戦略・リスクは同ファイル参照)。確定した要点:
 
-- [ ] T1: (planner) モジュール設計の確定 — `modules/app` の一般化方式(汎用化して 2 呼び出し or 変数駆動 2 サービス)、`modules/cdn` への S3 オリジン + behaviors + SPA フォールバック方式、ECR 複数リポジトリ、build-push 方式(Make/CI)、**R5 の auth issuer/base-path 解決の確定**(app/auth 変更の要否を含む)
-- [ ] T2: (impl-iac) `modules/app`・`modules/cdn`(or `modules/web` 新設)・ECR・`envs/dev` の配線を実装。既存 api 経路を壊さない
-- [ ] T3: (impl-ci) ARM64 build-push 自動化(`docker buildx --platform linux/arm64` → ECR、web の `dist` ビルド + `aws s3 sync` + CloudFront invalidation)を Makefile ターゲット and/or `.github` ジョブとして追加
-- [ ] T2.5: (impl-api・条件付き) R5 の解決で app/auth の base-path 対応が必要と確定した場合のみ、env 駆動の mount prefix 対応を最小限で実装(std-lib 維持)
-- [ ] T4: (checker) `terraform fmt -check` / `validate` / `tflint --recursive` / `trivy config .`
-- [ ] T5: (review-security / review-performance / review-spec) レビュー(並列)。`apply` は行わず plan で検証
-- [ ] T6: 指摘対応(Blocker/Major は impl へ差し戻し)、各モジュール README 更新、本 Spec と ISSUE-014 のステータス・経緯更新
+- **R5 の結論 = strip 方式 / app/auth・app/api とも無改修 / T2.5 は発火しない**。CloudFront で `/api`・`/auth` の先頭プレフィックスを CloudFront Function で剥がし、コンテナはルート実装のまま。auth は `ISSUER=http://<cloudfront-domain>/auth` を注入し、discovery の各絶対 URL(`/auth/authorize` 等)は `/auth/*` behavior 経由で到達=issuer と実経路が一致する。DOCKER-001 のローカル nginx 契約(`/api` を剥がして api コンテナのルートへ)と同型。ALB は strip 後にパスで判別できないため **ヘッダ(`X-Target-Service: auth`)で api/auth の target group を振り分ける**。
+- **モジュール分割** = 現 `modules/app` を `modules/platform`(共有 ALB/リスナー/ECS クラスタ)+ `modules/service`(汎用サービス。api/auth で 2 回呼ぶ)に分解。auth issuer が CloudFront ドメインに依存するため、ALB を ECS から切り離し `platform → cdn → service` の一方向 DAG にして循環を回避(単一モジュール+`for_each` 案は循環するため不採用)。
+- **web** = `modules/cdn` を拡張し S3(非公開)+ OAC + 単一 CloudFront に 3 オリジン/3 behavior(default→S3 / `/api/*`→api / `/auth/*`→auth)。SPA フォールバックは **default behavior 限定の CloudFront Function**(distribution 全体の `custom_error_response` は API エラーを化けさせるため不採用)。
+- **build-push** = root `Makefile`(`push-images`=`docker buildx --platform linux/arm64 --push`、`deploy-web`=`bun run build`→`aws s3 sync`→invalidation)+ 任意の `.github/workflows/deploy.yml`(`workflow_dispatch` のみ・自動 apply 無し)。
 
-> 注: T2(iac)と T3(build-push)は概ね並行可。T2.5 は R5 の確定(T1)に依存する。`terraform apply` はスコープ外(plan まで)。
+タスク(担当と依存は plan の「手順」が正):
+
+- [x] T1: (planner) 設計確定(上記)。plan 作成・R5 確定。
+- [ ] T2: (impl-iac) `modules/platform` 抽出 → `modules/service` 汎用実装 → api 再配線(+`moved` で非退行)→ `modules/cdn` 拡張 → auth 追加 + behavior 切替。README 更新。
+- [ ] T3: (impl-ci) root `Makefile` build-push 追加 + `.github/workflows/deploy.yml`(workflow_dispatch)。**T2 と並列可**(output 名の契約を先に固定)。
+- [ ] ~~T2.5: (impl-api) app/auth base-path 対応~~ → **不発火**(R5 の strip 方式で無改修)。
+- [ ] T4: (checker) `make check`(fmt-check / validate / tflint / trivy)。
+- [ ] T5: (review-security / review-performance / review-spec) レビュー(並列)。`apply` は行わず plan で検証。
+- [ ] T6: 指摘対応(Blocker/Major は impl へ差し戻し)、各 module README 更新、本 Spec と ISSUE-014 のステータス・経緯更新。
+
+> 注: T2(iac)と T3(build-push)は並列可。T2.5 は不発火。`terraform apply` はスコープ外(plan まで)。
 
 ## 6. 経緯(時系列・追記のみ)
 
@@ -131,3 +138,10 @@ build-push:
 - status は `draft`。ユーザー承認(approved)後に planner へ実装計画作成を委譲し、着手する(機能開発は Spec を approved にしてから着手、の原則に従う)。
 - ISSUE-014 と相互リンク(frontmatter `issues: [ISSUE-014]`)。ISSUE-014 側の対応方針は本 Spec の設計・approved 判断と同期させる。
 - ユーザー承認を得て status を `draft` → **`approved`** に更新した。推奨デフォルト(サンプルグレード維持 / web = S3+CloudFront / auth = 既存 ALB 共用のパスベースルーティング)で確定。planner に実装計画(`docs/plans/SPEC-004-plan.md`)の作成を委譲する。**R5(auth issuer/base-path)は planner が精査**し、`/auth/*` プレフィックス整合のための app/auth 最小変更の要否(T2.5 の発火)を確定する。
+- planner が実装計画 `docs/plans/SPEC-004-plan.md` を作成。着手に伴い status を `approved` → **`in-progress`** に更新(updated: 2026-07-09)。§5 を計画の確定内容に更新した。確定した主要判断:
+  - **R5 = strip 方式に確定。app/auth・app/api とも無改修で、T2.5(impl-api の base-path 対応)は発火しない。** 調査事実: app/auth・app/api はともにルート直下実装(`route/router.go`)で、discovery は `issuer` 文字列連結で絶対 URL を作る(`service/discovery_service.go`)。DOCKER-001 のローカル nginx が既に `/api` を剥がして api コンテナのルートへ渡す契約。よって AWS でも CloudFront Function で `/api`・`/auth` を剥がし、auth は `ISSUER=http://<cloudfront-domain>/auth` を注入すれば、discovery の各 URL(`/auth/authorize` 等)は `/auth/*` behavior 経由で到達し issuer と実経路が一致する。Spec §4 が案 ii(剥がす)を退けた前提は「issuer をドメイン直下にする」場合であり、本計画は「issuer に `/auth` を残しコンテナには剥がして渡す」に精緻化して衝突を回避した。strip 後は ALB がパスで判別できないため、ヘッダ(`X-Target-Service: auth`)で target group を振り分ける。
+  - **モジュール分割**: 現 `modules/app` を `modules/platform`(共有 ALB/リスナー/ECS クラスタ)+ `modules/service`(汎用サービス、api/auth で 2 回呼ぶ)に分解。auth の issuer が CloudFront ドメイン(`module.cdn` 出力)に依存するため、単一モジュール + `for_each` 案は `module.app ↔ module.cdn` の循環を生む。ALB を ECS から切り離し `platform → cdn → service` の一方向 DAG にして単一 apply で解決する。api リソースのアドレス移動には `moved` ブロックを網羅して非退行を担保する。
+  - **web / SPA フォールバック**: `modules/cdn` を拡張し S3(非公開)+ OAC + 単一 CloudFront に 3 オリジン/3 behavior。SPA フォールバックは default behavior 限定の CloudFront Function(distribution 全体 `custom_error_response` は API/auth の正当な 404/403 を index.html に化けさせるため不採用)。
+  - **build-push**: root `Makefile` に `push-images`(`docker buildx --platform linux/arm64 --push`)/ `deploy-web`(`bun run build`→`aws s3 sync`→invalidation)、任意で `.github/workflows/deploy.yml`(`workflow_dispatch` のみ・自動 apply 無し)。impl-ci 担当。impl-iac(T2)と並列可。
+  - **auth の運用制約**: app/auth は起動毎に RSA 鍵を生成しトークンが発行インスタンス限定のため、auth サービスは `desired_count=1` 既定とする(既知の app/auth 性質。マルチタスク化・鍵外部化はサンプル範囲外)。
+  - **残余**: web を OIDC RP として auth に実接続する配線(redirect_uri 登録等)は本 Spec スコープ外。`terraform apply` はスコープ外(plan/静的検証まで)。
