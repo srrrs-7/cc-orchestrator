@@ -1,0 +1,42 @@
+{
+  "name": "cc-orchestrator toolchain (SPEC-009)",
+  // References compose.tools.yml's "tools" service (network enabled) --
+  // the same image/service every Makefile wrapper and CI job (from
+  // Phase B/C onward) runs through, so an editor session sees the exact
+  // same pinned toolchain as a local `make check` or CI. This is an
+  // optional convenience layer on top of that: `docker compose run` is
+  // still the source-of-truth execution path (SPEC-009 §4), not this
+  // file.
+  "dockerComposeFile": ["../compose.tools.yml"],
+  "service": "tools",
+  // Keeps the "tools" container running after VS Code disconnects, so
+  // it does not race the sibling app/{api,auth,web} containers managed
+  // by the root Makefile's `make up`/`up-d` (compose.yml, a separate
+  // compose project).
+  "shutdownAction": "none",
+  "workspaceFolder": "/workspace",
+  // Non-root by default (docker/toolchain/Dockerfile's built-in `tools`
+  // user, uid/gid 1000) -- no host secrets and no docker.sock are
+  // mounted into this service (see compose.tools.yml), so there is no
+  // privilege to escalate to in the first place, but the container
+  // still never runs as root.
+  "remoteUser": "tools",
+  // TOOLBOX_UID/TOOLBOX_GID (compose.tools.yml's `user:` override) are
+  // resolved from the *host shell's* environment before the container
+  // is created (see that file's header comment); the Dev Containers
+  // extension does not export these automatically, so this session
+  // uses the image's built-in tools (1000:1000) rather than the local
+  // host user's uid:gid. Files created here under /workspace inherit
+  // that uid -- a known, documented gap versus the CLI/CI path (which
+  // always sets TOOLBOX_UID/TOOLBOX_GID via the Makefile wrappers), not
+  // a security issue since this service still carries no secrets.
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "biomejs.biome",
+        "hashicorp.terraform"
+      ]
+    }
+  }
+}

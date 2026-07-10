@@ -1,0 +1,183 @@
+# compose.tools.yml — containerized developer/CI toolchain (SPEC-009).
+#
+# Two services built from the single polyglot image
+# docker/toolchain/Dockerfile, whose tool versions all come from
+# versions.env (the single source of truth -- see that file):
+#
+#   tools          network enabled. Reserved for "deps" phases that must
+#                  reach the network: `bun install`/`add`/`remove`/
+#                  `update`, `go mod download`, `terraform init`/
+#                  `tflint --init`, and phases that need to reach the
+#                  sibling compose.yml's `postgres` service (`make
+#                  migrate`, `make test-integration`, `terraform plan`).
+#   tools-offline  network_mode: none. The default execution service for
+#                  everything else: format/lint/vet/build/test/generate/
+#                  sqlc/openapi/migrate-create. GOPROXY=off makes any
+#                  accidental network fetch fail loudly (a build/test
+#                  that unexpectedly needs the network fails instead of
+#                  silently succeeding), so a cold/incomplete cache is
+#                  caught immediately instead of masking a real gap.
+#
+# Neither service mounts host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud
+# credentials, etc.) or the Docker socket -- see the shared
+# `x-tools-base` anchor below, which is the *only* place volumes/
+# environment/security options are declared (both services inherit it
+# via YAML merge). The repository is bind-mounted read/write at
+# /workspace; every tool cache lives on a named volume instead, so nothing
+# a dependency install writes ever lands inside the bind-mounted repo
+# tree as a stray cache directory.
+#
+# `user:` is the invoking host user's uid:gid, supplied via the
+# TOOLBOX_UID/TOOLBOX_GID *shell* environment variables (not `-e`/
+# `--env`/`environment:` -- compose resolves `${...}` in a YAML value
+# from its own process environment or an --env-file, before the
+# container is even created; a `-e` flag passed to `docker compose run`
+# only sets a variable *inside* the already-created container, which is
+# too late to affect the `user:` field). Callers (Phase B's Makefile
+# wrappers, bin/bun, or a human) must export both, e.g.:
+#
+#   TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
+#     docker compose --env-file versions.env -f compose.tools.yml \
+#     run --rm tools-offline make -C app/api check
+#
+# This keeps files created under the /workspace bind-mount owned by the
+# calling developer/CI user, never by root or this image's baked-in
+# uid:gid 1000 (see docker/toolchain/Dockerfile). When TOOLBOX_UID/
+# TOOLBOX_GID are not exported (e.g. a plain `docker compose up` from an
+# editor), both default to 1000:1000 -- the image's own built-in `tools`
+# user.
+#
+# Phases that need a real Postgres (root Makefile's `migrate`,
+# app/{api,auth,migrator}'s `test-integration`) layer this file on top
+# of the sibling compose.yml (which owns the `postgres` service) instead
+# of using network_mode:none:
+#
+#   docker compose --env-file versions.env -f compose.yml -f compose.tools.yml \
+#     run --rm tools <command reaching DB_HOST=postgres>
+#
+# This file only defines the two service *shapes*; deciding which
+# service (and which compose file combination) a given command goes
+# through is Phase B's Makefile-wrapper/bin-bun concern, not this file's.
+#
+# IMPORTANT for Phase B (verified during Phase A implementation): `go
+# run pkg@version` (sqlc/goose/swag/goimports, as every Go stack's
+# Makefile currently invokes them) does NOT work under `tools-offline`
+# even with the exact module+version fully warmed in the gomodcache
+# volume -- `go run` performs a "loading deprecation for <module>"
+# module-proxy lookup on every invocation, unconditionally, and fails
+# under GOPROXY=off regardless of cache state. `go install` (a one-time
+# build, different code path) does not hit this, so
+# docker/toolchain/Dockerfile still uses it to pre-warm the cache, but
+# each stack's Makefile must invoke these four tools BY THEIR INSTALLED
+# BINARY NAME (`sqlc` / `goose` / `swag` / `goimports`, all already on
+# PATH in every image via GOBIN=/usr/local/go-tools/bin, present
+# regardless of volume state) rather than `go run pkg@version`, for the
+# exec phase to actually complete under `tools-offline`. This is the
+# SPEC-009 plan's own pre-approved fallback for this exact scenario, now
+# confirmed necessary rather than hypothetical -- see
+# docker/toolchain/Dockerfile's own comment on this for detail.
+
+x-tools-base: &tools-base
+  build:
+    context: ./docker/toolchain
+    args:
+      GO_VERSION: ${GO_VERSION}
+      BUN_VERSION: ${BUN_VERSION}
+      GOLANGCI_LINT_VERSION: ${GOLANGCI_LINT_VERSION}
+      TERRAFORM_VERSION: ${TERRAFORM_VERSION}
+      TFLINT_VERSION: ${TFLINT_VERSION}
+      TRIVY_VERSION: ${TRIVY_VERSION}
+      SQLC_VERSION: ${SQLC_VERSION}
+      GOOSE_VERSION: ${GOOSE_VERSION}
+      SWAG_VERSION: ${SWAG_VERSION}
+      GOIMPORTS_VERSION: ${GOIMPORTS_VERSION}
+  image: cc-orchestrator/toolchain:local
+  # See file header: host-caller-supplied uid:gid via shell env vars,
+  # defaulting to the image's own built-in tools user (1000:1000).
+  user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"
+  working_dir: /workspace
+  volumes:
+    # macOS (VirtioFS) performance note (SPEC-009 NFR): `:delegated`
+    # relaxes host<->container write-ordering guarantees in the
+    # container's favor. Under Docker Desktop's legacy osxfs backend
+    # this materially speeds up large bind-mounted trees; under the
+    # current VirtioFS-based backend it is close to a no-op, but is kept
+    # since it is harmless on Linux and correct either way.
+    - .:/workspace:delegated
+    - gomodcache:/cache/go/mod
+    - gobuild:/cache/go/build
+    - buncache:/cache/bun
+    - tfplugincache:/cache/tf-plugins
+  # No host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud credentials, etc.)
+  # and no docker.sock are ever mounted here -- see file header. AWS
+  # deploy steps (root Makefile's push-images/deploy-web) run `aws`
+  # itself on the host, never inside this toolbox (SPEC-009 R7).
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+
+x-tools-env: &tools-env
+  HOME: /home/tools
+  GOPATH: /cache/go
+  GOMODCACHE: /cache/go/mod
+  GOCACHE: /cache/go/build
+  BUN_INSTALL_CACHE_DIR: /cache/bun
+  TF_PLUGIN_CACHE_DIR: /cache/tf-plugins
+  # Marks "already inside the toolbox" for the IN_TOOLBOX-guarded
+  # Makefile wrappers (Phase B) and bin/bun shim, preventing them from
+  # re-invoking `docker compose run` from inside a container that is
+  # already the target (no multi-level re-wrapping).
+  IN_TOOLBOX: "1"
+  # `go build`/`go vet`/`go test` invoke `git` under the hood for VCS
+  # build-info stamping. Verified during Phase A implementation: the
+  # container's `user:` override (an arbitrary host uid:gid with no
+  # matching /etc/passwd entry) sees /workspace's bind-mounted top-level
+  # directory reported under a *different* uid than its own effective
+  # uid (observed under colima/virtiofs: the mount point itself reports
+  # uid=0 while files inside it correctly report the host uid) -- Git's
+  # "dubious ownership" protection (CVE-2022-24765) then refuses to run
+  # inside /workspace at all, failing every `go build`/`vet`/`test`
+  # invocation with "detected dubious ownership in repository at
+  # '/workspace'" (exit 128). Rather than requiring a persistent
+  # ~/.gitconfig write (HOME above is baked into the image, not a
+  # volume, so it would not even persist across `run` invocations), this
+  # trusts /workspace via Git's env-var config injection (supported
+  # since Git 2.31), which applies for the lifetime of each `run`
+  # regardless of uid/HOME state. Scoped to exactly /workspace (not a
+  # blanket `safe.directory=*`) -- the only path ever bind-mounted here.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: /workspace
+
+services:
+  # network enabled -- deps / DB-reaching phases only (see file header).
+  tools:
+    <<: *tools-base
+    environment:
+      <<: *tools-env
+
+  # network_mode:none -- the default execution service (see file header).
+  tools-offline:
+    <<: *tools-base
+    network_mode: none
+    environment:
+      <<: *tools-env
+      # Default GOPROXY is left alone for the network-enabled `tools`
+      # service (SPEC-009 plan §Dockerfile設計); only here is it forced
+      # off, so any exec-phase command that unexpectedly needs to fetch
+      # a module fails immediately with a clear "GOPROXY=off" error
+      # instead of hanging or (impossible anyway, network_mode:none)
+      # silently succeeding over the network.
+      GOPROXY: "off"
+
+volumes:
+  # Named volumes (never bind-mounted into the repo tree): survive across
+  # `run` invocations, are seeded from docker/toolchain/Dockerfile's own
+  # baked-in cache content the first time each is created (see that
+  # file's header comment on Docker's volume-seeding behaviour), and are
+  # the only place install-time cache data lives.
+  gomodcache:
+  gobuild:
+  buncache:
+  tfplugincache:
