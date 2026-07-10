@@ -51,8 +51,8 @@ clean: ## 停止・コンテナ・volume を削除する
 #
 # api・auth は同一 Postgres インスタンス上の別データベース("api"/"auth")に
 # 分離されている(旧: 単一 database + search_path 別スキーマ)。`migrate` は
-# 共通の `app/migrator`(`app/migrator/main.go`)を `-target` 違いで 2 回実行し、
-# 各データベースを(未存在なら)作成した上で当該スタックの db/migrations を
+# 共通の `app/migrator`(`app/migrator/cmd/migrator/main.go`)を `-target` 違いで
+# 2 回実行し、各データベースを(未存在なら)作成した上で当該スタックの db/migrations を
 # 適用する。DB_NAME は migrator の既定(-target と同名: api/auth)に任せ、
 # 接続先(host/port/user/password/sslmode)だけをローカル compose の postgres
 # に合わせて明示する(app/api・app/auth Makefile の DB_* 既定と同じ値)。
@@ -68,18 +68,20 @@ db-up: ## postgres のみを起動し healthy になるまで待つ
 
 MIGRATOR_DB_ENV := DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=app DB_SSLMODE=disable
 
-# `go run ./app/migrator` cannot be invoked from this (root) directory:
-# app/migrator has its own go.mod (an independent module, deliberately
-# not part of a workspace with app/api/app/auth -- plan §RF.1.2/§RF.1.3
-# "goose の閉じ込め"), and this repo root has no go.mod of its own for
-# Go to resolve a "main module" from. `go -C app/migrator run .` runs
-# in app/migrator's own module context instead; -migrations-dir is
-# passed as an absolute path ($(CURDIR)-rooted) so it resolves
+# `go run ./app/migrator/cmd/migrator` cannot be invoked from this (root)
+# directory: app/migrator has its own go.mod (an independent module,
+# deliberately not part of a workspace with app/api/app/auth -- plan
+# §RF.1.2/§RF.1.3 "goose の閉じ込め"), and this repo root has no go.mod
+# of its own for Go to resolve a "main module" from. `go -C app/migrator
+# run ./cmd/migrator` runs in app/migrator's own module context instead
+# (cmd/migrator is app/migrator's composition root, a DDD-layered
+# module like app/api/cmd/api and app/auth/cmd/authz); -migrations-dir
+# is passed as an absolute path ($(CURDIR)-rooted) so it resolves
 # correctly regardless of that directory change.
 .PHONY: migrate
 migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行)
-	$(MIGRATOR_DB_ENV) go -C app/migrator run . -target api -migrations-dir $(CURDIR)/app/api/db/migrations
-	$(MIGRATOR_DB_ENV) go -C app/migrator run . -target auth -migrations-dir $(CURDIR)/app/auth/db/migrations
+	$(MIGRATOR_DB_ENV) go -C app/migrator run ./cmd/migrator -target api -migrations-dir $(CURDIR)/app/api/db/migrations
+	$(MIGRATOR_DB_ENV) go -C app/migrator run ./cmd/migrator -target auth -migrations-dir $(CURDIR)/app/auth/db/migrations
 
 # ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004)

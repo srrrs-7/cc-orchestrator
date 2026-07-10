@@ -266,11 +266,11 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-          # app/migrator (invoked below via `go -C app/migrator run .`) is
-          # an independent module with its own go.sum (goose is a library
-          # dependency there, unlike app/api's pgx-only go.mod), so both
-          # go.sum files are included to key/restore the module cache for
-          # everything this job downloads.
+          # app/migrator (invoked below via `go -C app/migrator run
+          # ./cmd/migrator`) is an independent module with its own go.sum
+          # (goose is a library dependency there, unlike app/api's pgx-only
+          # go.mod), so both go.sum files are included to key/restore the
+          # module cache for everything this job downloads.
           cache-dependency-path: |
             app/api/go.sum
             app/migrator/go.sum
@@ -288,7 +288,7 @@ jobs:
       - name: Create database + migrate up (app/migrator)
         working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target api -command up \
             -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
 
@@ -301,10 +301,10 @@ jobs:
       - name: Migration health check (up -> down -> up)
         working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target api -command down \
             -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target api -command up \
             -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
 
@@ -411,7 +411,7 @@ jobs:
       - name: Create database + migrate up (app/migrator)
         working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target auth -command up \
             -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
 
@@ -421,10 +421,10 @@ jobs:
       - name: Migration health check (up -> down -> up)
         working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target auth -command down \
             -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
-          go -C app/migrator run . \
+          go -C app/migrator run ./cmd/migrator \
             -target auth -command up \
             -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
 

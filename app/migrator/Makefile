@@ -58,4 +58,4 @@ check: fmt-check lint vet build test ## 全チェックを実行する (fmt-chec
 
 .PHONY: run
 run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")
-	go run . $(ARGS)
+	go run ./cmd/migrator $(ARGS)

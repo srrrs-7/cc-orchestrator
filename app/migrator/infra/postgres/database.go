@@ -1,14 +1,15 @@
-package main
+package postgres
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	"regexp"
-	"strings"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/srrrs-7/cc-orchestrator/app/migrator/domain/migration"
 )
 
 // pgDuplicateDatabase is the Postgres SQLSTATE code for
@@ -34,58 +35,46 @@ const (
 	pgDatabaseNameIndex    = "pg_database_datname_index"
 )
 
-// postgresIdentifierMaxLen is Postgres's NAMEDATALEN limit (64) minus
-// one, i.e. the longest identifier Postgres accepts without silently
-// truncating it.
-// https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS
-const postgresIdentifierMaxLen = 63
-
-// identifierPattern is the safe subset of Postgres identifiers this
-// migrator accepts for a *database* name: lowercase ASCII letters,
-// digits, and underscores, starting with a letter or underscore.
-// CREATE DATABASE cannot parameterize its target identifier the way
-// sqlc-generated queries parameterize ordinary DML (.claude/rules/db.md
-// "セキュリティ": "文字列連結でクエリを組み立てない"), so this migrator
-// instead allowlist-validates the name (validateIdentifier) before
-// splicing it into the statement, and always quotes it
-// (quoteIdentifier) as defense in depth.
-var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
-
-// validateIdentifier rejects any database name that is not a safe
-// Postgres identifier: empty, longer than Postgres allows, containing
-// anything outside [a-z0-9_], or not starting with a letter/
-// underscore. In particular this excludes quotes, backslashes,
-// semicolons, and whitespace of any kind -- the injection guard
-// CREATE DATABASE's unparameterizable identifier position needs.
-func validateIdentifier(name string) error {
-	if name == "" {
-		return errors.New("database name is empty")
-	}
-	if len(name) > postgresIdentifierMaxLen {
-		return fmt.Errorf("database name %q exceeds %d bytes", name, postgresIdentifierMaxLen)
-	}
-	if !identifierPattern.MatchString(name) {
-		return fmt.Errorf("database name %q must match %s", name, identifierPattern.String())
-	}
-	return nil
+// EnsureExister implements migration.Database against a real Postgres
+// instance.
+type EnsureExister struct {
+	cfg Config
 }
 
-// quoteIdentifier double-quotes name for splicing into a DDL statement
-// whose identifier position cannot be parameterized. Callers MUST call
-// validateIdentifier first; quoteIdentifier also escapes any embedded
-// double quote (Postgres's standard identifier-quoting rule, `"` ->
-// `""`) as defense in depth, even though identifierPattern already
-// excludes that character.
-func quoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+// NewEnsureExister builds an EnsureExister that connects using cfg
+// (in particular cfg.MaintenanceName) to bootstrap a target database.
+func NewEnsureExister(cfg Config) *EnsureExister {
+	return &EnsureExister{cfg: cfg}
+}
+
+// EnsureExists implements migration.Database: it opens a short-lived
+// connection to e.cfg's maintenance database (default "postgres") and
+// delegates to ensureDatabase to create name if it does not already
+// exist. This connection is closed before returning: CREATE DATABASE
+// must run outside any transaction against a database other than the
+// one being created, and there is no reason to hold this maintenance
+// connection open once that step is done (infra/goose.Runner opens
+// its own, separate connection to the target database itself).
+func (e *EnsureExister) EnsureExists(ctx context.Context, name migration.DatabaseName) error {
+	maintenanceDB, err := Open(ctx, e.cfg.DSN(e.cfg.MaintenanceName))
+	if err != nil {
+		return fmt.Errorf("open maintenance database %q: %w", e.cfg.MaintenanceName, err)
+	}
+	defer func() {
+		if closeErr := maintenanceDB.Close(); closeErr != nil {
+			slog.Error("migrator: close maintenance database", "error", closeErr)
+		}
+	}()
+
+	return ensureDatabase(ctx, maintenanceDB, name)
 }
 
 // ensureDatabase makes sure a database named name exists on the
 // Postgres instance maintenanceDB is connected to, creating it if it
-// does not (plan §RF.1.2 step 1). CREATE DATABASE cannot run inside a
-// transaction block, so this issues a plain ExecContext rather than a
-// db.BeginTx-wrapped one (database/sql autocommits statements that are
-// not explicitly wrapped in a Tx).
+// does not. CREATE DATABASE cannot run inside a transaction block, so
+// this issues a plain ExecContext rather than a db.BeginTx-wrapped one
+// (database/sql autocommits statements that are not explicitly
+// wrapped in a Tx).
 //
 // A concurrent CREATE DATABASE racing this one -- e.g. api's and
 // auth's migrator invocations, or two replicas of the same init
@@ -111,12 +100,8 @@ func quoteIdentifier(name string) string {
 //     the failure was some flavor of this same creation race (whatever
 //     its SQLSTATE) and is treated as idempotent success; if it still
 //     does not exist, the original error is real and is returned.
-func ensureDatabase(ctx context.Context, maintenanceDB *sql.DB, name string) error {
-	if err := validateIdentifier(name); err != nil {
-		return fmt.Errorf("ensure database: %w", err)
-	}
-
-	exists, err := databaseExists(ctx, maintenanceDB, name)
+func ensureDatabase(ctx context.Context, maintenanceDB *sql.DB, name migration.DatabaseName) error {
+	exists, err := databaseExists(ctx, maintenanceDB, name.String())
 	if err != nil {
 		return fmt.Errorf("ensure database: check existence: %w", err)
 	}
@@ -124,7 +109,7 @@ func ensureDatabase(ctx context.Context, maintenanceDB *sql.DB, name string) err
 		return nil
 	}
 
-	if _, err := maintenanceDB.ExecContext(ctx, "CREATE DATABASE "+quoteIdentifier(name)); err != nil {
+	if _, err := maintenanceDB.ExecContext(ctx, "CREATE DATABASE "+name.Quoted()); err != nil {
 		if isDuplicateDatabase(err) {
 			return nil // created concurrently by another invocation; idempotent success
 		}
@@ -136,7 +121,7 @@ func ensureDatabase(ctx context.Context, maintenanceDB *sql.DB, name string) err
 		// across Postgres versions) recognize. A check error here is
 		// deliberately swallowed in favor of the original create
 		// error, which is the more actionable one to report.
-		if reExists, reErr := databaseExists(ctx, maintenanceDB, name); reErr == nil && reExists {
+		if reExists, reErr := databaseExists(ctx, maintenanceDB, name.String()); reErr == nil && reExists {
 			return nil // created concurrently by another invocation; idempotent success
 		}
 		return fmt.Errorf("ensure database: create: %w", err)
@@ -171,8 +156,7 @@ func databaseExists(ctx context.Context, maintenanceDB *sql.DB, name string) (bo
 // that could be an unrelated unique constraint violation from a
 // different concurrent statement. database/sql's pgx stdlib driver
 // surfaces the underlying *pgconn.PgError unwrapped from ExecContext,
-// so errors.As reaches it directly (same pattern as
-// app/api/infra/postgres/task_repository.go's isUniqueViolation).
+// so errors.As reaches it directly.
 func isDuplicateDatabase(err error) bool {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) {

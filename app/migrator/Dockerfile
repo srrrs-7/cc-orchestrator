@@ -29,7 +29,7 @@ RUN go mod download
 
 COPY app/migrator/ .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -trimpath -o /out/migrator .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -trimpath -o /out/migrator ./cmd/migrator
 
 # --- runtime stage -------------------------------------------------------
 # distroless/static: no shell, no package manager, non-root user by

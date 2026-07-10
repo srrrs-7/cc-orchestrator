@@ -5,14 +5,18 @@ import (
 	"testing"
 )
 
-// TestParseFlags_TargetDirAndDatabaseMapping exercises the -target ->
-// default migrations directory contract documented on parseFlags and
-// validTargets (SPEC-005 plan §RF.2.1 "-target"/"-command"/
+// TestParseFlags_CommandAndDirDefaults exercises parseFlags's CLI
+// contract (SPEC-005 plan §RF.2.1 "-target"/"-command"/
 // "-migrations-dir"): a recognized target selects "/migrations/<target>"
-// by default (matching the Dockerfile's COPY layout), and an
-// unrecognized target is rejected outright rather than silently
-// producing an empty or unexpected path.
-func TestParseFlags_TargetDirAndDatabaseMapping(t *testing.T) {
+// by default (via migration.Target.DefaultMigrationsDir, tested
+// directly in domain/migration/target_test.go), the default command is
+// "up", and an explicit -migrations-dir overrides the target-derived
+// default. Moved from the pre-refactor main_test.go's
+// TestParseFlags_TargetDirAndDatabaseMapping; the target->dir mapping
+// cases themselves moved to domain/migration/target_test.go
+// (TestParseTarget_DefaultMigrationsDir), since that mapping is now a
+// domain-level fact, not something parseFlags computes itself.
+func TestParseFlags_CommandAndDirDefaults(t *testing.T) {
 	cases := []struct {
 		name        string
 		args        []string
@@ -85,10 +89,10 @@ func TestParseFlags_TargetDirAndDatabaseMapping(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseFlags(%v) unexpected error: %v", tc.args, err)
 			}
-			if target != tc.wantTarget {
+			if target.String() != tc.wantTarget {
 				t.Errorf("parseFlags(%v) target = %q, want %q", tc.args, target, tc.wantTarget)
 			}
-			if command != tc.wantCommand {
+			if command.String() != tc.wantCommand {
 				t.Errorf("parseFlags(%v) command = %q, want %q", tc.args, command, tc.wantCommand)
 			}
 			if dir != tc.wantDir {
@@ -100,8 +104,9 @@ func TestParseFlags_TargetDirAndDatabaseMapping(t *testing.T) {
 
 // TestParseFlags_UnknownTargetErrorNamesValue asserts the -target
 // validation error is actionable: it echoes back the offending value
-// so an operator (or an ECS task's exit-code-only log) can tell what
-// was actually passed.
+// (via the wrapped migration.ParseTarget error) and names the -target
+// flag itself (via parseFlags's own wrap), so an operator (or an ECS
+// task's exit-code-only log) can tell what was actually passed.
 func TestParseFlags_UnknownTargetErrorNamesValue(t *testing.T) {
 	_, _, _, err := parseFlags([]string{"-target", "staging"})
 	if err == nil {

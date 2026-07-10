@@ -35,7 +35,7 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 | マイグレーションファイルの新規作成 | `app/api` または `app/auth` | `make migrate-create name=<slug>`(DB 接続なし。ファイル生成のみ) |
 | 実 DB 統合テスト | `app/api` または `app/auth` | `make test-integration`(= `go test -tags=integration ./infra/postgres/...`。事前に接続先データベースへマイグレーション適用済みであること) |
 | マイグレーション適用(api・auth 両方、ローカル) | リポジトリルート | `make migrate`(`db-up` を前提ターゲットとし、`app/migrator` を `-target api` / `-target auth` で 2 回実行する) |
-| マイグレーション適用(任意の target・command を直接指定) | `app/migrator` | `go run . -target api\|auth [-command up\|down\|status] [-migrations-dir <path>]`(または `make run ARGS="..."`) |
+| マイグレーション適用(任意の target・command を直接指定) | `app/migrator` | `go run ./cmd/migrator -target api\|auth [-command up\|down\|status] [-migrations-dir <path>]`(または `make run ARGS="..."`) |
 
 **per-stack の `migrate-up` / `migrate-down` / `migrate-status` ターゲットは存在しない**(この 2026-07-09 リファクタで `app/migrator` に一本化して移管済み)。マイグレーションの「適用」に関する操作はすべて `app/migrator` 経由で行う。
 
@@ -58,7 +58,14 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 
 リポジトリ直下:
 
-- `app/migrator/` — api/auth 共有のマイグレーション実行ツール(独立 go.mod)。`main.go`(CLI 本体・`-target`/`-command`/`-migrations-dir`)/ `config.go`(`configFromEnv`。この module 自身の DB\_\* 環境変数読み取り)/ `database.go`(`ensureDatabase` — 対象データベースが無ければ `CREATE DATABASE` する冪等な bootstrap)/ `Dockerfile`(ビルドコンテキストはリポジトリルート。`app/{api,auth}/db/migrations` を COPY するため)
+- `app/migrator/` — api/auth 共有のマイグレーション実行ツール(独立 go.mod)。`app/api` / `app/auth` と同じ DDD レイヤ構成(2026-07-10 リファクタ):
+  - `cmd/migrator/main.go` — コンポジションルート(CLI フラグ parse・`NewEnv()`+`validate`・infra を service に配線・実行・エラー→exit code。ロジックを持たない)
+  - `cmd/migrator/env.go` — この module 自身の環境変数を読む唯一の場所(`os.Getenv` は本ファイルのみ。`DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`/`DB_SSLMODE`/`DB_NAME`/`DB_MAINTENANCE_NAME` + `MIGRATOR_TIMEOUT` を読み、`Env` + `NewEnv` + `validate` で `infra/postgres.Config` / `domain/migration.DatabaseName` に射影する)
+  - `domain/migration/` — ドメイン層(pgx/goose/os を import しない)。`Target`(`api`/`auth` の VO・既定 migrations dir を導出)/ `Command`(`up`/`down`/`status` の VO)/ `DatabaseName`(identifier 検証 `^[a-z_][a-z0-9_]*$` + 63byte・`Quoted()` によるクォート。injection 防御の純ロジック)/ `port.go`(`Database{ EnsureExists(ctx, DatabaseName) error }` / `Runner{ Run(ctx, Command, dir string) error }` の 2 ポート)
+  - `service/migrate.go` — `Database` の `EnsureExists` → `Runner` の `Run` を協調させる薄い application 層。domain のみに依存
+  - `infra/postgres/` — `Database` ポートの実装(`EnsureExister`。`pg_database` 存在確認 + `CREATE DATABASE` 冪等・`42P04`/`23505` 分類・再確認)+ 接続 `Open`/`Config.DSN`(pgx stdlib)
+  - `infra/goose/` — `Runner` ポートの実装。goose library(`SetDialect` + `RunContext`)。実行タイムアウト(`MIGRATOR_TIMEOUT`)の適用
+  - `Dockerfile`(ビルドコンテキストはリポジトリルート。`app/{api,auth}/db/migrations` を COPY するため。ビルド対象は `./cmd/migrator`)
 
 ## 接続 env 契約
 
