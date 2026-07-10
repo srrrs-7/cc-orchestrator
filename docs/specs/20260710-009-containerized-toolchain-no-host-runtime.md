@@ -4,7 +4,7 @@ title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
 updated: 2026-07-10
-issues: []       # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-026]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -110,3 +110,4 @@ supersedes: null # 置き換える旧Spec ID
 - **ユーザー報告バグの修正(portability)**: 一部の `docker compose` 実装(nerdctl/Rancher 系, v5.3.1)がトップレベル `--env-file` を拒否し(`unknown flag: --env-file`)`make lint` 等が失敗していた。全 wrapper(root + api/auth/migrator/iac Makefile + `bin/bun`)で `--env-file` を廃し、`include` 済み `versions.env` の版変数を `export` してプロセス環境から compose の `${VAR}` 展開に渡す方式へ変更(commit `ab1f677`)。sandbox 検証が standalone `docker-compose` を使い実機の plugin と乖離していたことが見逃しの原因(教訓: compose 実装差の検証)。
 - **残留リスク(§4 補足)**: (a) iac の `plan`/`apply` は net 有効コンテナに AWS 資格情報を透過し provider を fetch する(lock file hash で緩和)。(b) named cache volume は単一テナント前提の 0777。(c) monorepo 全体を単一 bind-mount(単一 install 侵害の blast-radius は repo 全体、ただしホスト秘密は非漏洩)。(d) bun/golangci-lint は curl|sh の TOFU インストール。(e) devcontainer は UID 自動注入なしで固定 uid 1000。いずれも主目的(install 時のホスト秘密窃取の防止)は満たしつつ受容。
 - **残タスク(follow-up)**: (1) 実 PR での CI green 確認(GHA build cache / container job の実機初回実行。ローカル未確認のため status は in-progress を維持)。(2) `.github/copilot-instructions.md` のコンテナ実行注記・`.claude/rules/*` の各コマンド表への注記(CLAUDE.md 中央注記は反映済み)。(3) SPEC-009-plan の「CI 配布方式」節を実決定(各 job build + gha cache)に更新。将来ハードニング: rootless/Podman、action の SHA pin、cache volume の権限厳格化。
+- **ISSUE-026 起票(本 SPEC 由来の混入バグ)**: SPEC-010 の tester 作業中に、`app/auth/Makefile` の `test-integration` が `docker compose run` の引数順違反(`DB_ONLINE` に `tools` を内包した上で後ろに `-e ...` を追記 → `-e` が in-container コマンドに回る)で `exec: "-e": executable file not found in $PATH` になる既存バグを発見。api 側(正常)と非対称で、SPEC-009 Phase B(Makefile の toolbox ラッパー化)で混入したと推定。CI の `auth-integration` ジョブも同じ `make test-integration` を呼ぶため fail の可能性が高い(要確認)。ISSUE-026 として起票(修正は impl-auth、本 SPEC 側は相互リンクのみ)。

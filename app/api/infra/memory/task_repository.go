@@ -20,10 +20,18 @@ type TaskRepository struct {
 	tasks map[task.ID]*task.Task
 }
 
-// var _ task.Repository = (*TaskRepository)(nil) verifies at compile
-// time that TaskRepository satisfies the domain's Repository
-// interface.
-var _ task.Repository = (*TaskRepository)(nil)
+// TaskRepository stays a single struct implementing every method of
+// both task.Reader and task.Writer (SPEC-010 R5: in-memory storage is
+// not physically split into separate read/write pools -- there is
+// only one map to read and write). These three var _ declarations
+// verify at compile time that it still satisfies task.Repository as a
+// whole, and each of task.Reader/task.Writer individually, with no
+// behavior change.
+var (
+	_ task.Repository = (*TaskRepository)(nil)
+	_ task.Reader     = (*TaskRepository)(nil)
+	_ task.Writer     = (*TaskRepository)(nil)
+)
 
 // NewTaskRepository builds an empty TaskRepository.
 func NewTaskRepository() *TaskRepository {

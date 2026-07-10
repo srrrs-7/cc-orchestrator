@@ -238,3 +238,47 @@ func TestConfigValidate_AllRequiredFieldsPresent(t *testing.T) {
 		t.Errorf("Validate() unexpected error: %v", err)
 	}
 }
+
+// TestConfigEquality_ReaderWriterSharing pins the plain `==` comparison
+// SPEC-010's postgres.OpenPair(ctx, writerCfg, readerCfg) relies on to
+// decide whether the reader falls back to sharing the writer's single
+// *sql.DB pool (readerCfg == writerCfg) or opens a second one
+// (docs/plans/SPEC-010-plan.md "infra/postgres: OpenPair"). Config's
+// fields are all plain strings, so this is Go's ordinary comparable-
+// struct equality; this test exists to document and pin that
+// assumption against any future non-comparable field being added to
+// Config (which would make Config no longer usable with `==` and
+// silently break OpenPair's sharing decision at compile time).
+func TestConfigEquality_ReaderWriterSharing(t *testing.T) {
+	base := postgres.Config{
+		Host: "db.internal", Port: "5432", Name: "appdb",
+		User: "appuser", Password: "pw", SSLMode: "require",
+	}
+
+	t.Run("identical field values compare equal", func(t *testing.T) {
+		other := base
+		if base != other {
+			t.Errorf("Config{%+v} != Config{%+v}, want equal", base, other)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		mutate func(c postgres.Config) postgres.Config
+	}{
+		{"differing Host", func(c postgres.Config) postgres.Config { c.Host = "replica.internal"; return c }},
+		{"differing Port", func(c postgres.Config) postgres.Config { c.Port = "6543"; return c }},
+		{"differing Name", func(c postgres.Config) postgres.Config { c.Name = "otherdb"; return c }},
+		{"differing User", func(c postgres.Config) postgres.Config { c.User = "otheruser"; return c }},
+		{"differing Password", func(c postgres.Config) postgres.Config { c.Password = "other-pw"; return c }},
+		{"differing SSLMode", func(c postgres.Config) postgres.Config { c.SSLMode = "disable"; return c }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := tt.mutate(base)
+			if base == other {
+				t.Errorf("Config{%+v} == Config{%+v}, want not equal (%s)", base, other, tt.name)
+			}
+		})
+	}
+}

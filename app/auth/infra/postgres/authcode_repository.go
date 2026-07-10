@@ -24,10 +24,26 @@ type AuthCodeRepository struct {
 
 // var _ authcode.Repository = (*AuthCodeRepository)(nil) verifies at
 // compile time that AuthCodeRepository satisfies the domain's
-// Repository interface.
-var _ authcode.Repository = (*AuthCodeRepository)(nil)
+// Repository interface. The narrower var _ authcode.Reader / var _
+// authcode.Writer assertions below additionally pin that
+// AuthCodeRepository satisfies each half of SPEC-010's Reader/Writer
+// split on its own -- it stays a single struct (unlike task's
+// TaskReader/TaskWriter split) because this Spec's fixed wiring
+// decision constructs it with the writer pool only, for both reads
+// and writes (see cmd/authz/main.go and
+// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
+// 配置").
+var (
+	_ authcode.Repository = (*AuthCodeRepository)(nil)
+	_ authcode.Reader     = (*AuthCodeRepository)(nil)
+	_ authcode.Writer     = (*AuthCodeRepository)(nil)
+)
 
 // NewAuthCodeRepository builds an AuthCodeRepository backed by db.
+// SPEC-010 does not change this constructor's shape: the composition
+// root is responsible for always passing it the writer pool (never
+// the reader pool), since authcode's reads are correctness-critical
+// (see the Reader var _ assertion's doc comment above).
 func NewAuthCodeRepository(db *sql.DB) *AuthCodeRepository {
 	return &AuthCodeRepository{q: sqlcgen.New(db)}
 }

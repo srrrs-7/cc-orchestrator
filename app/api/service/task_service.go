@@ -8,17 +8,28 @@ import (
 )
 
 // TaskService implements the Task-related application use cases. It
-// orchestrates domain objects (the Task aggregate, the Repository
-// and the DuplicateChecker domain service) but does not itself hold
-// any business rule.
+// orchestrates domain objects (the Task aggregate, the Reader/Writer
+// persistence ports and the DuplicateChecker domain service) but does
+// not itself hold any business rule.
+//
+// TaskService depends on task.Reader and task.Writer separately
+// (rather than the composed task.Repository) so that the composition
+// root can route every read (Get/List, and the FindByID lookup
+// inside Start/Complete/ChangePriority) through a reader connection
+// pool and every write (Save) through a writer connection pool
+// (SPEC-010 R2). Both fields may be backed by the same underlying
+// store/pool (e.g. infra/memory, or infra/postgres when no reader
+// endpoint is configured); TaskService's behavior does not depend on
+// whether they are.
 type TaskService struct {
-	repo   task.Repository
+	reader task.Reader
+	writer task.Writer
 	dupChk *task.DuplicateChecker
 }
 
 // NewTaskService builds a TaskService.
-func NewTaskService(repo task.Repository, dupChk *task.DuplicateChecker) *TaskService {
-	return &TaskService{repo: repo, dupChk: dupChk}
+func NewTaskService(reader task.Reader, writer task.Writer, dupChk *task.DuplicateChecker) *TaskService {
+	return &TaskService{reader: reader, writer: writer, dupChk: dupChk}
 }
 
 // Create builds a new Task from the given title and priority,
@@ -48,7 +59,7 @@ func (s *TaskService) Create(ctx context.Context, title, priority string) (TaskD
 	}
 
 	newTask := task.New(t, p)
-	if err := s.repo.Save(ctx, newTask); err != nil {
+	if err := s.writer.Save(ctx, newTask); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
 	}
 
@@ -62,7 +73,7 @@ func (s *TaskService) Get(ctx context.Context, id string) (TaskDTO, error) {
 		return TaskDTO{}, fmt.Errorf("service: get task: %w", err)
 	}
 
-	t, err := s.repo.FindByID(ctx, taskID)
+	t, err := s.reader.FindByID(ctx, taskID)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: get task: %w", err)
 	}
@@ -82,7 +93,7 @@ func (s *TaskService) List(ctx context.Context, limit, offset *int) (TaskListDTO
 		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
 	}
 
-	tasks, total, err := s.repo.ListPage(ctx, page)
+	tasks, total, err := s.reader.ListPage(ctx, page)
 	if err != nil {
 		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
 	}
@@ -106,7 +117,7 @@ func (s *TaskService) Start(ctx context.Context, id string) (TaskDTO, error) {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
 	}
 
-	t, err := s.repo.FindByID(ctx, taskID)
+	t, err := s.reader.FindByID(ctx, taskID)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
 	}
@@ -115,7 +126,7 @@ func (s *TaskService) Start(ctx context.Context, id string) (TaskDTO, error) {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
 	}
 
-	if err := s.repo.Save(ctx, t); err != nil {
+	if err := s.writer.Save(ctx, t); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
 	}
 
@@ -136,14 +147,14 @@ func (s *TaskService) ChangePriority(ctx context.Context, id, priority string) (
 		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
 	}
 
-	t, err := s.repo.FindByID(ctx, taskID)
+	t, err := s.reader.FindByID(ctx, taskID)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
 	}
 
 	t.ChangePriority(p)
 
-	if err := s.repo.Save(ctx, t); err != nil {
+	if err := s.writer.Save(ctx, t); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
 	}
 
@@ -157,7 +168,7 @@ func (s *TaskService) Complete(ctx context.Context, id string) (TaskDTO, error) 
 		return TaskDTO{}, fmt.Errorf("service: complete task: %w", err)
 	}
 
-	t, err := s.repo.FindByID(ctx, taskID)
+	t, err := s.reader.FindByID(ctx, taskID)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: complete task: %w", err)
 	}
@@ -166,7 +177,7 @@ func (s *TaskService) Complete(ctx context.Context, id string) (TaskDTO, error) 
 		return TaskDTO{}, fmt.Errorf("service: complete task: %w", err)
 	}
 
-	if err := s.repo.Save(ctx, t); err != nil {
+	if err := s.writer.Save(ctx, t); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: complete task: %w", err)
 	}
 

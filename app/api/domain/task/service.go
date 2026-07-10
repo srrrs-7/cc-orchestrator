@@ -14,12 +14,17 @@ import (
 // cross-aggregate logic that would otherwise force an unnatural
 // responsibility onto an entity/value object belongs in a stateless
 // domain service instead.
+//
+// DuplicateChecker only ever reads (FindByTitle), so it depends on
+// Reader rather than the full Repository (SPEC-010): this both
+// documents that it never writes and lets the composition root route
+// it to a reader connection pool.
 type DuplicateChecker struct {
-	repo Repository
+	repo Reader
 }
 
 // NewDuplicateChecker builds a DuplicateChecker backed by repo.
-func NewDuplicateChecker(repo Repository) *DuplicateChecker {
+func NewDuplicateChecker(repo Reader) *DuplicateChecker {
 	return &DuplicateChecker{repo: repo}
 }
 

@@ -22,10 +22,16 @@ type RefreshTokenRepository struct {
 	tokens map[refreshtoken.TokenHash]*refreshtoken.RefreshToken
 }
 
-// var _ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
-// verifies at compile time that RefreshTokenRepository satisfies the
-// domain's Repository interface.
-var _ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
+// The following var _ declarations verify at compile time that
+// RefreshTokenRepository satisfies the domain's Repository interface,
+// and -- SPEC-010 R5/R1 -- both of its additive halves (Reader/Writer)
+// individually, via this single struct/store (in-memory persistence
+// is not physically split into separate reader/writer pools).
+var (
+	_ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
+	_ refreshtoken.Reader     = (*RefreshTokenRepository)(nil)
+	_ refreshtoken.Writer     = (*RefreshTokenRepository)(nil)
+)
 
 // NewRefreshTokenRepository builds an empty RefreshTokenRepository.
 func NewRefreshTokenRepository() *RefreshTokenRepository {

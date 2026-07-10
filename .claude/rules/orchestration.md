@@ -32,6 +32,7 @@
 | 実装・修正(app/iac) | impl-iac | |
 | CI/CD・リポジトリルート/横断ツーリング設定(`.github/` + リポジトリルート) | impl-ci | GitHub Actions workflow / dependabot / copilot-instructions、およびルート `Makefile` / `compose*.yml` / `docker/`(toolchain 等)/ `versions.env` / `.devcontainer/` / `.gitignore` / `.env` など特定 stack に属さない横断ツーリング(SPEC-009)。`app/<stack>` 内のコード・各 stack の Makefile/package.json の中身は各 impl が担当 |
 | 実装・修正(DB/永続化層: migrations / sqlc / infra/postgres, および `app/migrator`(独立 Go モジュール。対象 DB 作成 + goose 適用)。app/api・app/auth 横断) | impl-db | ポート(`Repository` interface)は domain 側(impl-api / auth)、実装は `infra/postgres` 側で分担。`app/migrator` 一式(main / config / database / Dockerfile / Makefile / go.mod)も impl-db 所有(SPEC-005)。概念で担当を切る(impl-ci と同型) |
+| リファクタリング(挙動不変のコード内部改善) | refactor | 対象 stack / スコープを明示して割り振る。既存テストを**無改変で緑**に保つ。公開契約(HTTP / DTO / OpenAPI・ドメインポート・env 契約)・DB スキーマは変えない(変えるなら Spec 起票 → 該当 impl)。機能追加・バグ修正はしない |
 | テスト作成・実行 | tester | |
 | format / lint / type check | checker | |
 | セキュリティレビュー | review-security | |
@@ -60,5 +61,5 @@
 
 - admin セッションは常に利用可能な最上位モデルで実行する(`/model` で確認・設定)
 - subagent のモデルは各 agent 定義の frontmatter `model:` で固定する:
-  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-auth / impl-iac / impl-ci / impl-db)/ tester / review-*)= sonnet、下流(checker)= haiku
+  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-auth / impl-iac / impl-ci / impl-db)/ refactor / tester / review-*)= sonnet、下流(checker)= haiku
 - モデル割り当てを変える場合は agent 定義の frontmatter を書き換える(このファイルの方針も併せて更新する)
