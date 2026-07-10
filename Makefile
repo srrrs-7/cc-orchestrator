@@ -40,7 +40,7 @@ clean: ## 停止・コンテナ・volume を削除する
 	$(COMPOSE) down -v
 
 # ---------------------------------------------------------------------------
-# ローカル Postgres(SPEC-005)
+# ローカル Postgres(SPEC-005。2026-07-09 リファクタ: 別データベース + app/migrator)
 #
 # api/auth はどちらも起動時に DB_HOST の有無で永続化先を選ぶ fail-closed な
 # 配線になっている(app/{api,auth}/infra/postgres/db.go の SelectMode)。
@@ -49,20 +49,37 @@ clean: ## 停止・コンテナ・volume を削除する
 # マイグレーション未適用のテーブル欠如でクラッシュループしないよう、
 # `up`/`up-d` は `migrate`(→ `db-up`)を前提ターゲットにしている。
 #
-# `migrate` は app/api・app/auth 各 Makefile の `migrate-up`(goose を
-# `go run` する)を呼ぶため、この 2 ターゲットの実行にはホストに Go
-# ツールチェーンが必要(app/api・app/auth の `make check` 等と同じ前提)。
-# docker のみで完結しない点に注意。
+# api・auth は同一 Postgres インスタンス上の別データベース("api"/"auth")に
+# 分離されている(旧: 単一 database + search_path 別スキーマ)。`migrate` は
+# 共通の `app/migrator`(`app/migrator/main.go`)を `-target` 違いで 2 回実行し、
+# 各データベースを(未存在なら)作成した上で当該スタックの db/migrations を
+# 適用する。DB_NAME は migrator の既定(-target と同名: api/auth)に任せ、
+# 接続先(host/port/user/password/sslmode)だけをローカル compose の postgres
+# に合わせて明示する(app/api・app/auth Makefile の DB_* 既定と同じ値)。
+#
+# `go run ./app/migrator` はこの実行にホストの Go ツールチェーンを要求する
+# (app/api・app/auth の `make check` 等と同じ前提)。docker のみで完結しない
+# 点に注意。
 # ---------------------------------------------------------------------------
 
 .PHONY: db-up
 db-up: ## postgres のみを起動し healthy になるまで待つ
 	$(COMPOSE) up -d --wait postgres
 
+MIGRATOR_DB_ENV := DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=app DB_SSLMODE=disable
+
+# `go run ./app/migrator` cannot be invoked from this (root) directory:
+# app/migrator has its own go.mod (an independent module, deliberately
+# not part of a workspace with app/api/app/auth -- plan §RF.1.2/§RF.1.3
+# "goose の閉じ込め"), and this repo root has no go.mod of its own for
+# Go to resolve a "main module" from. `go -C app/migrator run .` runs
+# in app/migrator's own module context instead; -migrations-dir is
+# passed as an absolute path ($(CURDIR)-rooted) so it resolves
+# correctly regardless of that directory change.
 .PHONY: migrate
-migrate: db-up ## api/auth のマイグレーションをローカル compose の postgres に適用する (db-up を前提として実行)
-	$(MAKE) -C app/api migrate-up
-	$(MAKE) -C app/auth migrate-up
+migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行)
+	$(MIGRATOR_DB_ENV) go -C app/migrator run . -target api -migrations-dir $(CURDIR)/app/api/db/migrations
+	$(MIGRATOR_DB_ENV) go -C app/migrator run . -target auth -migrations-dir $(CURDIR)/app/auth/db/migrations
 
 # ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004)

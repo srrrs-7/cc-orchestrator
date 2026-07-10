@@ -32,6 +32,17 @@ type Client struct {
 	GrantTypes    json.RawMessage
 }
 
+type RefreshToken struct {
+	TokenHash string
+	FamilyID  string
+	ClientID  string
+	UserID    string
+	Scope     string
+	ExpiresAt time.Time
+	Consumed  bool
+	CreatedAt time.Time
+}
+
 type User struct {
 	ID           string
 	Username     string

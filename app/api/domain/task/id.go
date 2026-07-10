@@ -33,7 +33,7 @@ func NewID() ID {
 // It rejects empty strings.
 func ParseID(s string) (ID, error) {
 	if s == "" {
-		return ID{}, fmt.Errorf("task: parse id: %w", ErrInvalidID)
+		return ID{}, &ValidationError{Msg: "invalid task id", Err: ErrInvalidID}
 	}
 	return ID{value: s}, nil
 }

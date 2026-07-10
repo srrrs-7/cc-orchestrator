@@ -17,7 +17,7 @@ color: purple
 
 ## 実装の方針
 
-- **コマンドは rules の「コマンド」表に完全準拠する。** 例: web = `bun run <script>`(Biome / tsgo / Vitest / Vite)、api・auth = `make check`、iac = `make check ENV=<env>`(fmt-check はルート、validate/lint/security は env)
+- **コマンドは rules の「コマンド」表に完全準拠する。** 例: web = `bun run <script>`(Biome / tsc / Vitest / Vite)、api・auth = `make check`、iac = `make check ENV=<env>`(fmt-check はルート、validate/lint/security は env)
 - monorepo なので stack 単位で job を分け、変更パスに応じて実行を絞る(path フィルタ)。stack 間の独立性を保つ
 - 使用する外部 action・ツールはバージョンを固定(pin)する。バージョン依存で使えない機能があれば、動く構成に落としてコメントで明示する
 - secrets・アカウント固有値を平文で書かない(必要なら `secrets.*` 参照に留める)

@@ -52,10 +52,12 @@ func NewTaskRepository(db *sql.DB) *TaskRepository {
 // Save inserts or updates t in the tasks table (UpsertTask: INSERT ...
 // ON CONFLICT (id) DO UPDATE), matching infra/memory's upsert-by-id
 // semantics. A UNIQUE(title) violation -- saving a Task whose title
-// already belongs to a different id -- is translated to
-// task.ErrDuplicateTitle rather than leaking a raw database/sql or pgx
-// error, so callers can branch with errors.Is the same way they do
-// against task.DuplicateChecker's pre-check.
+// already belongs to a different id -- is translated to a
+// *task.ConflictError wrapping task.ErrDuplicateTitle (via
+// task.NewDuplicateTitleError) rather than leaking a raw database/sql
+// or pgx error, so callers can branch with errors.Is/errors.As the
+// same way they do against task.DuplicateChecker's pre-check. Any
+// other database error is wrapped as a *task.DBError.
 func (r *TaskRepository) Save(ctx context.Context, t *task.Task) error {
 	err := r.q.UpsertTask(ctx, sqlcgen.UpsertTaskParams{
 		ID:        t.ID().String(),
@@ -67,22 +69,23 @@ func (r *TaskRepository) Save(ctx context.Context, t *task.Task) error {
 	})
 	if err != nil {
 		if isUniqueViolation(err, tasksTitleUniqueConstraint) {
-			return fmt.Errorf("postgres: save task: %w", task.ErrDuplicateTitle)
+			return fmt.Errorf("postgres: save task: %w", task.NewDuplicateTitleError())
 		}
-		return fmt.Errorf("postgres: save task: %w", err)
+		return fmt.Errorf("postgres: save task: %w", task.NewDBError(err))
 	}
 	return nil
 }
 
-// FindByID returns the Task with the given id, or task.ErrNotFound if
-// none exists.
+// FindByID returns the Task with the given id, or a *task.NotFoundError
+// (unwrapping to task.ErrNotFound) if none exists. Any other database
+// error is wrapped as a *task.DBError.
 func (r *TaskRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
 	row, err := r.q.GetTaskByID(ctx, id.String())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("postgres: find task by id: %w", task.ErrNotFound)
+			return nil, fmt.Errorf("postgres: find task by id: %w", task.NewNotFoundError())
 		}
-		return nil, fmt.Errorf("postgres: find task by id: %w", err)
+		return nil, fmt.Errorf("postgres: find task by id: %w", task.NewDBError(err))
 	}
 	t, err := taskFromRow(row)
 	if err != nil {
@@ -91,15 +94,16 @@ func (r *TaskRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, 
 	return t, nil
 }
 
-// FindByTitle returns the Task with the given title, or
-// task.ErrNotFound if none exists.
+// FindByTitle returns the Task with the given title, or a
+// *task.NotFoundError (unwrapping to task.ErrNotFound) if none exists.
+// Any other database error is wrapped as a *task.DBError.
 func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
 	row, err := r.q.GetTaskByTitle(ctx, title.String())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("postgres: find task by title: %w", task.ErrNotFound)
+			return nil, fmt.Errorf("postgres: find task by title: %w", task.NewNotFoundError())
 		}
-		return nil, fmt.Errorf("postgres: find task by title: %w", err)
+		return nil, fmt.Errorf("postgres: find task by title: %w", task.NewDBError(err))
 	}
 	t, err := taskFromRow(row)
 	if err != nil {
@@ -113,7 +117,7 @@ func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*ta
 func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
 	rows, err := r.q.ListTasks(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: find all tasks: %w", err)
+		return nil, fmt.Errorf("postgres: find all tasks: %w", task.NewDBError(err))
 	}
 
 	result := make([]*task.Task, 0, len(rows))
@@ -141,19 +145,19 @@ func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
 func taskFromRow(row sqlcgen.Task) (*task.Task, error) {
 	id, err := task.ParseID(row.ID)
 	if err != nil {
-		return nil, fmt.Errorf("decode task row: %w", err)
+		return nil, task.NewDBError(fmt.Errorf("decode task row id %q: %v", row.ID, err))
 	}
 	title, err := task.NewTitle(row.Title)
 	if err != nil {
-		return nil, fmt.Errorf("decode task row: %w", err)
+		return nil, task.NewDBError(fmt.Errorf("decode task row title %q: %v", row.Title, err))
 	}
 	status, err := task.ParseStatus(row.Status)
 	if err != nil {
-		return nil, fmt.Errorf("decode task row: %w", err)
+		return nil, task.NewDBError(fmt.Errorf("decode task row status %q: %v", row.Status, err))
 	}
 	priority, err := task.ParsePriority(row.Priority)
 	if err != nil {
-		return nil, fmt.Errorf("decode task row: %w", err)
+		return nil, task.NewDBError(fmt.Errorf("decode task row priority %q: %v", row.Priority, err))
 	}
 	return task.Reconstruct(id, title, status, priority, row.CreatedAt, row.UpdatedAt), nil
 }

@@ -10,6 +10,7 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 | `app/api` | バックエンド API (Go) |
 | `app/auth` | 認証・認可 API (Go / OAuth 2.0 + OIDC)。`app/api` と同一の DDD レイヤ構成 |
 | `app/iac` | インフラ (Terraform) |
+| `app/migrator` | DB マイグレーション実行ツール (Go 独立モジュール)。target 別に対象 DB 作成 + goose 適用。goose を api/auth から隔離 (SPEC-005) |
 | `docs/specs` | 機能仕様(Spec)。`spec` skill が固定テンプレートで管理。機能開発の起点となる一次情報 |
 | `docs/issues` | 不具合・課題(Issue)。`issue` skill が固定テンプレートで管理。issue-creator agent が起票する |
 | `docs/plans` | 実装計画。planner agent が作成 |

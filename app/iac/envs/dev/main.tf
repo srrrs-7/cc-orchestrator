@@ -124,21 +124,21 @@ module "service_api" {
   ]
 
   # SPEC-005 R6 discrete DB_* contract (app/api's infra/postgres/db.go
-  # ConfigFromEnv): host/port/name/sslmode/schema are plain env, user/password
-  # come from the RDS master secret's JSON keys via `secrets` below so no
+  # ConfigFromEnv): host/port/name/sslmode are plain env, user/password come
+  # from the RDS master secret's JSON keys via `secrets` below so no
   # plaintext credential ever appears here, in tfvars or in state (R6 /
-  # module db's manage_master_user_password). DB_SCHEMA="api" is this
-  # stack's namespace within the single shared database (module.db.db_name);
-  # see the schema-bootstrap note on module.service_api's
-  # migration_environment below for how that schema comes to exist before
-  # api's own migration/app containers ever connect to it.
+  # module db's manage_master_user_password). DB_NAME="api" is this stack's
+  # own dedicated database on the shared RDS instance (SPEC-005 RF.1.1
+  # database-per-service; DB_SCHEMA/search_path are no longer used). See the
+  # database-bootstrap note on module.service_api's migration_environment
+  # below for how that database comes to exist before api's app container
+  # ever connects to it.
   environment = [
     { name = "PORT", value = tostring(var.container_port) },
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
-    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_NAME", value = "api" },
     { name = "DB_SSLMODE", value = var.db_sslmode },
-    { name = "DB_SCHEMA", value = "api" },
   ]
 
   # ":username::" / ":password::" select the individual JSON keys of the
@@ -155,29 +155,37 @@ module "service_api" {
   secret_read_arns = [module.db.master_user_secret_arn]
 
   # SPEC-005 R5 migration init container: runs before the app container
-  # (modules/service/ecs.tf's dependsOn/condition=SUCCESS wiring), using the
-  # same DB_* contract as the app container above (master credentials, since
-  # the migrate image also needs to CREATE SCHEMA IF NOT EXISTS "api" before
-  # applying db/migrations -- see modules/service/README.md
-  # "マイグレーション init コンテナ" for why that create-schema step lives in
-  # the migrate image's entrypoint rather than in a goose migration file or a
-  # Terraform postgresql-provider resource, and docs/plans/SPEC-005-plan.md
-  # §6.2 R-g/R-h for the concurrency caveat and the deferred image-push
-  # wiring). var.migration_image defaults to this service's own ECR
-  # repository at ":migrate", which is NOT yet pushed anywhere as of this
-  # plan -- see the SPEC-005 section of this file's README before applying.
+  # (modules/service/ecs.tf's dependsOn/condition=SUCCESS wiring). Both api
+  # and auth run the same shared app/migrator image (aws_ecr_repository.migrator
+  # below), distinguished only by migration_command's "-target api" -- the
+  # migrator connects to DB_MAINTENANCE_NAME first to CREATE DATABASE "api"
+  # if it doesn't exist yet (RF.1.2 / RF.6.1 RF-a), then reconnects to
+  # DB_NAME="api" itself to run goose up against app/api/db/migrations
+  # (baked into the shared image). DB_MAINTENANCE_NAME defaults to the
+  # "postgres" database that every PostgreSQL server (including this RDS
+  # instance) has out of the box; override to module.db.db_name ("app", this
+  # RDS instance's own bootstrap database) if "postgres" is ever
+  # inaccessible. See modules/service/README.md "マイグレーション init
+  # コンテナ" and modules/db/README.md for the full rationale, and
+  # docs/plans/SPEC-005-plan.md RF.6 for the concurrency caveat and the
+  # deferred image-push wiring -- the shared migrator image referenced here
+  # is NOT yet pushed anywhere as of this plan; see this file's README
+  # before applying.
   migration_environment = [
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
-    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_NAME", value = "api" },
     { name = "DB_SSLMODE", value = var.db_sslmode },
-    { name = "DB_SCHEMA", value = "api" },
+    { name = "DB_MAINTENANCE_NAME", value = "postgres" },
   ]
 
   migration_secrets = [
     { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
     { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
   ]
+
+  migration_image   = "${aws_ecr_repository.migrator.repository_url}:latest"
+  migration_command = ["-target", "api"]
 
   health_check_path  = var.health_check_path
   log_retention_days = var.log_retention_days
@@ -220,20 +228,19 @@ module "service_auth" {
   # each resolves back to a path actually reachable through the /auth/*
   # behavior.
   # SPEC-005 R6 discrete DB_* contract (app/auth's infra/postgres/db.go
-  # ConfigFromEnv), same single RDS database as api but DB_SCHEMA="auth" --
-  # api and auth share one database (module.db.db_name) and are namespaced
-  # only by connection search_path (see module.service_api's environment
-  # comment above and modules/db/README.md "既知の制約" for why this is a
-  # namespace boundary, not a permission boundary, under the shared master
-  # user both services connect as).
+  # ConfigFromEnv), on the same shared RDS instance as api but its own
+  # dedicated database DB_NAME="auth" (SPEC-005 RF.1.1 database-per-service;
+  # api and auth no longer share a database or a search_path -- see
+  # module.service_api's environment comment above and modules/db/README.md
+  # for why even separate databases aren't a permission boundary under the
+  # shared master user both services connect as).
   environment = [
     { name = "PORT", value = tostring(var.auth_container_port) },
     { name = "ISSUER", value = "http://${module.cdn.cloudfront_domain_name}/auth" },
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
-    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_NAME", value = "auth" },
     { name = "DB_SSLMODE", value = var.db_sslmode },
-    { name = "DB_SCHEMA", value = "auth" },
   ]
 
   # Same master secret / JSON-key selection as module.service_api; see that
@@ -246,23 +253,28 @@ module "service_auth" {
   secret_read_arns = [module.db.master_user_secret_arn]
 
   # SPEC-005 R5 migration init container; see module.service_api's
-  # migration_environment comment above for the full rationale (schema
-  # bootstrap, concurrency caveat, deferred image push). auth's own
-  # Dockerfile.migrate bakes in app/auth/db/migrations and only ever touches
-  # the "auth" schema, so it cannot race with api's migrate container even
-  # though both attach to the same database.
+  # migration_environment comment above for the full rationale (database
+  # bootstrap via app/migrator, concurrency caveat, deferred image push).
+  # auth's migrate container runs the same shared app/migrator image at
+  # "-target auth", which only ever creates/migrates the "auth" database, so
+  # it cannot race with api's migrate container even though both connect to
+  # the same RDS instance and the same DB_MAINTENANCE_NAME bootstrap
+  # database.
   migration_environment = [
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
-    { name = "DB_NAME", value = module.db.db_name },
+    { name = "DB_NAME", value = "auth" },
     { name = "DB_SSLMODE", value = var.db_sslmode },
-    { name = "DB_SCHEMA", value = "auth" },
+    { name = "DB_MAINTENANCE_NAME", value = "postgres" },
   ]
 
   migration_secrets = [
     { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
     { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
   ]
+
+  migration_image   = "${aws_ecr_repository.migrator.repository_url}:latest"
+  migration_command = ["-target", "auth"]
 
   health_check_path  = var.auth_health_check_path
   log_retention_days = var.log_retention_days

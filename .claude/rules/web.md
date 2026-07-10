@@ -19,18 +19,19 @@ paths:
 | build | `bun run build` |
 | OpenAPI 契約消費・生成 | `bun run generate`(`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
 
-package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `tsgo --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**(`test` script の実体は `vitest run`。RTL / jsdom / MSW と組み合わせるため Bun 標準ランナーではなく Vitest を採用)。実行はすべて `app/web` ディレクトリで行う。
+package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `tsc --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**(`test` script の実体は `vitest run`。RTL / jsdom / MSW と組み合わせるため Bun 標準ランナーではなく Vitest を採用)。実行はすべて `app/web` ディレクトリで行う。
 
 lint / format は **Biome** 単一ツールで行う(`lint` = `biome lint`、`format` / `format:check` = `biome format`。設定は `biome.json`)。**ESLint / Prettier は使わない。**
 
-型チェックは **tsgo**(`@typescript/native-preview`、TypeScript ネイティブ移植)で行う(`typecheck` = `tsgo --noEmit`、`build` も `tsgo --noEmit && vite build`)。**`tsc` は使わない。**
+型チェックは **tsc**(TypeScript 7.0 のネイティブコンパイラ。`typescript` パッケージに同梱)で行う(`typecheck` = `tsc --noEmit`、`build` も `tsc --noEmit && vite build`)。TypeScript 7.0 は Go 実装のネイティブコンパイラが stable 化されたもので、旧来の tsgo(`@typescript/native-preview` の日次プレビュー)はこの stable 化により不要になった(SPEC-007 で移行)。**ESLint / Prettier を使わないのと同様、型チェックは `tsc` に一本化する。**
 
 ## 依存インストール(サプライチェーン対策)
 
 Shai-Hulud 型の npm サプライチェーン攻撃(公開直後に汚染されたバージョンを掴む)への防御として、`app/web/bunfig.toml` の `[install]` に **`minimumReleaseAge`(最小公開経過日数)= 21 日 = `1814400` 秒** を設定する。公開から 21 日未満のバージョンはインストール時に除外される。
 
-- 意図的に最新を追う preview パッケージ(例: `@typescript/native-preview` = tsgo の日次ビルド)は `minimumReleaseAgeExcludes` に列挙して除外する(除外しないと更新が 21 日ブロックされる)
+- 意図的に最新を追う preview パッケージ(日次 dev ビルド等)を使う場合は `minimumReleaseAgeExcludes` に列挙して除外する(除外しないと更新が 21 日ブロックされる)。**現状、該当パッケージは無く `minimumReleaseAgeExcludes` は空**(SPEC-007 で tsgo=`@typescript/native-preview` を stable の `tsc` に置き換え、除外対象が消えた)
 - 既に `bun.lock` に固定済みのバージョンはゲートを通過する(ロック済み依存は影響を受けない)。ゲートは新規追加・更新時に効く。したがって依存追加は「必要な版を確定してから」ゲートを効かせる運用にする
+- 公開直後(21 日未満)の stable 版をどうしても前倒しで固定したい場合は **lock-then-restore**: 対象パッケージを一時的に `minimumReleaseAgeExcludes` に追加 → `bun install` で `bun.lock` に固定 → 除外を戻す。固定後はロック済みとしてゲートを通過する(SPEC-007 で `typescript@7.0.2` の導入に使用)。恒久的な除外(ゲートの無効化)にはしない
 
 ## TypeScript
 

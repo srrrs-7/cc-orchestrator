@@ -35,23 +35,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // with slog and returned as a generic 500 without leaking internal
 // details in the response body.
 func writeError(w http.ResponseWriter, err error) {
-	var transitionErr *task.TransitionError
+	var (
+		notFoundErr   *task.NotFoundError
+		validationErr *task.ValidationError
+		conflictErr   *task.ConflictError
+		dbErr         *task.DBError
+	)
 
 	switch {
-	case errors.Is(err, task.ErrNotFound):
+	case errors.As(err, &notFoundErr):
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "task not found"})
-	case errors.Is(err, task.ErrDuplicateTitle):
-		writeJSON(w, http.StatusConflict, errorResponse{Error: "task title already exists"})
-	case errors.Is(err, task.ErrEmptyTitle):
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "title must not be empty"})
-	case errors.Is(err, task.ErrTitleTooLong):
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "title is too long"})
-	case errors.Is(err, task.ErrInvalidID):
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid task id"})
-	case errors.Is(err, task.ErrInvalidPriority):
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid priority"})
-	case errors.As(err, &transitionErr):
-		writeJSON(w, http.StatusConflict, errorResponse{Error: transitionErr.Error()})
+	case errors.As(err, &validationErr):
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: validationErr.Msg})
+	case errors.As(err, &conflictErr):
+		writeJSON(w, http.StatusConflict, errorResponse{Error: conflictErr.Msg})
+	case errors.As(err, &dbErr):
+		slog.Error("route: database error", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 	default:
 		slog.Error("route: internal error", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})

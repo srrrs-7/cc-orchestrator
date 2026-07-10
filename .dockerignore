@@ -1,0 +1,49 @@
+# Repository-root .dockerignore.
+#
+# Every per-stack Dockerfile in this repo (app/{api,auth,web}/Dockerfile)
+# already sets its own build context to its own stack directory (see
+# compose.yml's build.context) and carries its own app/<stack>/.dockerignore,
+# so this root file has no effect on those builds.
+#
+# app/migrator/Dockerfile is the one exception: its build context is the
+# *repository root* (see that Dockerfile's header comment), because it also
+# COPYs app/api/db/migrations and app/auth/db/migrations, which live outside
+# app/migrator's own directory tree:
+#
+#   docker build -f app/migrator/Dockerfile .
+#
+# Without this file, that build sends the *entire* repository -- including
+# .git/ (packfile history) and app/iac/envs/dev/.terraform/ (provider
+# binaries) -- to the Docker daemon as build context on every invocation,
+# even though the Dockerfile's own COPY instructions only ever read
+# app/migrator/** and app/{api,auth}/db/migrations/**. None of the patterns
+# below match those two needed paths.
+
+# Version control metadata (never needed to build any image)
+.git
+.github
+
+# Terraform local working directories / state (see app/iac/.gitignore).
+# app/iac/envs/dev/.terraform alone is hundreds of MB of provider binaries
+# and plugin caches, none of which any app/* Dockerfile ever reads.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+
+# Secrets / local env overrides -- never intended for a build context
+.env
+.env.*
+!.env.example
+
+# JS package manager output (large; only app/web's own build reads it, via
+# bun install inside app/web's own Dockerfile build stage, never via a COPY
+# from the repository root)
+**/node_modules/
+
+# Editor / OS cruft
+.vscode
+**/.DS_Store
+
+# Docs and non-build metadata
+*.md
+docs/

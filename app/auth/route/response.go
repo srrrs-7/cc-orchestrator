@@ -13,6 +13,7 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
@@ -151,7 +152,7 @@ func writeAuthorizeError(w http.ResponseWriter, r *http.Request, redirectURI, st
 func tokenErrorCode(err error) (status int, code, description string) {
 	switch {
 	case errors.Is(err, service.ErrUnsupportedGrantType), errors.Is(err, client.ErrUnsupportedGrantType):
-		return http.StatusBadRequest, "unsupported_grant_type", "only grant_type=authorization_code is supported"
+		return http.StatusBadRequest, "unsupported_grant_type", "only grant_type=authorization_code and grant_type=refresh_token are supported"
 	case errors.Is(err, client.ErrInvalidClientID):
 		return http.StatusBadRequest, "invalid_request", "client_id is required"
 	case errors.Is(err, client.ErrNotFound):
@@ -164,6 +165,13 @@ func tokenErrorCode(err error) (status int, code, description string) {
 		errors.Is(err, authcode.ErrPKCEVerificationFailed),
 		errors.Is(err, authcode.ErrInvalidCodeVerifier):
 		return http.StatusBadRequest, "invalid_grant", "the authorization code is invalid, expired, already used, or code_verifier does not match"
+	case errors.Is(err, refreshtoken.ErrInvalidScope):
+		return http.StatusBadRequest, "invalid_scope", "requested scope exceeds the scope originally granted to this refresh token"
+	case errors.Is(err, refreshtoken.ErrNotFound),
+		errors.Is(err, refreshtoken.ErrReused),
+		errors.Is(err, refreshtoken.ErrClientMismatch),
+		errors.Is(err, refreshtoken.ErrExpired):
+		return http.StatusBadRequest, "invalid_grant", "the refresh token is invalid, expired, already used, or was not issued to this client"
 	default:
 		return 0, "", ""
 	}

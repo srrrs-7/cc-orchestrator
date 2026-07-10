@@ -65,15 +65,16 @@ const (
 //	                                 unset APP_ENV, and any unrecognized
 //	                                 APP_ENV value)
 //
-// getenv is injected (rather than reading os.Getenv directly) so this
-// pure decision can be unit-tested without mutating process-global
-// environment state; cmd/api/main.go calls SelectMode(os.Getenv).
-func SelectMode(getenv func(string) string) (Mode, error) {
-	if getenv("DB_HOST") != "" {
+// SelectMode is a pure function of its two arguments: it never reads
+// os.Getenv itself. cmd/api/main.go reads DB_HOST/APP_ENV and passes
+// them in explicitly, which keeps this decision unit-testable without
+// mutating process-global environment state.
+func SelectMode(dbHost, appEnv string) (Mode, error) {
+	if dbHost != "" {
 		return ModePostgres, nil
 	}
 
-	switch appEnv := getenv("APP_ENV"); appEnv {
+	switch appEnv {
 	case "local", "test":
 		return ModeMemory, nil
 	default:
@@ -89,6 +90,14 @@ func SelectMode(getenv func(string) string) (Mode, error) {
 // single pre-assembled DSN/URL (so the password segment can come from
 // a Secrets Manager-injected environment variable without iac ever
 // having to compose a URL containing it).
+//
+// Config has no Schema field (removed by the 2026-07-09 refactor, plan
+// §RF.2.2): api and auth now each connect to their own dedicated
+// Postgres database (DB_NAME) instead of sharing one database
+// distinguished by connection search_path, so there is nothing left to
+// select via a schema/search_path setting. Database creation and
+// migration are handled out of band by app/migrator, not this package
+// (see .claude/rules/db.md).
 type Config struct {
 	Host     string
 	Port     string
@@ -96,39 +105,15 @@ type Config struct {
 	User     string
 	Password string
 	SSLMode  string
-	Schema   string
 }
 
-// ConfigFromEnv reads Config from the discrete DB_* environment
-// variables, applying defaults for the ones that are safe to default
-// (DB_PORT, DB_SSLMODE, DB_SCHEMA). DB_HOST/DB_NAME/DB_USER/DB_PASSWORD
-// are read verbatim with no default, so DSN can reject a missing
-// required value explicitly (see DSN's doc comment) instead of
-// silently building a malformed connection string.
-func ConfigFromEnv(getenv func(string) string) Config {
-	return Config{
-		Host:     getenv("DB_HOST"),
-		Port:     orDefault(getenv("DB_PORT"), "5432"),
-		Name:     getenv("DB_NAME"),
-		User:     getenv("DB_USER"),
-		Password: getenv("DB_PASSWORD"),
-		SSLMode:  orDefault(getenv("DB_SSLMODE"), "disable"),
-		// "api" matches db/migrations' unqualified DDL: the tasks table
-		// is created in whichever schema search_path points at
-		// (docs/plans/SPEC-005-plan.md §0 "スキーマ分離機構"), and "api" is
-		// this stack's schema.
-		Schema: orDefault(getenv("DB_SCHEMA"), "api"),
-	}
-}
-
-// DSN validates cfg and assembles a libpq-style connection string
-// (postgres://user:password@host:port/name?sslmode=...&search_path=...)
-// suitable for sql.Open("pgx", ...). It returns an error listing the
-// missing field name(s) when a required setting (DB_HOST/DB_NAME/
-// DB_USER/DB_PASSWORD) is empty, rather than silently passing an empty
-// string through to sql.Open. The error text never includes
-// cfg.Password, so a fail-closed error is safe to log.
-func (cfg Config) DSN() (string, error) {
+// Validate reports a configuration error listing only the missing
+// required field *names* (DB_HOST/DB_NAME/DB_USER/DB_PASSWORD; never
+// any value, so a missing DB_PASSWORD is reported without ever
+// printing a password) when cfg lacks a value required to open a
+// connection, rather than letting DSN silently build a malformed
+// connection string. Returns nil when cfg has every required field.
+func (cfg Config) Validate() error {
 	var missing []string
 	if cfg.Host == "" {
 		missing = append(missing, "DB_HOST")
@@ -143,12 +128,19 @@ func (cfg Config) DSN() (string, error) {
 		missing = append(missing, "DB_PASSWORD")
 	}
 	if len(missing) > 0 {
-		return "", fmt.Errorf("postgres: build dsn: missing required settings: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("postgres: config: missing required settings: %s", strings.Join(missing, ", "))
 	}
+	return nil
+}
 
+// DSN assembles a libpq-style connection string
+// (postgres://user:password@host:port/name?sslmode=...) suitable for
+// sql.Open("pgx", ...). DSN performs no validation of its own (see
+// Validate); callers that need a fail-closed check on missing required
+// fields should call cfg.Validate() first, as Open does.
+func (cfg Config) DSN() string {
 	query := url.Values{}
 	query.Set("sslmode", cfg.SSLMode)
-	query.Set("search_path", cfg.Schema)
 
 	dsn := url.URL{
 		Scheme:   "postgres",
@@ -157,7 +149,7 @@ func (cfg Config) DSN() (string, error) {
 		Path:     "/" + cfg.Name,
 		RawQuery: query.Encode(),
 	}
-	return dsn.String(), nil
+	return dsn.String()
 }
 
 // Open builds a DSN from cfg, opens a *sql.DB against it using the pgx
@@ -175,12 +167,11 @@ func (cfg Config) DSN() (string, error) {
 // model (a *sql.DB is a long-lived pool handle, not itself
 // context-scoped).
 func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
-	dsn, err := cfg.DSN()
-	if err != nil {
+	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("postgres: open: %w", err)
 	}
 
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open("pgx", cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("postgres: open: %w", err)
 	}
@@ -198,11 +189,4 @@ func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
 	}
 
 	return db, nil
-}
-
-func orDefault(v, def string) string {
-	if v == "" {
-		return def
-	}
-	return v
 }

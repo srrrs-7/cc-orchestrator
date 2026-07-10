@@ -35,6 +35,17 @@ func TestParsePriority(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("ParsePriority(%q) error = %v, want wrapping %v", tt.input, err, tt.wantErr)
 				}
+				// ISSUE-018: ParsePriority must produce a
+				// *task.ValidationError (HTTP 400 category) so route can
+				// branch on the category type instead of enumerating
+				// ErrInvalidPriority individually.
+				var ve *task.ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("ParsePriority(%q) error = %v, want errors.As(&task.ValidationError{}) = true", tt.input, err)
+				}
+				if ve.Msg != "invalid priority" {
+					t.Errorf("ParsePriority(%q) ValidationError.Msg = %q, want %q", tt.input, ve.Msg, "invalid priority")
+				}
 				return
 			}
 			if err != nil {

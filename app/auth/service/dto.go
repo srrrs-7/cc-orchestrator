@@ -35,34 +35,45 @@ type AuthorizeResult struct {
 
 // TokenRequest is the application-layer input for
 // AuthorizationService.Token, built by route/token_handler.go from
-// the /token form body.
+// the /token form body. RefreshToken and Scope are used only by
+// grant_type=refresh_token (SPEC-006 R1/R7); Code/RedirectURI/
+// CodeVerifier are used only by grant_type=authorization_code.
 type TokenRequest struct {
 	GrantType    string
 	Code         string
 	RedirectURI  string
 	ClientID     string
 	CodeVerifier string
+	RefreshToken string
+	Scope        string
 }
 
 // TokenResponse is the JSON body returned for a successful /token
-// request (RFC 6749 5.1, OIDC Core 3.1.3.3).
+// request (RFC 6749 5.1, OIDC Core 3.1.3.3). RefreshToken is included
+// (SPEC-006 R2/R4) whenever the client is registered for
+// grant_type=refresh_token; it is omitted from the JSON body
+// otherwise.
 type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int64  `json:"expires_in"`
-	IDToken     string `json:"id_token"`
-	Scope       string `json:"scope"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	IDToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
 // newTokenResponse builds the TokenResponse returned from a
-// successful token exchange.
-func newTokenResponse(accessToken, idToken, scope string) TokenResponse {
+// successful token exchange. refreshToken is the plaintext refresh
+// token to include (empty when the client does not support
+// grant_type=refresh_token).
+func newTokenResponse(accessToken, idToken, scope, refreshToken string) TokenResponse {
 	return TokenResponse{
-		AccessToken: accessToken,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(token.AccessTokenTTL.Seconds()),
-		IDToken:     idToken,
-		Scope:       scope,
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    int64(token.AccessTokenTTL.Seconds()),
+		IDToken:      idToken,
+		Scope:        scope,
+		RefreshToken: refreshToken,
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
@@ -30,8 +31,6 @@ import (
 )
 
 const (
-	defaultPort     = "8080"
-	defaultIssuer   = "http://localhost:8080"
 	rsaKeyBits      = 2048
 	shutdownTimeout = 10 * time.Second
 
@@ -72,9 +71,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	issuer := os.Getenv("ISSUER")
-	if issuer == "" {
-		issuer = defaultIssuer
+	e := NewEnv()
+	mode, err := e.validate()
+	if err != nil {
+		return err // already wrapped "authz: validate env: ..."
 	}
 	// OIDC Discovery 1.0 requires a production issuer to use https;
 	// defaultIssuer's http scheme is only appropriate for local
@@ -100,7 +100,7 @@ func run() error {
 	// Repositories + demo seed data (SPEC-005: Postgres or in-memory,
 	// chosen by setupPersistence based on DB_HOST/APP_ENV -- see its
 	// doc comment for the fail-closed selection contract).
-	clientRepo, userRepo, authCodeRepo, closePersistence, err := setupPersistence(ctx)
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, err := setupPersistence(ctx, mode, e.dbConfig())
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -116,18 +116,13 @@ func run() error {
 	}
 
 	// Wiring: infra -> application service -> presentation.
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, signer, issuer, defaultUsername)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, issuer)
-	discoverySvc := service.NewDiscoveryService(issuer, keyProvider)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, defaultUsername)
+	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
+	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
 	handler := route.NewRouter(authSvc, userInfoSvc, discoverySvc)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
-
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              ":" + e.Port,
 		Handler:           handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
@@ -137,7 +132,7 @@ func run() error {
 
 	serveErr := make(chan error, 1)
 	go func() {
-		slog.Info("authz: server starting", "addr", srv.Addr, "issuer", issuer, "kid", kid)
+		slog.Info("authz: server starting", "addr", srv.Addr, "issuer", e.Issuer, "kid", kid)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
@@ -168,8 +163,10 @@ func run() error {
 }
 
 // setupPersistence is SPEC-005's persistence composition block: it
-// chooses between infra/postgres and infra/memory based on DB_HOST /
-// APP_ENV, via postgres.SelectMode's fail-closed contract --
+// wires infra/postgres or infra/memory depending on the mode/cfg the
+// caller provides. mode and cfg are resolved once, up front, by
+// Env.validate/Env.dbConfig (env.go) via postgres.SelectMode's
+// fail-closed contract --
 //
 //   - DB_HOST set        -> Postgres, regardless of APP_ENV
 //   - DB_HOST unset,
@@ -184,55 +181,49 @@ func run() error {
 // in-memory storage (docs/plans/SPEC-005-plan.md §0 "切替の env / DSN
 // / 本番必須強制").
 //
-// It returns the three repositories as their domain-declared
+// It returns the four repositories as their domain-declared
 // interfaces (client.Repository / user.Repository /
-// authcode.Repository) -- the rest of run() never needs to know which
-// backend is in play -- plus a closePersistence func the caller MUST
-// defer-call during shutdown to release any pooled Postgres
-// connections (a no-op for the in-memory backend, per
-// infra/postgres.Open's ctx-bound-ping-only lifecycle contract).
-func setupPersistence(ctx context.Context) (client.Repository, user.Repository, authcode.Repository, func() error, error) {
+// authcode.Repository / refreshtoken.Repository -- the last added by
+// SPEC-006) -- the rest of run() never needs to know which backend is
+// in play -- plus a closePersistence func the caller MUST defer-call
+// during shutdown to release any pooled Postgres connections (a no-op
+// for the in-memory backend, per infra/postgres.Open's
+// ctx-bound-ping-only lifecycle contract).
+func setupPersistence(ctx context.Context, mode postgres.Mode, cfg postgres.Config) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, error) {
 	noopClose := func() error { return nil }
-
-	mode, err := postgres.SelectMode(os.Getenv("DB_HOST"), os.Getenv("APP_ENV"))
-	if err != nil {
-		return nil, nil, nil, noopClose, fmt.Errorf("select persistence mode: %w", err)
-	}
 
 	switch mode {
 	case postgres.ModeMemory:
 		clientRepo := memory.NewClientRepository()
 		userRepo := memory.NewUserRepository()
 		authCodeRepo := memory.NewAuthCodeRepository()
+		refreshTokenRepo := memory.NewRefreshTokenRepository()
 		if err := seedMemory(clientRepo, userRepo); err != nil {
-			return nil, nil, nil, noopClose, fmt.Errorf("seed demo data (memory): %w", err)
+			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (memory): %w", err)
 		}
 		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, noopClose, nil
+		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, noopClose, nil
 
 	case postgres.ModePostgres:
-		cfg, err := postgres.ConfigFromEnv()
-		if err != nil {
-			return nil, nil, nil, noopClose, fmt.Errorf("postgres config: %w", err)
-		}
 		db, err := postgres.Open(ctx, cfg)
 		if err != nil {
-			return nil, nil, nil, noopClose, fmt.Errorf("postgres open: %w", err)
+			return nil, nil, nil, nil, noopClose, fmt.Errorf("postgres open: %w", err)
 		}
 		if err := seedPostgres(ctx, db); err != nil {
 			_ = db.Close()
-			return nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
+			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
 		}
 		clientRepo := postgres.NewClientRepository(db)
 		userRepo := postgres.NewUserRepository(db)
 		authCodeRepo := postgres.NewAuthCodeRepository(db)
+		refreshTokenRepo := postgres.NewRefreshTokenRepository(db)
 		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, db.Close, nil
+		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, db.Close, nil
 
 	default:
 		// Unreachable: SelectMode only ever returns ModeMemory,
 		// ModePostgres, or a non-nil error.
-		return nil, nil, nil, noopClose, fmt.Errorf("select persistence mode: unexpected mode %q", mode)
+		return nil, nil, nil, nil, noopClose, fmt.Errorf("select persistence mode: unexpected mode %q", mode)
 	}
 }
 
@@ -255,7 +246,7 @@ func buildDemoClient() (*client.Client, error) {
 		[]client.RedirectURI{redirectURI},
 		[]string{"openid", "profile", "email"},
 		[]string{"code"},
-		[]string{"authorization_code"},
+		[]string{"authorization_code", "refresh_token"},
 	), nil
 }
 

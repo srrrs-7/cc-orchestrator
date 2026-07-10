@@ -44,7 +44,7 @@ func (s *TaskService) Create(ctx context.Context, title, priority string) (TaskD
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
 	}
 	if duplicated {
-		return TaskDTO{}, fmt.Errorf("service: create task: %w", task.ErrDuplicateTitle)
+		return TaskDTO{}, fmt.Errorf("service: create task: %w", task.NewDuplicateTitleError())
 	}
 
 	newTask := task.New(t, p)

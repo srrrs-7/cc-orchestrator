@@ -30,6 +30,8 @@ func (h *tokenHandler) handle(w http.ResponseWriter, r *http.Request) {
 		RedirectURI:  r.PostFormValue("redirect_uri"),
 		ClientID:     r.PostFormValue("client_id"),
 		CodeVerifier: r.PostFormValue("code_verifier"),
+		RefreshToken: r.PostFormValue("refresh_token"),
+		Scope:        r.PostFormValue("scope"),
 	}
 
 	resp, err := h.svc.Token(r.Context(), req)

@@ -69,13 +69,14 @@ func openTestDB(t *testing.T) *sql.DB {
 
 // testDSN assembles a libpq-style connection string from the discrete
 // DB_* environment variables (DB_HOST/DB_PORT/DB_NAME/DB_USER/
-// DB_PASSWORD/DB_SSLMODE/DB_SCHEMA). DB_SCHEMA is applied via
-// search_path so the suite runs against the "auth" schema (SPEC-005
-// R3), matching the non-qualified migrations/queries (plan §0 "スキーマ
-// 分離機構"). The defaults below are fallbacks for local ad-hoc runs
-// and are expected to mirror docker/postgres/initdb (impl-db); they
-// carry no meaningful secret (matching values only exist in a local,
-// disposable compose Postgres).
+// DB_PASSWORD/DB_SSLMODE). DB_NAME defaults to "auth" (this stack's
+// own dedicated Postgres database, per the 2026-07-09 refactor,
+// SPEC-005 plan §RF.1.1: api and auth are separated by database, not
+// by schema/search_path -- app/migrator creates and migrates it, see
+// .claude/rules/db.md). The defaults below are fallbacks for local
+// ad-hoc runs and are expected to mirror compose.yml's auth service
+// (impl-db); they carry no meaningful secret (matching values only
+// exist in a local, disposable compose Postgres).
 func testDSN() string {
 	env := func(key, def string) string {
 		if v := os.Getenv(key); v != "" {
@@ -85,15 +86,13 @@ func testDSN() string {
 	}
 	host := env("DB_HOST", "127.0.0.1")
 	port := env("DB_PORT", "5432")
-	name := env("DB_NAME", "app")
+	name := env("DB_NAME", "auth")
 	user := env("DB_USER", "app")
 	password := env("DB_PASSWORD", "app")
 	sslmode := env("DB_SSLMODE", "disable")
-	schema := env("DB_SCHEMA", "auth")
 
 	values := url.Values{}
 	values.Set("sslmode", sslmode)
-	values.Set("search_path", schema)
 
 	u := url.URL{
 		Scheme:   "postgres",

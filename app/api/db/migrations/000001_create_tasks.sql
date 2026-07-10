@@ -1,10 +1,11 @@
 -- +goose Up
 -- SPEC-005 R1/R3: the tasks table backs domain/task.Repository. It is
--- deliberately unqualified (no schema prefix) -- the "api" schema is
--- selected purely via the connection's search_path (plan §0 "スキーマ
--- 分離機構"), so this file is byte-identical regardless of which
--- schema it ends up applied to. Schema creation itself happens outside
--- goose (local: docker/postgres/initdb, prod: iac bootstrap).
+-- deliberately unqualified (no schema/database prefix) -- api connects
+-- to its own dedicated Postgres database ("api"; 2026-07-09 refactor,
+-- plan §RF.1.1), so this file is byte-identical regardless of which
+-- database it ends up applied to and lands in that database's default
+-- "public" schema. Database creation itself happens outside goose, via
+-- app/migrator (local/CI/prod alike; see .claude/rules/db.md).
 --
 -- Column choices mirror the Task aggregate's value objects exactly, so
 -- infra/postgres/task_repository.go can round-trip every field via

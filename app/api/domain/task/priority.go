@@ -1,7 +1,5 @@
 package task
 
-import "fmt"
-
 // Priority is a value object representing a Task's priority.
 type Priority struct {
 	value string
@@ -32,6 +30,6 @@ func ParsePriority(s string) (Priority, error) {
 	case PriorityHigh.value:
 		return PriorityHigh, nil
 	default:
-		return Priority{}, fmt.Errorf("task: parse priority %q: %w", s, ErrInvalidPriority)
+		return Priority{}, &ValidationError{Msg: "invalid priority", Err: ErrInvalidPriority}
 	}
 }

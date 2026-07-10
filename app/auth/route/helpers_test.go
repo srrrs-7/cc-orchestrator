@@ -34,6 +34,17 @@ const (
 	testUserID      = "user-sub-1"
 	testUserName    = "Test User"
 	testUserEmail   = "test-user@example.com"
+
+	// testClientID2 is a second registered client, distinct from
+	// testClientID, used by refresh_token tests that need a
+	// legitimately registered (but different) client to exercise
+	// RFC 6749 §6 client binding (SPEC-006 R6): presenting a refresh
+	// token issued to testClientID while authenticating as
+	// testClientID2 must be rejected as invalid_grant, not
+	// invalid_client/unsupported_grant_type -- so testClientID2 also
+	// supports grant_type=refresh_token.
+	testClientID2    = "test-client-2"
+	testRedirectURI2 = "http://localhost:3000/callback2"
 )
 
 // testRSAKey is generated once for the whole route_test package (RSA
@@ -59,6 +70,7 @@ func newTestHandler(t *testing.T) http.Handler {
 	clientRepo := memory.NewClientRepository()
 	userRepo := memory.NewUserRepository()
 	authCodeRepo := memory.NewAuthCodeRepository()
+	refreshTokenRepo := memory.NewRefreshTokenRepository()
 
 	cid, err := client.ParseClientID(testClientID)
 	if err != nil {
@@ -73,9 +85,29 @@ func newTestHandler(t *testing.T) http.Handler {
 		[]client.RedirectURI{redirectURI},
 		[]string{"openid", "profile", "email"},
 		[]string{"code"},
-		[]string{"authorization_code"},
+		[]string{"authorization_code", "refresh_token"},
 	)
 	clientRepo.Seed(demoClient)
+
+	// A second, distinct client (also supporting refresh_token) used
+	// by SPEC-006's client-binding tests (R6): see testClientID2's doc
+	// comment above.
+	cid2, err := client.ParseClientID(testClientID2)
+	if err != nil {
+		t.Fatalf("setup ParseClientID() unexpected error: %v", err)
+	}
+	redirectURI2, err := client.NewRedirectURI(testRedirectURI2)
+	if err != nil {
+		t.Fatalf("setup NewRedirectURI() unexpected error: %v", err)
+	}
+	otherClient := client.New(
+		cid2,
+		[]client.RedirectURI{redirectURI2},
+		[]string{"openid", "profile", "email"},
+		[]string{"code"},
+		[]string{"authorization_code", "refresh_token"},
+	)
+	clientRepo.Seed(otherClient)
 
 	uid, err := user.ParseUserID(testUserID)
 	if err != nil {
@@ -100,7 +132,7 @@ func newTestHandler(t *testing.T) http.Handler {
 	verifier := jwt.NewVerifier(&testRSAKey.PublicKey)
 	keyProvider := jwt.NewKeyProvider(&testRSAKey.PublicKey, kid)
 
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, signer, testIssuer, username)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer, username)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
@@ -175,12 +207,56 @@ func issueAuthCode(t *testing.T, h http.Handler, challenge, scope, nonce string)
 	return code
 }
 
+// issueTokens drives a full authorize -> token (grant_type=
+// authorization_code) exchange using a fixed PKCE verifier, and
+// returns the decoded token response -- including the freshly issued
+// refresh_token, since testClientID supports grant_type=refresh_token
+// (SPEC-006 R2). It fails the test (t.Fatalf) on any unexpected
+// status, so callers can treat it as pure setup.
+func issueTokens(t *testing.T, h http.Handler, scope, nonce string) tokenResponseBody {
+	t.Helper()
+
+	verifier := strings.Repeat("A", 43)
+	code := issueAuthCode(t, h, pkceChallenge(verifier), scope, nonce)
+
+	rec := doToken(t, h, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {testRedirectURI},
+		"client_id":     {testClientID},
+		"code_verifier": {verifier},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup: token exchange status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	return decodeTokenResponse(t, rec)
+}
+
+// doRefreshToken drives a POST /token request with
+// grant_type=refresh_token (SPEC-006 R1). scope is only sent when
+// non-empty, matching the optional scope parameter's semantics (RFC
+// 6749 §6: omitting it means "use the scope originally granted").
+func doRefreshToken(t *testing.T, h http.Handler, refreshToken, clientID, scope string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}
+	if scope != "" {
+		form.Set("scope", scope)
+	}
+	return doToken(t, h, form)
+}
+
 type tokenResponseBody struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int64  `json:"expires_in"`
-	IDToken     string `json:"id_token"`
-	Scope       string `json:"scope"`
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	IDToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type errorBody struct {

@@ -33,6 +33,11 @@ output "auth_ecr_repository_url" {
   value       = module.service_auth.ecr_repository_url
 }
 
+output "migrator_ecr_repository_url" {
+  description = "ECR repository URL to push the shared app/migrator image to (linux/arm64; both api's and auth's migration init containers pull this same image, distinguished by -target, see envs/dev/migrator.tf)."
+  value       = aws_ecr_repository.migrator.repository_url
+}
+
 output "rds_endpoint" {
   description = "RDS instance hostname."
   value       = module.db.db_endpoint

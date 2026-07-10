@@ -18,19 +18,16 @@
 // ロジック/DSN 組み立て(ユニット・DB 非依存)"), so it runs as part of the
 // default `make test` and requires no live Postgres.
 //
-// SPEC-005 phase E1 note: this file replaces the phase B1 outline
-// (persistence_selection_outline_test.go, all-t.Skip) now that
-// impl-db has landed the real postgres.SelectMode /
-// postgres.ConfigFromEnv / (postgres.Config).DSN() in db.go. The
-// behavioral target table below is unchanged from the outline.
-//
-// Unlike app/api's ConfigFromEnv (which takes an injected
-// func(string) string), app/auth's ConfigFromEnv reads os.Getenv
-// directly and returns (Config, error) -- so the ConfigFromEnv-level
-// tests below use t.Setenv (auto-restored per test) rather than a
-// map-backed getenv, and unset a variable by setting it to "" (which
-// os.Getenv-based ConfigFromEnv treats identically to "not present",
-// since it only ever checks for the empty string).
+// env.go refactor note: postgres.ConfigFromEnv is removed entirely --
+// cmd/authz's env.go (package main) is now the sole place this module
+// reads os.Getenv (see cmd/authz/env_test.go for that coverage,
+// including the defaults previously asserted here via ConfigFromEnv).
+// postgres.SelectMode's signature is unchanged (it already took the
+// two already-read string values, dbHost/appEnv, directly rather than
+// reading os.Getenv itself), so those tests are kept as-is below. This
+// file now covers only postgres.SelectMode and the pure
+// postgres.Config methods (Validate/DSN), built from explicit literals
+// instead of the removed setDBEnv/t.Setenv helper.
 package postgres_test
 
 import (
@@ -124,57 +121,24 @@ func TestSelectMode_FailClosedErrorNeverLeaksDBPassword(t *testing.T) {
 	}
 }
 
-// setDBEnv sets every discrete DB_* variable ConfigFromEnv reads,
-// using t.Setenv (which auto-restores the prior value once the test
-// ends) so this test never leaks environment mutations into other
-// tests in this package -- including the //go:build integration
-// tests, which read the same DB_* variables to reach a real database.
-// An empty string for a given field simulates that variable being
-// unset, since ConfigFromEnv only ever checks os.Getenv(...) == "".
-func setDBEnv(t *testing.T, host, port, name, user, password, sslmode, schema string) {
-	t.Helper()
-	t.Setenv("DB_HOST", host)
-	t.Setenv("DB_PORT", port)
-	t.Setenv("DB_NAME", name)
-	t.Setenv("DB_USER", user)
-	t.Setenv("DB_PASSWORD", password)
-	t.Setenv("DB_SSLMODE", sslmode)
-	t.Setenv("DB_SCHEMA", schema)
-}
-
-// TestConfigFromEnv_ReflectsEveryDiscreteVar asserts every DB_* knob
-// ConfigFromEnv reads is represented both in the returned Config and
-// in the DSN string (postgres.Config).DSN() assembles from it
-// (order-independent field checks, not a fixed string layout), and
-// that api/auth resolve to different schemas from the same
-// DB_HOST/DB_NAME (only DB_SCHEMA differs between the stacks).
-func TestConfigFromEnv_ReflectsEveryDiscreteVar(t *testing.T) {
-	setDBEnv(t, "db.internal", "6543", "appdb", "appuser", "s3cret-pw", "require", "auth")
-
-	cfg, err := postgres.ConfigFromEnv()
-	if err != nil {
-		t.Fatalf("ConfigFromEnv() unexpected error: %v", err)
-	}
-	if cfg.Host != "db.internal" {
-		t.Errorf("Config.Host = %q, want %q", cfg.Host, "db.internal")
-	}
-	if cfg.Port != "6543" {
-		t.Errorf("Config.Port = %q, want %q", cfg.Port, "6543")
-	}
-	if cfg.Name != "appdb" {
-		t.Errorf("Config.Name = %q, want %q", cfg.Name, "appdb")
-	}
-	if cfg.User != "appuser" {
-		t.Errorf("Config.User = %q, want %q", cfg.User, "appuser")
-	}
-	if cfg.Password != "s3cret-pw" {
-		t.Errorf("Config.Password = %q, want %q", cfg.Password, "s3cret-pw")
-	}
-	if cfg.SSLMode != "require" {
-		t.Errorf("Config.SSLMode = %q, want %q", cfg.SSLMode, "require")
-	}
-	if cfg.Schema != "auth" {
-		t.Errorf("Config.Schema = %q, want %q (app/auth's schema, distinct from app/api's \"api\")", cfg.Schema, "auth")
+// TestConfigDSN_ReflectsEveryField asserts every field of a
+// fully-populated postgres.Config is represented in the DSN string
+// (postgres.Config).DSN() assembles from it (order-independent field
+// checks via net/url, not a fixed string layout), and that no
+// search_path parameter is set.
+//
+// Config carries no Schema field (removed by the 2026-07-09 refactor,
+// SPEC-005 plan §RF.2.3): auth now connects to its own dedicated
+// Postgres database (Name) rather than a shared database selected via
+// connection search_path.
+func TestConfigDSN_ReflectsEveryField(t *testing.T) {
+	cfg := postgres.Config{
+		Host:     "db.internal",
+		Port:     "6543",
+		Name:     "appdb",
+		User:     "appuser",
+		Password: "s3cret-pw",
+		SSLMode:  "require",
 	}
 
 	dsn := cfg.DSN()
@@ -185,89 +149,92 @@ func TestConfigFromEnv_ReflectsEveryDiscreteVar(t *testing.T) {
 	if u.Scheme != "postgres" {
 		t.Errorf("DSN() scheme = %q, want %q", u.Scheme, "postgres")
 	}
-	if u.Hostname() != "db.internal" {
-		t.Errorf("DSN() host = %q, want %q", u.Hostname(), "db.internal")
+	if u.Hostname() != cfg.Host {
+		t.Errorf("DSN() host = %q, want %q", u.Hostname(), cfg.Host)
 	}
-	if u.Port() != "6543" {
-		t.Errorf("DSN() port = %q, want %q", u.Port(), "6543")
+	if u.Port() != cfg.Port {
+		t.Errorf("DSN() port = %q, want %q", u.Port(), cfg.Port)
 	}
-	if got, want := strings.TrimPrefix(u.Path, "/"), "appdb"; got != want {
+	if got, want := strings.TrimPrefix(u.Path, "/"), cfg.Name; got != want {
 		t.Errorf("DSN() path = %q, want %q", got, want)
 	}
-	if u.User.Username() != "appuser" {
-		t.Errorf("DSN() user = %q, want %q", u.User.Username(), "appuser")
+	if u.User.Username() != cfg.User {
+		t.Errorf("DSN() user = %q, want %q", u.User.Username(), cfg.User)
 	}
-	if pw, _ := u.User.Password(); pw != "s3cret-pw" {
-		t.Errorf("DSN() password = %q, want %q", pw, "s3cret-pw")
+	if pw, _ := u.User.Password(); pw != cfg.Password {
+		t.Errorf("DSN() password = %q, want %q", pw, cfg.Password)
 	}
-	if got := u.Query().Get("sslmode"); got != "require" {
-		t.Errorf("DSN() sslmode = %q, want %q", got, "require")
+	if got := u.Query().Get("sslmode"); got != cfg.SSLMode {
+		t.Errorf("DSN() sslmode = %q, want %q", got, cfg.SSLMode)
 	}
-	if got := u.Query().Get("search_path"); got != "auth" {
-		t.Errorf("DSN() search_path = %q, want %q (R3: schema separation via search_path)", got, "auth")
-	}
-}
-
-// TestConfigFromEnv_Defaults confirms DB_PORT/DB_SSLMODE/DB_SCHEMA
-// fall back to safe local-development defaults when unset, while the
-// four required settings carry no default. app/auth's default schema
-// ("auth") is asserted to differ from app/api's ("api"), matching
-// docs/plans/SPEC-005-plan.md §0 "スキーマ分離機構".
-func TestConfigFromEnv_Defaults(t *testing.T) {
-	setDBEnv(t, "db.internal", "", "appdb", "appuser", "pw", "", "")
-
-	cfg, err := postgres.ConfigFromEnv()
-	if err != nil {
-		t.Fatalf("ConfigFromEnv() unexpected error: %v", err)
-	}
-	if cfg.Port != "5432" {
-		t.Errorf("Config.Port default = %q, want %q", cfg.Port, "5432")
-	}
-	if cfg.SSLMode != "disable" {
-		t.Errorf("Config.SSLMode default = %q, want %q", cfg.SSLMode, "disable")
-	}
-	if cfg.Schema != "auth" {
-		t.Errorf("Config.Schema default = %q, want %q (app/auth's schema)", cfg.Schema, "auth")
+	if u.Query().Has("search_path") {
+		t.Errorf("DSN() unexpectedly sets search_path=%q (R3/RF.1.1: database separation replaces schema separation)", u.Query().Get("search_path"))
 	}
 }
 
-// TestConfigFromEnv_MissingRequiredVar_RejectsExplicitly asserts that
-// ConfigFromEnv rejects a missing required variable (e.g. DB_NAME,
-// with DB_HOST otherwise set) with an explicit error naming it,
-// rather than returning a Config whose empty Name would later be
-// silently embedded in a malformed DSN passed to sql.Open.
-func TestConfigFromEnv_MissingRequiredVar_RejectsExplicitly(t *testing.T) {
-	setDBEnv(t, "db.internal", "5432", "" /* DB_NAME missing */, "appuser", "pw", "disable", "auth")
+// TestConfigValidate_MissingRequired asserts that Validate rejects a
+// Config missing required fields (DB_NAME/DB_USER, with DB_HOST
+// otherwise set) by naming exactly the missing variables, rather than
+// letting a caller silently build a malformed DSN.
+func TestConfigValidate_MissingRequired(t *testing.T) {
+	cfg := postgres.Config{
+		Host:     "db.internal",
+		Password: "pw",
+		// Name, User deliberately empty.
+	}
 
-	cfg, err := postgres.ConfigFromEnv()
+	err := cfg.Validate()
 	if err == nil {
-		t.Fatalf("ConfigFromEnv() = (%+v, nil), want an error naming the missing DB_NAME", cfg)
+		t.Fatal("Validate() = nil, want an error naming the missing DB_NAME/DB_USER")
 	}
-	if !strings.Contains(err.Error(), "DB_NAME") {
-		t.Errorf("ConfigFromEnv() error = %q, want it to name the missing variable DB_NAME", err.Error())
+	for _, want := range []string{"DB_NAME", "DB_USER"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate() error = %q, want it to name missing variable %s", err.Error(), want)
+		}
+	}
+	if strings.Contains(err.Error(), "DB_HOST") {
+		t.Errorf("Validate() error = %q, unexpectedly names DB_HOST, which was set", err.Error())
 	}
 }
 
-// TestConfigFromEnv_ErrorNeverLeaksPassword is the R6 security
-// assertion for ConfigFromEnv: when validation fails, the returned
-// error lists only missing variable *names* -- never DB_PASSWORD's
-// actual value, even though DB_PASSWORD was supplied alongside a
-// missing required field.
-func TestConfigFromEnv_ErrorNeverLeaksPassword(t *testing.T) {
+// TestConfigValidate_ErrorNeverLeaksPassword is the R6 security
+// assertion for Validate: when validation fails, the returned error
+// lists only missing variable *names* -- never DB_PASSWORD's actual
+// value, even though Password was supplied alongside missing required
+// fields.
+func TestConfigValidate_ErrorNeverLeaksPassword(t *testing.T) {
 	const secret = "sup3r-s3cret-db-password"
-	// DB_HOST/DB_NAME/DB_USER all deliberately empty; only DB_PASSWORD is set.
-	setDBEnv(t, "", "5432", "", "", secret, "disable", "auth")
+	cfg := postgres.Config{
+		Host:     "db.internal",
+		Password: secret,
+		// Name, User deliberately empty.
+	}
 
-	_, err := postgres.ConfigFromEnv()
+	err := cfg.Validate()
 	if err == nil {
-		t.Fatal("ConfigFromEnv() = nil error, want an error (DB_HOST/DB_NAME/DB_USER all missing)")
+		t.Fatal("Validate() = nil, want an error (Name/User missing)")
 	}
 	if strings.Contains(err.Error(), secret) {
-		t.Errorf("ConfigFromEnv() error %q leaks the DB_PASSWORD value", err.Error())
+		t.Errorf("Validate() error %q leaks the DB_PASSWORD value", err.Error())
 	}
-	for _, want := range []string{"DB_HOST", "DB_NAME", "DB_USER"} {
+	for _, want := range []string{"DB_NAME", "DB_USER"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("ConfigFromEnv() error = %q, want it to name missing variable %s", err.Error(), want)
+			t.Errorf("Validate() error = %q, want it to name missing variable %s", err.Error(), want)
 		}
+	}
+}
+
+// TestConfigValidate_AllRequiredFieldsPresent is the 正常系 case: a
+// Config carrying every required field passes Validate with no error.
+func TestConfigValidate_AllRequiredFieldsPresent(t *testing.T) {
+	cfg := postgres.Config{
+		Host:     "db.internal",
+		Name:     "appdb",
+		User:     "appuser",
+		Password: "pw",
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() unexpected error: %v", err)
 	}
 }

@@ -36,7 +36,7 @@ func NewTaskRepository() *TaskRepository {
 func (r *TaskRepository) Save(ctx context.Context, t *task.Task) error {
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("memory: save task: %w", ctx.Err())
+		return fmt.Errorf("memory: save task: %w", task.NewDBError(ctx.Err()))
 	default:
 	}
 
@@ -52,7 +52,7 @@ func (r *TaskRepository) Save(ctx context.Context, t *task.Task) error {
 func (r *TaskRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("memory: find task by id: %w", ctx.Err())
+		return nil, fmt.Errorf("memory: find task by id: %w", task.NewDBError(ctx.Err()))
 	default:
 	}
 
@@ -61,7 +61,7 @@ func (r *TaskRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, 
 
 	t, ok := r.tasks[id]
 	if !ok {
-		return nil, fmt.Errorf("memory: find task by id: %w", task.ErrNotFound)
+		return nil, fmt.Errorf("memory: find task by id: %w", task.NewNotFoundError())
 	}
 	return clone(t), nil
 }
@@ -71,7 +71,7 @@ func (r *TaskRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, 
 func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("memory: find task by title: %w", ctx.Err())
+		return nil, fmt.Errorf("memory: find task by title: %w", task.NewDBError(ctx.Err()))
 	default:
 	}
 
@@ -83,14 +83,14 @@ func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*ta
 			return clone(t), nil
 		}
 	}
-	return nil, fmt.Errorf("memory: find task by title: %w", task.ErrNotFound)
+	return nil, fmt.Errorf("memory: find task by title: %w", task.NewNotFoundError())
 }
 
 // FindAll returns every Task currently stored.
 func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("memory: find all tasks: %w", ctx.Err())
+		return nil, fmt.Errorf("memory: find all tasks: %w", task.NewDBError(ctx.Err()))
 	default:
 	}
 

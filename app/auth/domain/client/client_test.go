@@ -24,7 +24,7 @@ func newTestClient(t *testing.T) *client.Client {
 		[]client.RedirectURI{redirectURI},
 		[]string{"openid", "profile", "email"},
 		[]string{"code"},
-		[]string{"authorization_code"},
+		[]string{"authorization_code", "refresh_token"},
 	)
 }
 
@@ -70,8 +70,8 @@ func TestClient_SupportsGrantType(t *testing.T) {
 	if !c.SupportsGrantType("authorization_code") {
 		t.Error("SupportsGrantType(\"authorization_code\") = false, want true")
 	}
-	if c.SupportsGrantType("refresh_token") {
-		t.Error("SupportsGrantType(\"refresh_token\") = true, want false (unsupported grant)")
+	if !c.SupportsGrantType("refresh_token") {
+		t.Error("SupportsGrantType(\"refresh_token\") = false, want true")
 	}
 }
 

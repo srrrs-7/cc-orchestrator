@@ -7,7 +7,7 @@ Follow the conventions below when suggesting or editing code.
 
 | Path | Stack | Tooling |
 |---|---|---|
-| `app/web` | Frontend (TypeScript / React) | Bun, Biome, tsgo, Vitest, Vite |
+| `app/web` | Frontend (TypeScript / React) | Bun, Biome, tsc, Vitest, Vite |
 | `app/api` | Backend API (Go, DDD) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
 | `app/auth` | Auth API (Go, OAuth 2.0 + OIDC) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
 | `app/iac` | Infrastructure (Terraform / AWS) | Terraform `>= 1.10`, tflint, trivy |
@@ -40,7 +40,7 @@ Do not change code outside the stack you are working in.
 - Function components + hooks only (no class components). Separate server state (API data via TanStack Query) from client/UI state; do not copy server state into `useState`.
 - One-way layering `components → hooks → (api | domain)`. Business rules (state transitions, invariants, derived values, filter/sort) live in `features/<feature>/domain/` as pure, React/DOM/fetch-free functions; components and hooks call them and hold no logic. Isolate side effects in hooks.
 - Do not use array index as a list `key` (except static, never-reordered lists).
-- Lint/format with **Biome** (not ESLint/Prettier); type-check with **tsgo** (not `tsc`). Runtime and package manager is **Bun**.
+- Lint/format with **Biome** (not ESLint/Prettier); type-check with **tsc** (TypeScript 7 native). Runtime and package manager is **Bun**.
 - Supply-chain: `bunfig.toml` sets `minimumReleaseAge` (21 days) to avoid freshly published (potentially compromised) versions. Pin new dependencies to a known-good version.
 - Tests: Vitest + React Testing Library; query by role/label (user-facing), not implementation details.
 

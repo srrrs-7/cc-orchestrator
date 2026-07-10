@@ -91,25 +91,31 @@ terraform plan
 push するイメージは `runtime_platform = ARM64` に合わせて **必ず linux/arm64 でビルド**する
 こと(R4。build-push 手順は root `Makefile` を参照)。
 
-## Postgres 永続化・マイグレーション init コンテナについて(SPEC-005)
+## Postgres 永続化・マイグレーション init コンテナについて(SPEC-005、RF リファクタリング後)
 
-`module.service_api` / `module.service_auth` はいずれも `module.db`(RDS PostgreSQL、単一
-データベースを api/auth で共有・別スキーマ)への接続情報を `DB_HOST` / `DB_PORT` / `DB_NAME` /
-`DB_SSLMODE`(`var.db_sslmode`、既定 `"require"`)/ `DB_SCHEMA`(api=`"api"` / auth=`"auth"`)の
-plain env と、`DB_USER` / `DB_PASSWORD`(`module.db.master_user_secret_arn` の JSON key を
-ECS `secrets` の `:username::` / `:password::` で個別参照)として受け取る(R6。詳細な設計判断は
-`modules/db/README.md` を参照)。
+`module.service_api` / `module.service_auth` はいずれも `module.db`(RDS PostgreSQL、同一
+インスタンス上に api/auth それぞれ専用のデータベースを持つ。SPEC-005 plan RF.1.1)への接続情報を
+`DB_HOST` / `DB_PORT` / `DB_NAME`(api=`"api"` / auth=`"auth"`、per-service)/ `DB_SSLMODE`
+(`var.db_sslmode`、既定 `"require"`)の plain env と、`DB_USER` / `DB_PASSWORD`
+(`module.db.master_user_secret_arn` の JSON key を ECS `secrets` の `:username::` /
+`:password::` で個別参照)として受け取る(R6。`DB_SCHEMA`/`search_path` は初回実装のみで、この
+リファクタリング後は使わない。詳細な設計判断は `modules/db/README.md` を参照)。
 
-さらに両サービスとも、アプリ本体の起動前に `goose up`(+ スキーマの `CREATE SCHEMA IF NOT
-EXISTS`)を実行する **migrate init コンテナ**(`var.migration_environment` / `migration_secrets`
-/ `migration_image`)を配線している(R5。方式・並行実行の注意・代替案は
-`modules/service/README.md` の「マイグレーション init コンテナ」を参照)。
+さらに両サービスとも、アプリ本体の起動前に対象データベースを作成(`CREATE DATABASE`、未存在時
+のみ)し `goose up` を実行する **migrate init コンテナ**(`var.migration_environment` /
+`migration_secrets` / `migration_image` / `migration_command`)を配線している(R5。api/auth は
+**同一の共有 `app/migrator` イメージ**(`aws_ecr_repository.migrator`、`migrator.tf`)を
+`migration_command = ["-target", "api"|"auth"]` の違いだけで実行する。`migration_environment`
+には `DB_MAINTENANCE_NAME`(既定 `"postgres"`。`CREATE DATABASE` 用の接続先で、RDS で
+`"postgres"` が使えない場合は `module.db.db_name` へ差し替え可能)も含む。方式・並行実行の注意・
+代替案は `modules/service/README.md` の「マイグレーション init コンテナ」を参照)。
 
-**apply 前の前提条件**: `var.migration_image` は既定で各サービス自身の ECR リポジトリの
-`:migrate` タグを指すが、このタグにイメージはまだ push されていない(`Dockerfile.migrate` の
-push 経路は本 Spec の範囲外として後続に委ねられている、SPEC-005 plan §6.2 R-h)。**`:migrate`
-イメージを両サービス分 push してから `apply` すること**。push せずに `apply` すると、新しい
-デプロイのタスクが migrate コンテナのイメージ pull に失敗して起動できず、ロールアウトが
+**apply 前の前提条件**: `var.migration_image`(両サービスとも `aws_ecr_repository.migrator` の
+`:latest` タグ)は Terraform が作るのはリポジトリのみで、イメージ自体はまだ push されていない
+(push 経路は本 Spec の範囲外として後続に委ねられている、SPEC-005 plan RF.6.1 RF-b)。**共有
+migrator イメージを push してから `apply` すること**(api/auth それぞれに別イメージを push する
+必要はない。1 つの push で両サービスの migrate コンテナに反映される)。push せずに `apply` すると、
+新しいデプロイのタスクが migrate コンテナのイメージ pull に失敗して起動できず、ロールアウトが
 詰まる(既存の running タスクはそのまま残るため、既存の可用性への直接影響は無い)。
 
 ## web(SPA)のデプロイについて

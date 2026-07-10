@@ -127,7 +127,7 @@ variable "secret_read_arns" {
 
 variable "migration_image" {
   type        = string
-  description = "Container image URI (repository:tag) for the pre-start migration (init) container that runs the database bootstrap/migration step (`CREATE SCHEMA IF NOT EXISTS <schema>` + `goose up`) before the app container starts (SPEC-005 R5). Leave empty (default) to use this module's own ECR repository at the \":migrate\" tag -- a separate image built from app/{api,auth}/Dockerfile.migrate (pinned goose CLI + db/migrations baked in; see module README \"マイグレーション init コンテナ\"). Only used when var.migration_environment is non-empty."
+  description = "Container image URI (repository:tag) for the pre-start migration (init) container that runs the database bootstrap/migration step (app/migrator: create the target database if missing, then `goose up`) before the app container starts (SPEC-005 R5). Unlike var.container_image, there is no own-ECR-repository default: api and auth share a single app/migrator image (one shared ECR repository, see envs/dev), distinguished only by var.migration_command (`-target api` / `-target auth`), so the caller must pass this explicitly whenever var.migration_environment is non-empty."
   default     = ""
 }
 
@@ -136,7 +136,7 @@ variable "migration_environment" {
     name  = string
     value = string
   }))
-  description = "Plain (non-secret) environment variables for the migration init container (typically DB_HOST/DB_PORT/DB_NAME/DB_SSLMODE/DB_SCHEMA). Leave empty (default, the zero value) to omit the migration init container entirely -- its presence is what enables the container and the app container's dependsOn wiring (see module README)."
+  description = "Plain (non-secret) environment variables for the migration init container (typically DB_HOST/DB_PORT/DB_NAME/DB_SSLMODE/DB_MAINTENANCE_NAME). Leave empty (default, the zero value) to omit the migration init container entirely -- its presence is what enables the container and the app container's dependsOn wiring (see module README)."
   default     = []
 }
 
@@ -148,6 +148,12 @@ variable "migration_secrets" {
   description = "Secrets Manager-backed environment variables for the migration init container (typically DB_USER/DB_PASSWORD), in the same ECS container definition \"secrets\" format as var.secrets. Every ARN referenced here must also be present in var.secret_read_arns so the task execution role can resolve it. Ignored (no effect) when var.migration_environment is empty."
   default     = []
   sensitive   = true
+}
+
+variable "migration_command" {
+  type        = list(string)
+  description = "Container `command` override for the migration init container (e.g. [\"-target\", \"api\"] / [\"-target\", \"auth\"] to select which app/migrator CLI target this service instance's shared migrate image runs against, per SPEC-005 R5). Leave empty (default) to use the image's own ENTRYPOINT/CMD unmodified. Ignored when var.migration_environment is empty."
+  default     = []
 }
 
 variable "target_group_name" {

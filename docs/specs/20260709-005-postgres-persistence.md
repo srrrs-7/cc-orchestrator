@@ -3,8 +3,8 @@ id: SPEC-005
 title: app/api・app/auth の Postgres 永続化基盤(goose + sqlc)
 status: done  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-09
-updated: 2026-07-09
-issues: [ISSUE-005, ISSUE-015, ISSUE-016, ISSUE-017]       # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-10
+issues: [ISSUE-005, ISSUE-015, ISSUE-016, ISSUE-017, ISSUE-022]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -56,9 +56,9 @@ supersedes: null # 置き換える旧Spec ID
 
 - [x] R1: **app/api(task)** の `domain/task/Repository`(`Save` / `FindByID` / `FindByTitle` / `FindAll`)を満たす `infra/postgres` 実装を追加する。振る舞い(特に `FindByID`/`FindByTitle` が該当なしで `ErrNotFound`、`Save` の重複・更新の扱い)は既存 `infra/memory` と一致させる
 - [x] R2: **app/auth** の 3 集約 `client`(`FindByID`)/ `user`(`FindByID` / `FindByUsername`)/ `authcode`(`Save` / `FindByCode`)の `Repository` を満たす `infra/postgres` 実装を追加する。**認可コードは単回使用と TTL(短命)のセマンティクスを SQL 上で保持**する(consume 済み・期限切れは `FindByCode` で有効なコードとして返さない)。`token` は JWT のステートレス設計で `Repository` を持たないため対象外
-- [x] R3: goose マイグレーション(up/down 対)で api・auth のスキーマを定義する。**api と auth は同一 RDS の単一データベース内で別スキーマ(`search_path` で分離)に分ける**(バウンデッドコンテキストの分離。ユーザー確定)
+- [ ] R3: goose マイグレーション(up/down 対)で api・auth のスキーマを定義する。**api と auth は同一 RDS インスタンス上の別データベース(api DB / auth DB)に分離**する(2026-07-09 設計変更。旧: 単一 database + `search_path` 別スキーマ)。各サービスは自 DB のみに接続し、スキーマによる分離は不要になる
 - [x] R4: sqlc で `db/queries/**` の SQL から型安全 Go を生成し、**生成コードをコミット**する。生成コードは各スタックの `make build` / `make vet` / `make test` を通す
-- [x] R5: マイグレーション実行手段を提供する。ローカルは Makefile ターゲット(compose の postgres 相手)、本番は一回限りの ECS タスク / init コンテナ(iac)。**goose は `go run <pkg>@<pinned>` の CLI として実行し、`go.mod` の require に載せない**
+- [ ] R5: マイグレーション実行手段を提供する。**専用の `app/migrator` コンテナ**が `-target api|auth`(向き先)を引数に取り、対象 DB の作成(未存在時)+ 当該スタックの `db/migrations` 適用を行う(2026-07-09 設計変更。旧: スタックごとの `Dockerfile.migrate`)。migration SQL は各スタックの `db/migrations` に残し(sqlc は無変更)、`app/migrator` は両方を取り込む runner とする。ローカルは Makefile / compose、本番は ECS init コンテナで target 別に実行。goose は `app/migrator` の依存に閉じ、api/auth の `go.mod` の require は pgx のみを維持する
 - [x] R6: リポジトリ実装を環境で切り替えられる。**本番は Postgres 必須**(接続情報が無ければ起動を失敗させる)で、`infra/memory` フォールバックは local / test に限定する(ユーザー確定)。**接続情報は Secrets Manager / 環境変数から注入し、コード・tfvars に平文で書かない**
 - [x] R7: ローカル開発用に `compose.yml` とルート `Makefile` に `postgres` サービスを追加し、api・auth コンテナがそこへ接続する(host は既存方針どおり `127.0.0.1` バインド)
 - [x] R8: CI に **sqlc drift 検査**(`sqlc generate` → `git diff --exit-code`)を追加する(SPEC-003 の contract-drift と同型、impl-ci)。マイグレーション適用の健全性(up → down → up が通る等)も検査対象に含めるか planner が判断する
@@ -105,8 +105,8 @@ CI(impl-ci): sqlc generate → git diff --exit-code(drift 検査)
 
 - **確定した技術選定**:
   - ドライバ = `database/sql` + **pgx v5 stdlib**(`github.com/jackc/pgx/v5/stdlib`)。sqlc の出力を `database/sql` にすることで生成コードは標準ライブラリのみに依存し、ドライバ import だけが外部依存になる
-  - マイグレーション = **goose を `go run github.com/pressly/goose/v3/cmd/goose@<pinned>` の CLI として実行**(require に載せない)
-  - api ⇔ auth = **同一 RDS の単一データベース内で別スキーマ(`search_path` 分離)**(ユーザー確定)。ローカルも同一 database + 2 スキーマで用意する
+  - マイグレーション実行 = **専用の `app/migrator`(Go バイナリ + コンテナ)** が goose を用い、`-target api|auth` で対象 DB を選び、対象 DB の作成(未存在時)+ 当該スタックの `db/migrations` を適用する。goose は `app/migrator` の依存に閉じ、api/auth の `go.mod` には載せない(api/auth の runtime 依存は pgx のみを維持)
+  - api ⇔ auth = **同一 RDS インスタンス上の別データベース(api DB / auth DB)**(2026-07-09 設計変更。旧: 単一 database + `search_path` 別スキーマ)。各サービスは自 DB に接続しスキーマ分離は不要。ローカルも 2 データベースで用意する
   - sqlc 設定 = **スタックごとに `sqlc.yaml`**(api / auth は別モジュール・別ドメインのため)
 - **ディレクトリ(planner が最終確定)**: 各 Go スタック配下に `db/migrations/`(goose)・`db/queries/`(sqlc 入力)・sqlc 生成コード(コミット対象。配置は `infra/postgres` 近傍 or `db/gen`)・`sqlc.yaml` を置く
 - **app/api**: `infra/postgres/task_repository.go` が `task.Repository` を実装。`Title` の一意制約・`ID` 主キーなどドメイン不変条件を DB 制約にも反映
@@ -147,6 +147,19 @@ CI(impl-ci): sqlc generate → git diff --exit-code(drift 検査)
 
 > 注: T3(api)と T4(auth)は scope 独立で並列可。T5(iac)・T6(ci)は T3/T4 のディレクトリ・コマンド確定に依存する部分がある。`infra/memory` は削除せず残す。
 
+### リファクタリング(2026-07-09〜): 別データベース + app/migrator
+
+初回実装(commit `af2e2b2`)への差分。ユーザー指示による 2 点の構成変更(R3 別 database / R5 `app/migrator` 集約)を実施する。詳細計画は `docs/plans/SPEC-005-plan.md` の「## リファクタリング(2026-07-09)」節が正(方針・変更/追加/削除ファイル・手順・テスト戦略・リスクは同節)。概要タスク:
+
+- [x] RT1: (impl-db) `app/migrator` を新規追加(独立 `go.mod` + goose library + pgx driver、`-target api|auth` / `-command up|down|status`、maintenance DB へ接続して `CREATE DATABASE`(未存在時・冪等)→ 対象 DB で goose 適用、Dockerfile/Makefile)。goose は本モジュールに閉じ、api/auth の runtime require は pgx のみを維持
+- [x] RT2: (impl-db) api / auth の `db.go` から `DB_SCHEMA` / `search_path` / `Schema` を除去し `DB_NAME` を per-service(api=`api` / auth=`auth`)化。各スタック `Makefile`(`migrate-up/down/status` 削除・`migrate-create`/`sqlc`/`test-integration` 残置)、`compose.yml`(2 DB・migrator)、ルート `Makefile`(`migrate`→migrator)、`docker/postgres/initdb` と `Dockerfile.migrate` / `migrate-entrypoint.sh` を削除
+- [x] RT3: (tester) `persistence_selection_test.go` / 統合テストの `testDSN`(api/auth)を search_path 廃止・`DB_NAME` per-service へ更新。`app/migrator` の単体テスト追加。振る舞い契約スイート(`infra/repotest`)は不変で流用
+- [x] RT4: (impl-iac / plan まで) envs/dev(`DB_NAME` per-service・migration_environment の schema 除去 + maintenance DB・migration_image を共有 migrator に・`migration_command`)、modules/service(`migration_command` 変数 + ecs.tf)、migrator 用 ECR、README 群。`make plan` で破壊的変更を報告し **apply しない**
+- [x] RT5: (impl-ci) cicd.yml に `app/migrator` の check job + `changes` フィルタ追加、integration job の DB 準備を migrator 実行(target 別 DB 作成)・`DB_NAME` per-stack・`DB_SCHEMA` 廃止に更新。`sqlc-drift.yml` は不変(確認のみ)
+- [x] RT6: (tester→checker→review) RD1〜RD3 を再実行(pgx-only の維持を明示確認)。(impl-db) `.claude/rules/db.md` を database 分離 + migrator に更新(frontmatter `paths` に `app/migrator/**` 追加)。(issue-creator) ISSUE-017 を単一 migrator イメージ前提へ更新。(admin) `CLAUDE.md` 反映
+
+> 担当分担: `app/migrator` + `db.go`/DSN + compose/ルート Makefile + `db.md` = impl-db(新 agent は作らない)、iac = impl-iac、CI = impl-ci、テスト更新 = tester。
+
 ## 6. 経緯(時系列・追記のみ)
 
 ### 2026-07-09
@@ -177,3 +190,25 @@ CI(impl-ci): sqlc generate → git diff --exit-code(drift 検査)
   - **今回対応せず Issue 化**: ISSUE-005(平文パスワード)/ ISSUE-015(authcode 無制限増加)/ ISSUE-016(DB 最小権限・TLS)/ ISSUE-017(migrate イメージ ECR push 経路)。
   - **計画差分**: sqlc は macOS SDK での C パーサビルド不能のため、計画ベースライン `v1.28.0` → **`v1.31.1`** に両スタック統一(生成コードの形は不変。理由は各 Makefile に記載)。
   - **残(ユーザー判断)**: `terraform apply` は未実行(方針どおりユーザーに委ねる)。prod デプロイは **ISSUE-017**(`:migrate` イメージの ECR push)が前提。作業ツリーは未コミット(commit はユーザー指示時)。
+- 上記 done 状態を checkpoint commit `af2e2b2`(feat/auth-oidc-foundation)として記録。
+- **設計変更(リファクタリング)で status を `in-progress` に戻す。** ユーザー指示による構成変更:
+  - **(1) DB 分離方式を変更**: 単一 database + `search_path` 別スキーマ → **同一 RDS インスタンス上の別データベース(api DB / auth DB)**。各サービスは自 DB に接続し、スキーマ分離は廃止(R3 更新)。ユーザー確認: 同一インスタンス上の別データベース(別インスタンスではない)。
+  - **(2) マイグレーションを `app/migrator` に集約**: スタックごとの `Dockerfile.migrate` + `db/migrate-entrypoint.sh` を廃し、**専用 `app/migrator` コンテナ**が `-target api|auth`(向き先)引数で対象 DB を作成 + 当該スタックの `db/migrations` を適用(R5 更新)。migration SQL は各スタックの `db/migrations` に残す(sqlc は無変更)。goose は `app/migrator` の依存に閉じ、api/auth の runtime require は pgx のみを維持。
+  - 影響範囲: iac(別 DB 作成・env は `DB_SCHEMA` を廃し `DB_NAME` を per-service 化・init コンテナを `app/migrator` に差し替え)、app/api・app/auth(`db.go` の DSN から `search_path` を除去)、compose / ルート Makefile(2 DB + migrator)、CI(統合ジョブの DB 準備)、`.claude/rules/db.md`。planner に refactor 実装計画の作成を委譲する。
+
+### 2026-07-10
+
+- planner が refactor 実装計画を `docs/plans/SPEC-005-plan.md` の「## リファクタリング(2026-07-09)」節として作成(初回実装 `af2e2b2` への差分)。§5 に refactor タスク群(RT1〜RT6)を追記した。確定した主要設計点:
+  - **別 database 分離**: api DB `api` / auth DB `auth`(同一 RDS インスタンス)。DDL は初回実装のまま非修飾で対象 DB の `public` に適用。`search_path` / `DB_SCHEMA` を全経路(db.go の DSN・goose・compose・iac env・統合テストの `testDSN`)から除去し、`DB_NAME` を per-service 化。`goose_db_version` は DB ごとに独立するため初回の版表衝突懸念(§6.2 R-f)は構造的に解消。
+  - **app/migrator(新規・独立 go.mod)**: `-target api|auth` / `-command up|down|status`。`CREATE DATABASE` はトランザクション不可のためメンテナンス DB(既定 `postgres`)へ接続し存在確認 → 未存在なら作成(`42P04` を冪等成功扱い・identifier は検証+クォートで injection 防止)→ 対象 DB へ再接続し goose を **library** 実行。goose は `app/migrator/go.mod` に閉じ、**api/auth の runtime require は pgx のみを維持**(価値検証 #4)。migration SQL・sqlc・`sqlc-drift.yml` は無変更。
+  - **DB 作成主体を migrator に一元化**(local / CI / prod)。compose の init script(`docker/postgres/initdb`)と各スタックの `Dockerfile.migrate` + `db/migrate-entrypoint.sh` は廃止。prod の migrate イメージは per-stack `:migrate` 2 本 → **共有 `app/migrator` 単一イメージ**(`-target` 違いで api/auth 両 service が参照)。ISSUE-017(migrate イメージの ECR push 経路未配線)はこの単一イメージ前提へ更新予定(push 経路は引き続き open)。
+  - 担当は既存 agent で充足(`app/migrator` は impl-db 所有・新 agent は作らない)。ブロッカーとなるユーザー判断は無し。status は `in-progress` を継続(価値検証 #1〜#4 を実 DB で再確認後に `done`)。次フェーズ(impl-db / tester / impl-iac / impl-ci)へ委譲する。
+- リファクタリング(RE2)に伴う Issue 反映を issue-creator が実施(本 Spec と相互リンク):
+  - **ISSUE-017**(infra / medium、既存を更新): prod マイグレーション用イメージが per-stack `:migrate` 2 本 → 共有 `app/migrator` 単一イメージ(`-target api|auth`、ビルドコンテキスト=リポジトリルート `-f app/migrator/Dockerfile`)に変わったことを反映し、対応方針・実施内容・title を単一イメージ前提へ更新。iac は共有 migrator ECR リポジトリ 1 本を追加済み(`app/iac/envs/dev/migrator.tf` の `aws_ecr_repository.migrator`、出力 `migrator_ecr_repository_url`)。**push 経路(CI/Makefile 拡張)は依然未配線のため status=open 維持**(`Makefile:101-108` の `push-images` は今も api/auth アプリイメージのみ)。
+  - **ISSUE-022**(perf / low、新規): `app/migrator` の並行 `goose up` に排他制御(advisory lock)が無い。`CREATE DATABASE` は冪等化済み(`ensureDatabase`、`42P04` / `23505` + 再確認)だが `goose up`(`goose_db_version` 書き込み)は保護外。既定 `desired_count = 1`(auth は JWKS 単一化制約からも 1 固定)では発生せず実害なしだが、`desired_count>1` のローリングデプロイで複数 init コンテナが同一 DB へ同時に `goose up` を実行すると書き込み競合が起こり得る。`app/iac/modules/service/README.md`「イメージ・並行実行・代替案」節に既知事項として言及済み(対応候補 = advisory lock 導入 or 一回限り ECS タスク方式への切替)。`desired_count>1` 化の前提条件として追跡。
+- **リファクタリング実装・レビュー完了、status を `done` に更新(RT1〜RT6 完走)。**
+  - 実装: impl-db が `app/migrator`(独立 go.mod・`-target api|auth`・`CREATE DATABASE` 冪等 + goose library)を新規作成、api/auth の `db.go` から `DB_SCHEMA`/`search_path` を除去し `DB_NAME` per-service 化、compose / ルート Makefile / 各 Makefile を更新、`Dockerfile.migrate`/`migrate-entrypoint.sh`/`docker/postgres/initdb` を削除。tester が `app/migrator` 単体テスト(47 subtest)を追加、impl-iac が別 DB env + 共有 migrator ECR + init コンテナ(plan まで・validate green・破壊的変更なし)、impl-ci が migrator CI job + 統合ジョブの migrator 化。
+  - **検証**: app/migrator / app/api / iac の checker green、pgx-only(api/auth の go.mod)を再確認(価値検証 #4)、実 Postgres で別 DB 作成 + up→down→up + `make test-integration`(api/auth)green(価値検証 #1/#2)、sqlc-drift 不変(#3)。app/auth は並行作業(SPEC-006 refresh token)と同一ツリーで、当初 `domain/refreshtoken` 未実装により build red だったが SPEC-006 実装の進行で green を確認。ユーザー判断で「独立部分を進め app/auth ゲート + commit は SPEC-006 green まで待つ」方針を採用。
+  - **レビュー(security/performance/spec)**: Blocker/Major 0。指摘対応: goose 実行に `context.WithTimeout`(既定 5 分・`MIGRATOR_TIMEOUT` で調整)、リポジトリルート `.dockerignore`(migrator ビルドコンテキストを ~1GB→18MB)、`app/migrator` を dependabot(gomod)へ登録。RE: `.claude/rules/db.md`(RE1)/ `CLAUDE.md` + `project.md`(RE3)を別 DB + migrator に更新、ISSUE-017 更新・ISSUE-022 起票(RE2)。
+  - **並行 CREATE DATABASE バグ修正**: tester が実測(5/5)で発見した「並行 `CREATE DATABASE` の敗者が `42P04` でなく `23505`(unique_violation on pg_database)で失敗し冪等化されない」問題を、存在再確認 + SQLSTATE 拡張で修正(実 DB で 8/8 並行成功を確認)。
+  - **残(ユーザー判断)**: リファクタ差分は**未コミット**(初回実装は `af2e2b2`)。同一ツリーに並行の SPEC-006(refresh token)/ ISSUE-018 / web(tsgo→tsc)の変更が混在し、`cmd/*/env.go`・`CLAUDE.md` 等を共有するため、commit 境界はユーザーが判断する。`terraform apply` は未実行(方針どおり)。prod デプロイは ISSUE-017(共有 migrator イメージの ECR push)が前提。

@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsgo --noEmit && vite build",
+    "build": "tsc --noEmit && vite build",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsc --noEmit",
     "generate": "openapi-ts",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -32,12 +32,11 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react": "^6.0.3",
     "jsdom": "^29.1.1",
     "msw": "^2.15.0",
     "tailwindcss": "^4.3.2",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "vite": "^8.1.3",
     "vitest": "5.0.0-beta.6"
   },

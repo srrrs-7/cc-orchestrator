@@ -85,6 +85,106 @@ func TestTaskRepository_UniqueTitle_ViolatesConstraint(t *testing.T) {
 	if !errors.Is(err, task.ErrDuplicateTitle) {
 		t.Errorf("Save(second) error = %v, want wrapping %v", err, task.ErrDuplicateTitle)
 	}
+	// ISSUE-018: the unique_violation must also be recognized as the
+	// *task.ConflictError category (HTTP 409), not just the bare
+	// ErrDuplicateTitle sentinel, so route's errors.As type switch maps
+	// it correctly.
+	var ce *task.ConflictError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Save(second) error = %v, want errors.As(&task.ConflictError{}) = true", err)
+	}
+}
+
+// TestTaskRepository_ErrorCategories_ISSUE018 covers ISSUE-018's
+// category-type mapping for infra/postgres:
+//   - not-found -> *task.NotFoundError (in addition to the shared
+//     repotest contract's errors.Is(ErrNotFound) coverage);
+//   - a corrupt row (bypassing domain validation at the DB layer) and
+//     a forced driver failure both -> *task.DBError, and -- the
+//     regression this Issue exists to prevent -- must NOT also
+//     satisfy errors.As(&task.ValidationError{}). taskFromRow
+//     deliberately severs an inner *task.ValidationError from the
+//     Unwrap chain via %v (not %w) precisely so a corrupt DB row
+//     surfaces as HTTP 500, not HTTP 400 (docs/plans/ISSUE-018-plan.md
+//     "リスク / 未確定事項").
+func TestTaskRepository_ErrorCategories_ISSUE018(t *testing.T) {
+	t.Run("FindByID not found maps to *task.NotFoundError", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		repo := postgres.NewTaskRepository(db)
+
+		_, err := repo.FindByID(context.Background(), task.NewID())
+
+		var nfe *task.NotFoundError
+		if !errors.As(err, &nfe) {
+			t.Fatalf("FindByID() error = %v, want errors.As(&task.NotFoundError{}) = true", err)
+		}
+		if !errors.Is(err, task.ErrNotFound) {
+			t.Errorf("FindByID() error = %v, want wrapping %v", err, task.ErrNotFound)
+		}
+	})
+
+	t.Run("corrupt row (empty title bypassing domain validation) maps to *task.DBError, not *task.ValidationError", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		ctx := context.Background()
+
+		// Insert a row directly, bypassing task.NewTitle's
+		// empty-title rejection: the tasks.title column only enforces
+		// NOT NULL, not non-empty, so this models a row corrupted by
+		// something other than this application (e.g. a manual data
+		// fix, a different writer).
+		id := task.NewID().String()
+		if _, err := db.ExecContext(ctx,
+			`INSERT INTO tasks (id, title, status, priority, created_at, updated_at) VALUES ($1, '', 'todo', 'medium', now(), now())`,
+			id,
+		); err != nil {
+			t.Fatalf("setup: insert corrupt row: %v", err)
+		}
+
+		repo := postgres.NewTaskRepository(db)
+		parsedID, err := task.ParseID(id)
+		if err != nil {
+			t.Fatalf("setup: ParseID(%q) unexpected error: %v", id, err)
+		}
+
+		_, err = repo.FindByID(ctx, parsedID)
+		if err == nil {
+			t.Fatal("FindByID() on a corrupt row succeeded, want an error")
+		}
+
+		var dbErr *task.DBError
+		if !errors.As(err, &dbErr) {
+			t.Fatalf("FindByID() error = %v, want errors.As(&task.DBError{}) = true", err)
+		}
+		var ve *task.ValidationError
+		if errors.As(err, &ve) {
+			t.Errorf("FindByID() error = %v, want errors.As(&task.ValidationError{}) = false (corrupt row must map to 500, not 400)", err)
+		}
+	})
+
+	t.Run("forced driver failure (closed connection) maps to *task.DBError", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		repo := postgres.NewTaskRepository(db)
+		if err := db.Close(); err != nil {
+			t.Fatalf("setup: close db: %v", err)
+		}
+
+		_, err := repo.FindAll(context.Background())
+		if err == nil {
+			t.Fatal("FindAll() on a closed connection succeeded, want an error")
+		}
+
+		var dbErr *task.DBError
+		if !errors.As(err, &dbErr) {
+			t.Fatalf("FindAll() error = %v, want errors.As(&task.DBError{}) = true", err)
+		}
+		var ve *task.ValidationError
+		if errors.As(err, &ve) {
+			t.Errorf("FindAll() error = %v, want errors.As(&task.ValidationError{}) = false", err)
+		}
+	})
 }
 
 // openTestDB opens a *sql.DB against the Postgres instance described
@@ -126,13 +226,14 @@ func openTestDB(t *testing.T) *sql.DB {
 
 // testDSN assembles a libpq-style connection string from the discrete
 // DB_* environment variables (DB_HOST/DB_PORT/DB_NAME/DB_USER/
-// DB_PASSWORD/DB_SSLMODE/DB_SCHEMA). DB_SCHEMA is applied via
-// search_path so the suite runs against the "api" schema (SPEC-005
-// R3), matching the non-qualified migrations/queries (plan §0
-// "スキーマ分離機構"). The defaults below are fallbacks for local ad-hoc
-// runs and are expected to mirror docker/postgres/initdb (impl-db);
-// they carry no meaningful secret (matching values only exist in a
-// local, disposable compose Postgres).
+// DB_PASSWORD/DB_SSLMODE). DB_NAME defaults to "api" (this stack's own
+// dedicated Postgres database, per the 2026-07-09 refactor, SPEC-005
+// plan §RF.1.1: api and auth are separated by database, not by schema/
+// search_path -- app/migrator creates and migrates it, see
+// .claude/rules/db.md). The defaults below are fallbacks for local
+// ad-hoc runs and are expected to mirror compose.yml's api service
+// (impl-db); they carry no meaningful secret (matching values only
+// exist in a local, disposable compose Postgres).
 func testDSN() string {
 	env := func(key, def string) string {
 		if v := os.Getenv(key); v != "" {
@@ -142,15 +243,13 @@ func testDSN() string {
 	}
 	host := env("DB_HOST", "127.0.0.1")
 	port := env("DB_PORT", "5432")
-	name := env("DB_NAME", "app")
+	name := env("DB_NAME", "api")
 	user := env("DB_USER", "app")
 	password := env("DB_PASSWORD", "app")
 	sslmode := env("DB_SSLMODE", "disable")
-	schema := env("DB_SCHEMA", "api")
 
 	values := url.Values{}
 	values.Set("sslmode", sslmode)
-	values.Set("search_path", schema)
 
 	u := url.URL{
 		Scheme:   "postgres",

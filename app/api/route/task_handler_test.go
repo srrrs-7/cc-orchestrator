@@ -59,6 +59,41 @@ func newFailingTestHandler() http.Handler {
 	return route.NewRouter(svc)
 }
 
+// dbErrorRepository is a task.Repository whose every method returns a
+// *task.DBError (ISSUE-018's category type for infrastructure-layer
+// failures). Unlike failingRepository (which returns a generic,
+// non-category error to drive route's default 500 branch),
+// dbErrorRepository exists to pin that the DBError *category*
+// independently maps to 500 through writeError's errors.As switch,
+// rather than only reaching 500 via the fallback default case.
+type dbErrorRepository struct{}
+
+var _ task.Repository = dbErrorRepository{}
+
+func (dbErrorRepository) Save(context.Context, *task.Task) error {
+	return task.NewDBError(errors.New("dbErrorRepository: save always fails"))
+}
+
+func (dbErrorRepository) FindByID(context.Context, task.ID) (*task.Task, error) {
+	return nil, task.NewDBError(errors.New("dbErrorRepository: find by id always fails"))
+}
+
+func (dbErrorRepository) FindByTitle(context.Context, task.Title) (*task.Task, error) {
+	return nil, task.NewDBError(errors.New("dbErrorRepository: find by title always fails"))
+}
+
+func (dbErrorRepository) FindAll(context.Context) ([]*task.Task, error) {
+	return nil, task.NewDBError(errors.New("dbErrorRepository: find all always fails"))
+}
+
+// newDBErrorTestHandler wires a router backed by dbErrorRepository.
+func newDBErrorTestHandler() http.Handler {
+	repo := dbErrorRepository{}
+	dupChk := task.NewDuplicateChecker(repo)
+	svc := service.NewTaskService(repo, dupChk)
+	return route.NewRouter(svc)
+}
+
 type taskResponseBody struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
@@ -419,6 +454,65 @@ func TestChangePriority_NotFound(t *testing.T) {
 	}
 	if body := decodeError(t, rec); body.Error == "" {
 		t.Error("error response body is empty, want a message")
+	}
+}
+
+// TestDBErrorCategory_MapsTo500 covers ISSUE-018: a *task.DBError
+// returned from the repository must be recognized by writeError's
+// errors.As type switch (the DBError case), independently of the
+// unrecognized-error default branch that failingRepository above
+// drives. Both branches happen to produce the same 500 + generic body
+// (per the plan's documented, accepted ambiguity), so this test's
+// value is pinning that the DBError *category* itself is wired to
+// 500 -- if a future change moved DBError to, say, a 400 case by
+// mistake, this test (unlike the failingRepository-driven ones) would
+// catch it even though failingRepository's default-path assertions
+// would not move.
+func TestDBErrorCategory_MapsTo500(t *testing.T) {
+	tests := []struct {
+		name string
+		do   func(t *testing.T, h http.Handler) *httptest.ResponseRecorder
+	}{
+		{
+			name: "POST /tasks (FindByTitle failure via DuplicateChecker)",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "db error task"})
+			},
+		},
+		{
+			name: "GET /tasks (FindAll failure)",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodGet, "/tasks", nil)
+			},
+		},
+		{
+			name: "GET /tasks/{id} (FindByID failure)",
+			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+				return doRequest(t, h, http.MethodGet, "/tasks/some-id", nil)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newDBErrorTestHandler()
+
+			rec := tt.do(t, h)
+
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusInternalServerError, rec.Body.String())
+			}
+			body := decodeError(t, rec)
+			if body.Error == "" {
+				t.Error("error response body is empty, want a message")
+			}
+			// The DBError's underlying cause must never leak into the
+			// client-facing body (it is logged via slog instead); the
+			// body must be the generic, fixed message.
+			if body.Error != "internal server error" {
+				t.Errorf("error message = %q, want the generic %q (DBError internals must not leak to the client)", body.Error, "internal server error")
+			}
+		})
 	}
 }
 

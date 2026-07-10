@@ -36,12 +36,6 @@ updates:
         dependency-type: production
       web-development:
         dependency-type: development
-    ignore:
-      # @typescript/native-preview (tsgo) is a daily preview build,
-      # intentionally tracking latest — it is listed in bunfig.toml
-      # `minimumReleaseAgeExcludes`. Managing it via Dependabot would create
-      # daily PRs, so it is excluded here and left to the Bun/manual flow.
-      - dependency-name: "@typescript/native-preview"
 
   # --- api (app/api, Go modules) -------------------------------------------
   - package-ecosystem: gomod
@@ -66,6 +60,21 @@ updates:
       prefix: deps
     groups:
       auth-go-modules:
+        patterns:
+          - "*"
+
+  # --- migrator (app/migrator, Go modules) ---------------------------------
+  # Standalone module (own go.mod) with real runtime deps (goose, pgx);
+  # tracked independently from api/auth so its supply chain is monitored.
+  - package-ecosystem: gomod
+    directory: /app/migrator
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      migrator-go-modules:
         patterns:
           - "*"
 

@@ -34,25 +34,33 @@ locals {
   # variables.tf and the README section referenced above for why presence of
   # this variable (rather than a separate boolean) is the enable switch.
   migration_container_defs = length(var.migration_environment) > 0 ? [
-    {
-      name      = local.migration_container_name
-      image     = local.migration_image
-      essential = false
+    merge(
+      {
+        name      = local.migration_container_name
+        image     = var.migration_image
+        essential = false
 
-      # No portMappings: this container runs to completion (goose up) and
-      # exits, it never serves traffic.
-      environment = var.migration_environment
-      secrets     = var.migration_secrets
+        # No portMappings: this container runs to completion (app/migrator:
+        # create the target database if missing, then goose up) and exits,
+        # it never serves traffic.
+        environment = var.migration_environment
+        secrets     = var.migration_secrets
 
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          "awslogs-group"         = aws_cloudwatch_log_group.this.name
-          "awslogs-region"        = data.aws_region.current.name
-          "awslogs-stream-prefix" = local.migration_container_name
+        logConfiguration = {
+          logDriver = "awslogs"
+          options = {
+            "awslogs-group"         = aws_cloudwatch_log_group.this.name
+            "awslogs-region"        = data.aws_region.current.name
+            "awslogs-stream-prefix" = local.migration_container_name
+          }
         }
-      }
-    }
+      },
+      # api and auth share a single app/migrator image (var.migration_image),
+      # distinguished only by which target this container is invoked with;
+      # var.migration_command (e.g. ["-target", "api"]) carries that
+      # selection as the ECS container definition's `command` override.
+      length(var.migration_command) > 0 ? { command = var.migration_command } : {}
+    )
   ] : []
 
   app_container = merge(

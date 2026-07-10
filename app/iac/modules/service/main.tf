@@ -27,13 +27,6 @@ locals {
   # service will not reach a healthy state until an image is pushed.
   container_image = var.container_image != "" ? var.container_image : "${aws_ecr_repository.this.repository_url}:latest"
 
-  # Same default-to-own-ECR-repository pattern as container_image above, but
-  # at the ":migrate" tag: a distinct image (built from
-  # app/{api,auth}/Dockerfile.migrate) containing the pinned goose CLI +
-  # db/migrations, not the application binary. Only referenced when
-  # var.migration_environment is non-empty (see ecs.tf).
-  migration_image = var.migration_image != "" ? var.migration_image : "${aws_ecr_repository.this.repository_url}:migrate"
-
   # ForceNew resource names (see variables.tf for why each is individually
   # overridable): default to "<name_prefix>-<service_name>-*" for a fresh
   # service instance, but a caller can pin any of them to an existing name to

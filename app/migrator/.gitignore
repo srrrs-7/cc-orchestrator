@@ -1,0 +1,5 @@
+# `go build ./...` writes an executable here (this module has exactly
+# one, main, package, unlike app/api and app/auth's multi-package
+# modules, where `go build ./...` only type-checks and discards
+# output). Never commit it.
+/migrator

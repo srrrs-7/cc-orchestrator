@@ -1,11 +1,12 @@
 -- +goose Up
 -- SPEC-005 R2/R3: clients / users / authorization_codes back
 -- domain/{client,user,authcode}.Repository. All three tables are
--- deliberately unqualified (no schema prefix) -- the "auth" schema is
--- selected purely via the connection's search_path (plan §0 "スキーマ
--- 分離機構"), so this file is byte-identical regardless of which
--- schema it ends up applied to. Schema creation itself happens outside
--- goose (local: docker/postgres/initdb, prod: iac bootstrap).
+-- deliberately unqualified (no schema/database prefix) -- auth
+-- connects to its own dedicated Postgres database ("auth"; 2026-07-09
+-- refactor, plan §RF.1.1), so this file is byte-identical regardless
+-- of which database it ends up applied to and lands in that database's
+-- default "public" schema. Database creation itself happens outside
+-- goose, via app/migrator (local/CI/prod alike; see .claude/rules/db.md).
 
 -- clients backs domain/client.Repository (FindByID only; read-only
 -- port -- rows are populated by the startup idempotent seed, see

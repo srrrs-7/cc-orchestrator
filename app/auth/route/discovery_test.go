@@ -75,8 +75,8 @@ func TestDiscovery_Metadata(t *testing.T) {
 	if !reflect.DeepEqual(meta.CodeChallengeMethodsSupported, []string{"S256"}) {
 		t.Errorf("code_challenge_methods_supported = %v, want [S256]", meta.CodeChallengeMethodsSupported)
 	}
-	if !reflect.DeepEqual(meta.GrantTypesSupported, []string{"authorization_code"}) {
-		t.Errorf("grant_types_supported = %v, want [authorization_code]", meta.GrantTypesSupported)
+	if !reflect.DeepEqual(meta.GrantTypesSupported, []string{"authorization_code", "refresh_token"}) {
+		t.Errorf("grant_types_supported = %v, want [authorization_code refresh_token] (SPEC-006 R9)", meta.GrantTypesSupported)
 	}
 	if !reflect.DeepEqual(meta.TokenEndpointAuthMethodsSupported, []string{"none"}) {
 		t.Errorf("token_endpoint_auth_methods_supported = %v, want [none] (public client, no client_secret support)", meta.TokenEndpointAuthMethodsSupported)

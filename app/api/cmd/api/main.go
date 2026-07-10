@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	defaultPort     = "8080"
 	shutdownTimeout = 10 * time.Second
 )
 
@@ -48,12 +47,13 @@ func run() error {
 	// is the only part of main.go's wiring that SPEC-005 touches; the
 	// rest (domain service -> application service -> presentation) is
 	// unchanged.
-	mode, err := postgres.SelectMode(os.Getenv)
+	e := NewEnv()
+	mode, err := e.validate()
 	if err != nil {
-		return fmt.Errorf("api: select persistence mode: %w", err)
+		return err
 	}
 
-	repo, closeRepo, err := newTaskRepository(ctx, mode)
+	repo, closeRepo, err := newTaskRepository(ctx, mode, e.dbConfig())
 	if err != nil {
 		return fmt.Errorf("api: wire persistence (mode=%s): %w", mode, err)
 	}
@@ -67,13 +67,8 @@ func run() error {
 	svc := service.NewTaskService(repo, dupChk)
 	handler := route.NewRouter(svc)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
-
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    ":" + e.Port,
 		Handler: handler,
 	}
 
@@ -117,15 +112,14 @@ func run() error {
 // (postgres.Open's Ping); it is the server's long-lived shutdown
 // context, not a separate per-call timeout, since this only runs once
 // at startup.
-func newTaskRepository(ctx context.Context, mode postgres.Mode) (task.Repository, func() error, error) {
+func newTaskRepository(ctx context.Context, mode postgres.Mode, cfg postgres.Config) (task.Repository, func() error, error) {
 	switch mode {
 	case postgres.ModePostgres:
-		cfg := postgres.ConfigFromEnv(os.Getenv)
 		db, err := postgres.Open(ctx, cfg)
 		if err != nil {
 			return nil, nil, err
 		}
-		slog.Info("api: persistence selected", "mode", mode, "schema", cfg.Schema)
+		slog.Info("api: persistence selected", "mode", mode, "database", cfg.Name)
 		return postgres.NewTaskRepository(db), db.Close, nil
 	default:
 		slog.Info("api: persistence selected", "mode", postgres.ModeMemory)

@@ -170,6 +170,62 @@ func TestTaskRepository_Save_DoesNotAliasCallersTask(t *testing.T) {
 	}
 }
 
+// TestTaskRepository_CanceledContext_ReturnsDBError covers ISSUE-018:
+// every method must translate a canceled context into a
+// *task.DBError (HTTP 500 category), matching infra/postgres's own
+// mapping of infrastructure-layer failures (db.md's "memory と
+// postgres の振る舞い一致" requirement), instead of leaking the bare
+// context.Canceled sentinel untyped.
+func TestTaskRepository_CanceledContext_ReturnsDBError(t *testing.T) {
+	repo := memory.NewTaskRepository()
+	tk := newTestTask(t, "buy milk")
+	if err := repo.Save(context.Background(), tk); err != nil {
+		t.Fatalf("setup Save() unexpected error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "Save",
+			call: func() error { return repo.Save(ctx, tk) },
+		},
+		{
+			name: "FindByID",
+			call: func() error { _, err := repo.FindByID(ctx, tk.ID()); return err },
+		},
+		{
+			name: "FindByTitle",
+			call: func() error { _, err := repo.FindByTitle(ctx, tk.Title()); return err },
+		},
+		{
+			name: "FindAll",
+			call: func() error { _, err := repo.FindAll(ctx); return err },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil {
+				t.Fatal("error = nil, want a *task.DBError")
+			}
+
+			var dbErr *task.DBError
+			if !errors.As(err, &dbErr) {
+				t.Fatalf("errors.As(err, &task.DBError{}) = false, want true (err = %v)", err)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("errors.Is(err, context.Canceled) = false, want true (err = %v)", err)
+			}
+		})
+	}
+}
+
 // TestTaskRepository_FindByID_ReturnsIndependentCopies verifies that
 // the *task.Task returned by FindByID is a clone: mutating it must
 // not affect the repository's stored state or subsequent reads.

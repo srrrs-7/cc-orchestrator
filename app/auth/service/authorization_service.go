@@ -7,13 +7,15 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 )
 
 // ErrUnsupportedGrantType is returned by Token when grant_type is
-// anything other than "authorization_code" -- the only grant this
-// authorization server implements (RFC 6749 4.1.3).
+// anything other than "authorization_code" or "refresh_token" -- the
+// only grants this authorization server implements (RFC 6749 4.1.3,
+// SPEC-006 R1).
 var ErrUnsupportedGrantType = errors.New("service: unsupported grant type")
 
 // responseTypeCode is the only OAuth response_type this authorization
@@ -21,9 +23,14 @@ var ErrUnsupportedGrantType = errors.New("service: unsupported grant type")
 // deliberately unsupported (see docs/plans/AUTH-001-plan.md "退けた代替案").
 const responseTypeCode = "code"
 
-// grantTypeAuthorizationCode is the only OAuth grant_type this
-// authorization server's /token endpoint accepts.
-const grantTypeAuthorizationCode = "authorization_code"
+// grantTypeAuthorizationCode and grantTypeRefreshToken are the two
+// OAuth grant_type values this authorization server's /token endpoint
+// accepts (SPEC-006 adds grantTypeRefreshToken to AUTH-001's
+// grantTypeAuthorizationCode).
+const (
+	grantTypeAuthorizationCode = "authorization_code"
+	grantTypeRefreshToken      = "refresh_token"
+)
 
 // AuthorizationService implements the OAuth 2.0 Authorization Code +
 // PKCE grant's two core use cases: issuing an authorization code
@@ -32,11 +39,12 @@ const grantTypeAuthorizationCode = "authorization_code"
 // bounded contexts but holds no business rule of its own; each
 // aggregate/port enforces its own invariants.
 type AuthorizationService struct {
-	clients   client.Repository
-	users     user.Repository
-	authCodes authcode.Repository
-	signer    token.Signer
-	issuer    string
+	clients       client.Repository
+	users         user.Repository
+	authCodes     authcode.Repository
+	refreshTokens refreshtoken.Repository
+	signer        token.Signer
+	issuer        string
 
 	// defaultUsername is the resource owner assigned to an /authorize
 	// request when no login_hint is given (or the given login_hint
@@ -50,6 +58,7 @@ func NewAuthorizationService(
 	clients client.Repository,
 	users user.Repository,
 	authCodes authcode.Repository,
+	refreshTokens refreshtoken.Repository,
 	signer token.Signer,
 	issuer string,
 	defaultUsername user.Username,
@@ -58,6 +67,7 @@ func NewAuthorizationService(
 		clients:         clients,
 		users:           users,
 		authCodes:       authCodes,
+		refreshTokens:   refreshTokens,
 		signer:          signer,
 		issuer:          issuer,
 		defaultUsername: defaultUsername,
@@ -179,14 +189,29 @@ func (s *AuthorizationService) resolveOwner(ctx context.Context, loginHint strin
 	return s.users.FindByUsername(ctx, s.defaultUsername)
 }
 
-// Token implements the token request of RFC 6749 4.1.3, exchanging a
-// previously issued authorization code (plus its PKCE code_verifier)
-// for an access token and ID Token.
+// Token implements the token request of RFC 6749 4.1.3/6, dispatching
+// on grant_type to one of this authorization server's two supported
+// grants (SPEC-006 R1): exchanging a previously issued authorization
+// code (authorizationCodeGrant) or redeeming a refresh token
+// (refreshTokenGrant).
 func (s *AuthorizationService) Token(ctx context.Context, req TokenRequest) (TokenResponse, error) {
-	if req.GrantType != grantTypeAuthorizationCode {
+	switch req.GrantType {
+	case grantTypeAuthorizationCode:
+		return s.authorizationCodeGrant(ctx, req)
+	case grantTypeRefreshToken:
+		return s.refreshTokenGrant(ctx, req)
+	default:
 		return TokenResponse{}, fmt.Errorf("service: token: %w", ErrUnsupportedGrantType)
 	}
+}
 
+// authorizationCodeGrant implements grant_type=authorization_code
+// (RFC 6749 4.1.3), exchanging a previously issued authorization code
+// (plus its PKCE code_verifier) for an access token and ID Token.
+// When the requesting client also supports grant_type=refresh_token,
+// it additionally mints and persists a new refresh token (SPEC-006
+// R2), returned once as plaintext in the response.
+func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req TokenRequest) (TokenResponse, error) {
 	cid, err := client.ParseClientID(req.ClientID)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("service: token: %w", err)
@@ -265,5 +290,145 @@ func (s *AuthorizationService) Token(ctx context.Context, req TokenRequest) (Tok
 		return TokenResponse{}, fmt.Errorf("service: token: sign id token: %w", err)
 	}
 
-	return newTokenResponse(accessToken, idToken, scope.String()), nil
+	// SPEC-006 R2: a refresh_token-capable client receives a refresh
+	// token alongside the access/ID tokens, minted here and persisted
+	// as the start of a new rotation family (refreshtoken.Issue). A
+	// client not registered for grant_type=refresh_token gets none
+	// (TokenResponse.RefreshToken stays empty/omitted).
+	var refreshTokenPlaintext string
+	if c.SupportsGrantType(grantTypeRefreshToken) {
+		rtScope, err := refreshtoken.ParseScope(scope.String())
+		if err != nil {
+			return TokenResponse{}, fmt.Errorf("service: token: %w", err)
+		}
+		rt, plaintext, err := refreshtoken.Issue(
+			refreshtoken.NewClientID(c.ID().String()),
+			refreshtoken.NewUserID(owner.ID().String()),
+			rtScope,
+		)
+		if err != nil {
+			return TokenResponse{}, fmt.Errorf("service: token: issue refresh token: %w", err)
+		}
+		if err := s.refreshTokens.Save(ctx, rt); err != nil {
+			return TokenResponse{}, fmt.Errorf("service: token: save refresh token: %w", err)
+		}
+		refreshTokenPlaintext = plaintext.String()
+	}
+
+	return newTokenResponse(accessToken, idToken, scope.String(), refreshTokenPlaintext), nil
+}
+
+// refreshTokenGrant implements grant_type=refresh_token (RFC 6749 6,
+// SPEC-006 R1). It validates the presented refresh token (existence,
+// reuse detection, client binding, scope narrowing), reissues an
+// access token and ID Token, and atomically rotates the refresh token
+// itself (R4): the caller receives a brand new refresh token and the
+// one just redeemed becomes unusable. See
+// docs/plans/SPEC-006-plan.md "service リフレッシュフロー" for the
+// authoritative step-by-step contract this method follows.
+func (s *AuthorizationService) refreshTokenGrant(ctx context.Context, req TokenRequest) (TokenResponse, error) {
+	// 1. An empty refresh_token can never match a persisted token; treat
+	// it the same as "unknown token" (invalid_grant) rather than
+	// invalid_request, mirroring RFC 6749 6's error semantics.
+	if req.RefreshToken == "" {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", refreshtoken.ErrNotFound)
+	}
+
+	// 2. Resolve and validate the requesting client.
+	cid, err := client.ParseClientID(req.ClientID)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+	c, err := s.clients.FindByID(ctx, cid)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+	if !c.SupportsGrantType(grantTypeRefreshToken) {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", client.ErrUnsupportedGrantType)
+	}
+
+	// 3. Look the presented token up by its hash; consumed-but-unexpired
+	// rows are returned on purpose (see refreshtoken.Repository.FindByTokenHash).
+	oldHash := refreshtoken.HashToken(req.RefreshToken)
+	rt, err := s.refreshTokens.FindByTokenHash(ctx, oldHash)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+
+	// 4. Reuse detection (RFC 9700 4.14, SPEC-006 R5): a refresh token
+	// that was already rotated being presented again is a signal the
+	// whole rotation family must be revoked before reporting
+	// invalid_grant.
+	if rt.Consumed() {
+		if revokeErr := s.refreshTokens.RevokeFamily(ctx, rt.FamilyID()); revokeErr != nil {
+			return TokenResponse{}, fmt.Errorf("service: refresh token: revoke family: %w", revokeErr)
+		}
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", refreshtoken.ErrReused)
+	}
+
+	// 5. Client binding (RFC 6749 6, SPEC-006 R6).
+	if err := rt.MatchesClient(refreshtoken.NewClientID(c.ID().String())); err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+
+	// 6. Scope narrowing (RFC 6749 6, SPEC-006 R7): an empty req.Scope
+	// keeps the token's current scope; a non-empty one must be a
+	// subset (widening is rejected as invalid_scope).
+	effectiveScope, err := rt.Scope().Narrow(req.Scope)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+
+	// 7. Resolve the resource owner the token was issued for.
+	uid, err := user.ParseUserID(rt.UserID().String())
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+	owner, err := s.users.FindByID(ctx, uid)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+
+	// 8. Reissue access token (aud=issuer, same audience design as
+	// authorizationCodeGrant) and ID Token (aud=client_id, fresh iat,
+	// no nonce -- OIDC Core 12.2, SPEC-006 R3). iss/sub are unchanged.
+	accessClaims := token.NewAccessTokenClaims(s.issuer, owner.ID().String(), s.issuer, effectiveScope.String())
+	accessToken, err := s.signer.Sign(accessClaims)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: sign access token: %w", err)
+	}
+
+	var name, email string
+	if effectiveScope.Has("profile") {
+		name = owner.Profile().Name()
+	}
+	if effectiveScope.Has("email") {
+		email = owner.Profile().Email()
+	}
+	idClaims := token.NewIDTokenClaims(s.issuer, owner.ID().String(), c.ID().String(), "", name, email)
+	idToken, err := s.signer.Sign(idClaims)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: sign id token: %w", err)
+	}
+
+	// 9. Atomically rotate: consume oldHash and persist the new
+	// RefreshToken in one critical section (refreshtoken.Repository.Rotate).
+	// A concurrent/replayed loser observes ErrReused here too (not just
+	// at step 4's pre-check) and must trigger the same family
+	// revocation (RFC 9700 4.14; SPEC-006 plan §リスク notes this is
+	// intentionally strict even for legitimate concurrent retries).
+	newRT, newPlaintext, err := rt.Rotate(effectiveScope)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: rotate: %w", err)
+	}
+	if err := s.refreshTokens.Rotate(ctx, oldHash, newRT); err != nil {
+		if errors.Is(err, refreshtoken.ErrReused) {
+			if revokeErr := s.refreshTokens.RevokeFamily(ctx, rt.FamilyID()); revokeErr != nil {
+				return TokenResponse{}, fmt.Errorf("service: refresh token: revoke family: %w", revokeErr)
+			}
+		}
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
+	}
+
+	return newTokenResponse(accessToken, idToken, effectiveScope.String(), newPlaintext.String()), nil
 }

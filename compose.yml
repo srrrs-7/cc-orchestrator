@@ -1,14 +1,20 @@
 services:
-  # SPEC-005: single local Postgres instance backing both app/api and
-  # app/auth, each in its own schema (docker/postgres/initdb creates
-  # "api"/"auth" on first boot; app/api and app/auth's own goose
-  # migrations then run unqualified DDL against whichever schema their
-  # connection's search_path selects -- see each stack's
-  # infra/postgres/db.go and db/migrations/*.sql). The credentials
+  # SPEC-005 (2026-07-09 refactor, plan §RF.1.1): single local Postgres
+  # instance backing both app/api and app/auth, each in its own
+  # dedicated database ("api" / "auth") rather than a shared database
+  # split by schema/search_path. app/migrator (run via the root
+  # Makefile's `migrate` target, a prerequisite of `up`/`up-d` below)
+  # creates each database (if missing) and applies that stack's
+  # db/migrations against it -- there is no compose init script step
+  # for this anymore (schema/database bootstrap moved from
+  # docker-entrypoint-initdb.d into app/migrator so local/CI/prod share
+  # one creation path). POSTGRES_DB below is only the Postgres image's
+  # own default/maintenance database (app/migrator's DB_MAINTENANCE_NAME
+  # defaults to "postgres", which the image also always creates, so
+  # POSTGRES_DB's value here does not need to match it). The credentials
   # below are fixed, non-secret local-only defaults (they also match
-  # app/api/Makefile and app/auth/Makefile's DB_* defaults, so `make
-  # migrate-up` works against this container with no env overrides) --
-  # never reused for any real environment.
+  # app/api/Makefile and app/auth/Makefile's DB_* defaults) -- never
+  # reused for any real environment.
   postgres:
     image: postgres:17.5-alpine
     environment:
@@ -19,7 +25,6 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d app"]
       interval: 5s
@@ -39,11 +44,10 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
-      DB_NAME: app
+      DB_NAME: api
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
-      DB_SCHEMA: api
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
@@ -61,11 +65,10 @@ services:
       ISSUER: http://localhost:8082
       DB_HOST: postgres
       DB_PORT: "5432"
-      DB_NAME: app
+      DB_NAME: auth
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
-      DB_SCHEMA: auth
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
