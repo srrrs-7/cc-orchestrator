@@ -5,7 +5,7 @@ status: open  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
 updated: 2026-07-10
-specs: [SPEC-002]  # 関連Spec ID (例: [SPEC-002])
+specs: [SPEC-002, SPEC-008]  # 関連Spec ID (例: [SPEC-002])
 ---
 
 # ISSUE-008: app/api の Task 一覧にページネーションが無く、web に単一取得(GET /tasks/{id})契約が無いため、本番データ規模で全件転送・線形探索がタスク総数に比例して悪化する(cross-stack)
@@ -122,3 +122,10 @@ specs: [SPEC-002]  # 関連Spec ID (例: [SPEC-002])
   - **P1(app/api の `created_at` インデックス欠如)** — `app/api/db/migrations` に `(created_at, id)` 複合インデックスを追加(担当: impl-db)。深いオフセットのページネーション実装と同時に対応するのが合理的なため、本体着手時に合流させる。
 - severity は **low** を維持(解消したのは現状サンプル規模で実害ゼロの軽微改善で、残る本体 / P1 も本番データ規模で顕在化する予防的・構造的課題という性質は不変)。frontmatter は status=open 維持・updated=2026-07-10。
 - 次にやること: ページネーション本体を SPEC として起票(admin / spec skill)し、その計画に P1(created_at 複合インデックス)と単一取得契約の整合(A)を含める。本体 + P1 が解消した時点で本 Issue をクローズ可能。
+
+### 2026-07-10(本体を SPEC-008 として起票・相互リンク)
+
+- ページネーション本体を **SPEC-008**(`docs/specs/20260710-008-api-task-list-pagination.md`、status: draft)として起票した。対象は `GET /tasks` の offset/limit ページネーション + レスポンス封筒 `{items, total, limit, offset}`(既定 limit=20 / 最大 100、超過はサーバ側クランプ)、および本 Issue P1(`tasks.created_at` インデックス追加)。レスポンス形状を「配列 → 封筒」に変える**破壊的レスポンス形状変更**は、サンプルアプリで外部クライアントが無いこと・contract-drift CI で drift を機械検出できることを根拠にバージョニングせず一括切替とする(SPEC-008 §4)。
+- 相互リンク: frontmatter `specs` に **SPEC-008** を追記(既存の SPEC-002 は維持)。SPEC-008 側 frontmatter の `issues` には ISSUE-008 が既に記載済み。
+- **status は open を維持。** 理由: 本 Issue 本体(API のページネーション・単一取得契約の整合・P1 の created_at インデックス)は SPEC-008 として起票しただけで実装は未着手のため。実装は SPEC-008 / planner 経由で進める。severity は **low** を維持(現状サンプル規模で実害ゼロの予防的・構造的課題という性質は不変)。frontmatter は status=open 維持・updated=2026-07-10。
+- 次にやること: SPEC-008 を approved にしたうえで planner に計画化を依頼し、SPEC-008 の実装完了(本体 + P1)と単一取得契約の整合(A)が解消した時点で本 Issue をクローズ可能。
