@@ -54,14 +54,25 @@ export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VER
 # note.
 TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
 
-COMPOSE    := docker compose -f $(REPO_ROOT)/compose.tools.yml
+# docker compose (プラグイン) があればそれを使い、無ければ standalone
+# docker-compose にフォールバックする(root Makefile / app/api/Makefile /
+# app/iac/Makefile / app/migrator/Makefile と同じ probe。一部のホストには
+# compose plugin が存在せず、`docker compose ...` がそのまま `unknown
+# command`/`unknown shorthand flag` で落ちるため、実行時に解決する)。
+COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
+# Version substitution for compose.tools.yml's build args (and, via
+# DB_COMPOSE below, compose.yml's postgres `image:`) comes from the
+# `export`ed versions.env variables above, not `--env-file` -- see that
+# export line's own comment for why.
+COMPOSE    := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
 # `test-integration` is the one exception that needs a reachable
 # Postgres: layering the sibling compose.yml (which owns the `postgres`
 # service) on top lets `tools` join that project's network and resolve
 # `postgres` by service name (SPEC-009 plan network 切り分け表; the
 # offline `tools-offline` service cannot reach it at all under
 # network_mode:none).
-DB_COMPOSE := docker compose -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
 WORKDIR    := --workdir /workspace/app/auth
 
 # tools-offline (network_mode:none): the default execution service for
