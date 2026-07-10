@@ -23,3 +23,20 @@ type Database interface {
 type Runner interface {
 	Run(ctx context.Context, cmd Command, migrationsDir string) error
 }
+
+// RoleProvisioner is the least-privilege runtime role bootstrap
+// boundary service.Service optionally invokes after a successful "up"
+// migration (ISSUE-016 R-c): idempotently ensure role exists with the
+// given password, and grant it exactly the minimal access its stack's
+// runtime needs on its own database -- CONNECT to that database only
+// (never any other database, in particular not its sibling stack's),
+// USAGE on schema public, DML (SELECT/INSERT/UPDATE/DELETE) on
+// existing and future tables, and USAGE/SELECT on existing and future
+// sequences. It must never grant DDL (CREATE) on schema public.
+// infra/postgres.RoleEnsurer provides the concrete implementation.
+type RoleProvisioner interface {
+	// EnsureAppRole must never include password in any error it
+	// returns (mirrors this domain's existing "never echo the
+	// password" contract for env validation errors).
+	EnsureAppRole(ctx context.Context, role AppRole, password string) error
+}

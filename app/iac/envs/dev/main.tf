@@ -46,6 +46,8 @@ module "db" {
   deletion_protection     = var.db_deletion_protection
   skip_final_snapshot     = var.db_skip_final_snapshot
   backup_retention_period = var.db_backup_retention_period
+  api_app_role_name       = var.db_api_app_role_name
+  auth_app_role_name      = var.db_auth_app_role_name
   tags                    = local.common_tags
 }
 
@@ -124,15 +126,12 @@ module "service_api" {
   ]
 
   # SPEC-005 R6 discrete DB_* contract (app/api's infra/postgres/db.go
-  # ConfigFromEnv): host/port/name/sslmode are plain env, user/password come
-  # from the RDS master secret's JSON keys via `secrets` below so no
-  # plaintext credential ever appears here, in tfvars or in state (R6 /
-  # module db's manage_master_user_password). DB_NAME="api" is this stack's
-  # own dedicated database on the shared RDS instance (SPEC-005 RF.1.1
-  # database-per-service; DB_SCHEMA/search_path are no longer used). See the
-  # database-bootstrap note on module.service_api's migration_environment
-  # below for how that database comes to exist before api's app container
-  # ever connects to it.
+  # ConfigFromEnv): host/port/name/sslmode are plain env. DB_NAME="api" is
+  # this stack's own dedicated database on the shared RDS instance (SPEC-005
+  # RF.1.1 database-per-service; DB_SCHEMA/search_path are no longer used).
+  # See the database-bootstrap note on module.service_api's
+  # migration_environment below for how that database comes to exist before
+  # api's app container ever connects to it.
   environment = [
     { name = "PORT", value = tostring(var.container_port) },
     { name = "DB_HOST", value = module.db.db_endpoint },
@@ -141,18 +140,21 @@ module "service_api" {
     { name = "DB_SSLMODE", value = var.db_sslmode },
   ]
 
-  # ":username::" / ":password::" select the individual JSON keys of the
-  # master secret (ECS's `secret-arn:json-key::` valueFrom syntax) rather
-  # than injecting the whole secret blob as one env var, matching
-  # infra/postgres/db.go's separate DB_USER/DB_PASSWORD fields. Both keys
-  # live in the same secret (module.db.master_user_secret_arn), so only one
-  # ARN needs to be readable -- see secret_read_arns below.
+  # ISSUE-016 R-c: the app container connects as the least-privilege scoped
+  # role api_app, NOT the RDS master user -- so a leaked runtime credential
+  # cannot reach the auth database or run DDL against its own. ":username::"
+  # / ":password::" select the individual JSON keys of module.db's dedicated
+  # api_app secret (ECS's `secret-arn:json-key::` valueFrom syntax), matching
+  # infra/postgres/db.go's separate DB_USER/DB_PASSWORD fields. The api_app
+  # role itself is not created by Terraform; it's provisioned/synced by the
+  # migrate init container below (see migration_secrets' APP_DB_USER/
+  # APP_DB_PASSWORD and modules/db/README.md "最小権限ランタイムロール").
   secrets = [
-    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
-    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+    { name = "DB_USER", valueFrom = "${module.db.api_app_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.api_app_secret_arn}:password::" },
   ]
 
-  secret_read_arns = [module.db.master_user_secret_arn]
+  secret_read_arns = [module.db.master_user_secret_arn, module.db.api_app_secret_arn]
 
   # SPEC-005 R5 migration init container: runs before the app container
   # (modules/service/ecs.tf's dependsOn/condition=SUCCESS wiring). Both api
@@ -179,9 +181,19 @@ module "service_api" {
     { name = "DB_MAINTENANCE_NAME", value = "postgres" },
   ]
 
+  # The migrate init container still connects as the RDS master user
+  # (DB_USER/DB_PASSWORD, CREATE DATABASE + CREATE ROLE/GRANT need
+  # CREATEROLE-equivalent privileges the scoped api_app role must not have).
+  # APP_DB_USER/APP_DB_PASSWORD carry api_app's own scoped credentials (same
+  # secret as this service's `secrets` above) so app/migrator can provision
+  # the role and sync its password before the app container ever starts
+  # (ISSUE-016 R-c; see docs/plans/ISSUE-016-plan.md §1.3 and
+  # modules/db/README.md "最小権限ランタイムロール").
   migration_secrets = [
     { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
     { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+    { name = "APP_DB_USER", valueFrom = "${module.db.api_app_secret_arn}:username::" },
+    { name = "APP_DB_PASSWORD", valueFrom = "${module.db.api_app_secret_arn}:password::" },
   ]
 
   migration_image   = "${aws_ecr_repository.migrator.repository_url}:latest"
@@ -230,10 +242,7 @@ module "service_auth" {
   # SPEC-005 R6 discrete DB_* contract (app/auth's infra/postgres/db.go
   # ConfigFromEnv), on the same shared RDS instance as api but its own
   # dedicated database DB_NAME="auth" (SPEC-005 RF.1.1 database-per-service;
-  # api and auth no longer share a database or a search_path -- see
-  # module.service_api's environment comment above and modules/db/README.md
-  # for why even separate databases aren't a permission boundary under the
-  # shared master user both services connect as).
+  # api and auth no longer share a database or a search_path).
   environment = [
     { name = "PORT", value = tostring(var.auth_container_port) },
     { name = "ISSUER", value = "http://${module.cdn.cloudfront_domain_name}/auth" },
@@ -243,14 +252,16 @@ module "service_auth" {
     { name = "DB_SSLMODE", value = var.db_sslmode },
   ]
 
-  # Same master secret / JSON-key selection as module.service_api; see that
-  # block's comment for the ECS `secret-arn:json-key::` syntax.
+  # ISSUE-016 R-c: same as module.service_api's `secrets` above, but scoped
+  # to auth_app (module.db.auth_app_secret_arn) instead of api_app -- auth's
+  # runtime credential cannot reach the api database or run DDL against its
+  # own. See that block's comment for the ECS `secret-arn:json-key::` syntax.
   secrets = [
-    { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
-    { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+    { name = "DB_USER", valueFrom = "${module.db.auth_app_secret_arn}:username::" },
+    { name = "DB_PASSWORD", valueFrom = "${module.db.auth_app_secret_arn}:password::" },
   ]
 
-  secret_read_arns = [module.db.master_user_secret_arn]
+  secret_read_arns = [module.db.master_user_secret_arn, module.db.auth_app_secret_arn]
 
   # SPEC-005 R5 migration init container; see module.service_api's
   # migration_environment comment above for the full rationale (database
@@ -268,9 +279,15 @@ module "service_auth" {
     { name = "DB_MAINTENANCE_NAME", value = "postgres" },
   ]
 
+  # ISSUE-016 R-c: master user for CREATE DATABASE/ROLE/GRANT, plus
+  # APP_DB_USER/APP_DB_PASSWORD (auth_app's own scoped credentials) so
+  # app/migrator can provision/sync the auth_app role. See module.service_api's
+  # migration_secrets comment above for the full rationale.
   migration_secrets = [
     { name = "DB_USER", valueFrom = "${module.db.master_user_secret_arn}:username::" },
     { name = "DB_PASSWORD", valueFrom = "${module.db.master_user_secret_arn}:password::" },
+    { name = "APP_DB_USER", valueFrom = "${module.db.auth_app_secret_arn}:username::" },
+    { name = "APP_DB_PASSWORD", valueFrom = "${module.db.auth_app_secret_arn}:password::" },
   ]
 
   migration_image   = "${aws_ecr_repository.migrator.repository_url}:latest"

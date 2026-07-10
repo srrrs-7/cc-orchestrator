@@ -7,6 +7,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,8 +45,11 @@ const (
 
 // Env holds every environment-derived value app/migrator needs at
 // startup: the discrete DB_* connection settings (mirroring
-// app/{api,auth}/cmd/*/env.go's contract) plus this module's own
-// MIGRATOR_TIMEOUT override.
+// app/{api,auth}/cmd/*/env.go's contract), this module's own
+// MIGRATOR_TIMEOUT override, and the optional APP_DB_USER/
+// APP_DB_PASSWORD pair (ISSUE-016 R-c) naming the least-privilege
+// runtime role this migrator should provision after a successful "up"
+// migration.
 //
 // DBName is left unresolved against -target here (it may be empty):
 // NewEnv reads only what the process environment says verbatim, and
@@ -53,7 +57,14 @@ const (
 // DBName's default. This mirrors app/api/cmd/api/env.go's split
 // between NewEnv (no validation, no external input) and validate
 // (checks/resolves, using whatever additional context the caller
-// supplies).
+// supplies). appRole (below) mirrors the same split for the optional
+// role request.
+//
+// AppDBUser/AppDBPassword deliberately have no default and are never
+// required: both left unset is this migrator's pre-ISSUE-016 behavior
+// (role provisioning skipped entirely, CREATE DATABASE + goose only),
+// preserving backward compatibility for any deployment that has not
+// yet wired app/iac's api_app/auth_app secrets through.
 type Env struct {
 	DBHost            string
 	DBPort            string
@@ -63,12 +74,15 @@ type Env struct {
 	DBName            string
 	DBMaintenanceName string
 	MigratorTimeout   time.Duration
+	AppDBUser         string
+	AppDBPassword     string
 }
 
 // NewEnv reads every environment variable app/migrator consumes and
 // applies the defaults that do not depend on -target. It performs no
 // required-field validation and no -target-dependent defaulting; call
-// Env.validate for both.
+// Env.validate for the DB_* connection settings and Env.appRole for
+// the optional role request.
 func NewEnv() Env {
 	return Env{
 		DBHost:            os.Getenv("DB_HOST"),
@@ -79,6 +93,8 @@ func NewEnv() Env {
 		DBName:            os.Getenv("DB_NAME"),
 		DBMaintenanceName: orDefault(os.Getenv("DB_MAINTENANCE_NAME"), defaultMaintenanceName),
 		MigratorTimeout:   migratorTimeout(),
+		AppDBUser:         os.Getenv("APP_DB_USER"),
+		AppDBPassword:     os.Getenv("APP_DB_PASSWORD"),
 	}
 }
 
@@ -146,6 +162,56 @@ func (e Env) validate(target migration.Target) (postgres.Config, migration.Datab
 	}
 
 	return e.dbConfig(), dbName, nil
+}
+
+// appRole resolves the optional least-privilege runtime role this
+// migrator should provision after a successful "up" migration
+// (ISSUE-016 R-c), from APP_DB_USER/APP_DB_PASSWORD -- the *role's
+// own* username/password (app/iac's api_app/auth_app secret, plan
+// §1.3), not this migrator's own master DB_USER/DB_PASSWORD. Both
+// unset (the default) resolves to requested=false: the caller (run, in
+// main.go) then skips role provisioning entirely, preserving this
+// migrator's pre-ISSUE-016 behavior exactly. Exactly one of the two
+// being set is treated as a misconfiguration (most likely a missing
+// secret reference in app/iac), not a valid "skip" state, and is
+// reported as an error naming whichever variable is missing -- without
+// ever echoing AppDBPassword's value, mirroring validate's own
+// "never echoes DBPassword" contract.
+//
+// APP_DB_USER equal to e.DBUser (this migrator's own master user) is
+// also rejected (ISSUE-016 review Major-2), rather than silently
+// falling through to ensureRole (infra/postgres/role.go): ensureRole
+// unconditionally issues "ALTER ROLE <name> WITH PASSWORD ..." against
+// whatever role name it is given, with no check that the role is not
+// the very one this migrator is currently connected as. If APP_DB_USER
+// happened to match the master DB_USER (e.g. an app/iac secret
+// reference mistake, or a scoped-role secret rotation script that
+// accidentally targets the master secret), this migrator would rewrite
+// the master role's own password to the scoped secret's value on every
+// "up" run -- silently locking out every other master-credentialed
+// connection (including this migrator's own next invocation) and
+// leaving master/scoped credentials inconsistent. Rejecting the match
+// here, before ensureRole is ever reached, turns that footgun into a
+// loud startup failure instead.
+func (e Env) appRole(dbName migration.DatabaseName) (role migration.AppRole, password string, requested bool, err error) {
+	if e.AppDBUser == "" && e.AppDBPassword == "" {
+		return migration.AppRole{}, "", false, nil
+	}
+	if e.AppDBUser == "" {
+		return migration.AppRole{}, "", false, errors.New("config from env: APP_DB_PASSWORD is set but APP_DB_USER is not (both or neither must be set)")
+	}
+	if e.AppDBPassword == "" {
+		return migration.AppRole{}, "", false, errors.New("config from env: APP_DB_USER is set but APP_DB_PASSWORD is not (both or neither must be set)")
+	}
+	if e.AppDBUser == e.DBUser {
+		return migration.AppRole{}, "", false, errors.New("config from env: APP_DB_USER must not equal DB_USER (the master role this migrator connects as); ensureRole would silently overwrite the master role's password with the scoped role's secret")
+	}
+
+	role, err = migration.ParseAppRole(e.AppDBUser, dbName)
+	if err != nil {
+		return migration.AppRole{}, "", false, fmt.Errorf("config from env: %w", err)
+	}
+	return role, e.AppDBPassword, true, nil
 }
 
 // orDefault returns v, or def when v is empty.

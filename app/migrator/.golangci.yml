@@ -15,19 +15,33 @@
 # taint-analysis rules -- see app/api/.golangci.yml and
 # app/auth/.golangci.yml for the two pre-existing findings that
 # re-detects in those stacks). app/migrator has no HTTP client or
-# redirect code, so neither rule applies here. The one string-built
-# SQL statement in this module -- infra/postgres/database.go's
-# `"CREATE DATABASE " + name.Quoted()` -- was checked against gosec's
-# G201/G202 (SQL string formatting/concatenation) keyword regex
+# redirect code, so neither rule applies here. The string-built SQL
+# statements this module issues -- infra/postgres/database.go's
+# `"CREATE DATABASE " + name.Quoted()`, and (added for ISSUE-016 R-c)
+# infra/postgres/role.go's CREATE ROLE/ALTER ROLE .. PASSWORD/REVOKE
+# CONNECT/GRANT CONNECT/GRANT .. ON ALL TABLES/ALTER DEFAULT PRIVILEGES
+# statements -- were checked against gosec's G201/G202 (SQL string
+# formatting/concatenation) keyword regex
 # (SELECT|DELETE|INSERT|UPDATE|INTO|FROM|WHERE; confirmed against the
 # gosec source and empirically against this exact golangci-lint binary
-# with a throwaway repro), which does not match "CREATE", so it is not
-# gosec's blind spot from an exclusion masking a real finding: gosec
-# genuinely does not model CREATE DATABASE as SQL-injection-prone, and
-# this call site is additionally identifier-allowlisted + quoted
-# (domain/migration.DatabaseName.Quoted(), see db.md "セキュリティ") so
-# no suppression is warranted. Baseline `golangci-lint run ./...` under
-# this config is 0 issues, confirmed both with and without the
+# with a throwaway repro). CREATE ROLE/REVOKE/GRANT/ALTER ROLE/ALTER
+# DEFAULT PRIVILEGES do not match that regex either, so none of them
+# are gosec's blind spot from an exclusion masking a real finding: this
+# is genuinely outside what gosec's keyword heuristic looks for, and
+# every one of these call sites is additionally identifier-allowlisted
+# + quoted (domain/migration.DatabaseName.Quoted() / AppRole.Quoted(),
+# see db.md "セキュリティ") so no suppression is warranted for any of
+# them. The one exception is role.go's ALTER ROLE .. PASSWORD
+# statement (role.go:178's `//nolint:gosec` on the `stmt := ...` line):
+# unlike the identifier-only statements above, this one also splices in
+# a password via quoteLiteral (an SQL-literal, not identifier,
+# escape -- ALTER ROLE .. PASSWORD's grammar requires a literal there,
+# not a bind parameter), which *does* match gosec G202's concatenation
+# heuristic (it flags the `+` against a string built from a variable),
+# so that one suppression is gosec correctly firing on real
+# string-built SQL, not a false positive -- kept and explained inline
+# rather than silenced or removed. Baseline `golangci-lint run ./...`
+# under this config is 0 issues, confirmed both with and without the
 # exclusions.presets below (they exclude nothing in this module today;
 # kept for parity with the other two stacks, not because anything here
 # currently relies on them).

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-016
 title: SPEC-005 の DB 接続が最小権限でない(api/auth 共有マスターユーザ)/ アプリ側 DB_SSLMODE 既定が "disable" で平文接続へ fail-open する
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: medium  # critical | high | medium | low
 created: 2026-07-09
 updated: 2026-07-10
@@ -68,15 +68,15 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 
 ### 対応方針
 
-- **今回のスコープ(SPEC-005)では対応しない。** 以下 2 項目をハードニングとして将来対応・追跡する。SPEC-005 plan §6.1(R-c / m-2)で「現状踏襲」と明示評価済み。
-- 参照: `app/iac/envs/dev/main.tf`(DB_USER/DB_PASSWORD の同一シークレット参照)、`app/iac/modules/db/README.md:52-54`(名前空間分離の明記)、`app/auth/infra/postgres/db.go:46,117`(`DB_SSLMODE` 既定 `disable` フォールバック)、SPEC-005 plan §6.1(review-security E3)。
+- 起票当初は「今回のスコープ(SPEC-005)では対応しない」ハードニング追跡項目だったが、**2 項目((m-2)fail-open sslmode / (R-c)最小権限 DB ユーザー)とも修正済み**。(m-2) は 2026-07-10 に既定 `disable`→`require` の fail-closed 化で解消、(R-c) は 2026-07-10 に random_password + Secrets Manager 方式(ユーザー選択)で最小権限ロール分離を実装し解消した(詳細は §5 経緯)。
+- 参照: `app/iac/envs/dev/main.tf`(アプリコンテナは scoped secret、migrate init は master 継続)、`app/iac/modules/db`(`random_password` + api_app/auth_app 専用 Secrets Manager + outputs)、`app/migrator/domain/migration`(AppRole VO + RoleProvisioner ポート)/ `app/migrator/infra/postgres/role.go`(冪等な最小権限付与)、SPEC-005 plan §6.1(review-security E3)。
 
-### 実施内容(将来対応時のチェックリスト)
+### 実施内容
 
-- [ ] (最小権限 / R-c) auth スキーマ・api スキーマそれぞれに専用 DB ロールを作り、各ロールに自スキーマのみの権限を付与する。api / auth のアプリに別々の資格情報(別 Secrets)を注入する(iac: `modules/db` / `modules/service` / `envs`、impl-iac)。マイグレーション実行ロールと実行時ロールの権限分離も検討する
-- [ ] (fail-closed sslmode / m-2) `APP_ENV ∈ {local, test}` 以外で `DB_SSLMODE` 未設定を起動エラーにする(または既定を `"require"` にし、平文を許すのは明示 opt-in のみ)。`app/auth/infra/postgres/db.go` の `ConfigFromEnv` / `SelectMode` 相当で fail-closed を sslmode にも適用する(impl-db)。app/api 側の同等コードがあれば併せて対応する
-- [ ] 上記に伴う統合テスト(fail-closed 分岐、専用ロールでの権限境界)を追加する(tester)
-- [ ] レビュー(review-security)で権限境界と転送暗号化が意図どおりであることを確認する
+- [x] (最小権限 / R-c) auth スキーマ・api スキーマそれぞれに専用 DB ロールを作り、各ロールに自スキーマのみの権限を付与。api / auth のアプリに別々の資格情報(専用 Secrets Manager シークレット)を注入する(iac: `modules/db` / `envs/dev/main.tf`、impl-iac)。マイグレーション実行ロール(master 継続)と実行時ロール(scoped)を分離。ロール付与は goose up 後・up コマンド時のみ実行(`app/migrator` の `domain/migration` + `infra/postgres/role.go` + `service.Migrate`)
+- [x] (fail-closed sslmode / m-2) 既定 `defaultSSLMode` を `"disable"`→`"require"` に変更し、平文は明示 opt-in のみに(`app/api/cmd/api/env.go` / `app/auth/cmd/authz/env.go` / `app/migrator/config.go` の 3 箇所を一括対応、impl-db)。※ 2026-07-10 の先行ラウンドで解消済み
+- [x] 上記に伴う統合テスト(fail-closed 分岐、専用ロールでの権限境界)を追加(m-2 の既定値テスト 3 件、および `app/migrator/infra/postgres/role_integration_test.go`(`//go:build integration`)+ CI `migrator-integration` job(postgres service)、tester / impl-db)
+- [x] レビュー(review-security)で権限境界(DML 可 / DDL 不可 / クロス DB CONNECT 不可・双方向 / master 接続維持)と転送暗号化が意図どおりであることを実 Postgres で確認(Blocker 0、Major 2 件是正済み)
 
 ### 再発防止
 
@@ -111,3 +111,15 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 - **status は open を維持。** 理由: 課題 **(R-c)(最小権限 DB ユーザー)が未対応で残る**ため。現状 api / auth は同一 RDS のマスターユーザーを共有し、`search_path` による名前空間分離のみで権限境界が無い。RDS のサービス別ロール分離 + サービス別 secret の配線は、iac 変更を伴うため別途 iac 計画で対応予定。
 - severity は **medium** を維持(fail-open 側は解消したが、残る (R-c) の権限境界欠如という medium 相当のハードニングが未対応のため)。frontmatter は status=open 維持・updated=2026-07-10。
 - 次にやること: 残る課題 (R-c) を将来 planner が計画化し、impl-iac(`modules/db` / `modules/service` / `envs` でスキーマ毎の専用ロール + 別 secret 注入)/ impl-db(必要なら実行時ロールとマイグレーション実行ロールの権限分離)で実装、tester / review-security を通す。(R-c) が解消した時点で本 Issue をクローズ可能。
+
+### 2026-07-10(修正ラウンド: 残課題 (R-c) 最小権限 DB ユーザーを実装・検証し resolved へ)
+
+- 残っていた課題 **(R-c)(api/auth が同一 RDS マスターユーザーを共有し、`search_path` による名前空間分離のみで権限境界が無い)を解消**した。方式は **random_password + Secrets Manager**(= ユーザー選択)。これにより (m-2)(先行ラウンドで解消済み)と合わせ、本 Issue の 2 課題が両方とも修正済みとなった。
+- 実施内容(impl-iac): `modules/db` に `random_password` + api_app / auth_app 専用 Secrets Manager シークレット + outputs を追加。`envs/dev/main.tf` でアプリコンテナ(api / auth)を各 scoped secret 参照に切り替え、migrate init コンテナは master 資格情報を継続しつつ `APP_DB_USER` / `APP_DB_PASSWORD` を受領する構成にした。
+- 実施内容(impl-db / app/migrator): `domain/migration`(`AppRole` VO + `RoleProvisioner` ポート)を追加。`infra/postgres/role.go` に冪等なロール付与(CREATE ROLE / ALTER PASSWORD / REVOKE CONNECT FROM PUBLIC / GRANT 最小権限 / ALTER DEFAULT PRIVILEGES。DDL 不可、クロス DB 遮断、並行競合リトライ)を実装。`service.Migrate` は goose up 後・かつ up コマンド時のみロール付与を行う。`cmd/migrator/env.go` は `APP_DB_*` 未設定なら後方互換でスキップする(fail-safe)。
+- **検証(review-security)**: 実 Postgres で権限境界を確認 — DML 可 / DDL 不可 / クロス DB CONNECT 不可(双方向)/ master 接続維持。**Blocker 0**。指摘の Major 2 件を是正: (Major-2) `APP_DB_USER == master` の衝突ガードを migrator env + iac variable validation で fail-closed 化、(Major-1) 権限境界の統合テスト `app/migrator/infra/postgres/role_integration_test.go`(`//go:build integration`)+ CI ジョブ `migrator-integration`(postgres service で実行)を追加。
+- **検証(tester / checker)**: tester が env / service gating の配線テストを追加。checker が migrator `make check`(gosec 0)/ iac fmt + validate / CI YAML green を確認。
+- **受容済み残差(今回スコープ外・文書化済み・実害限定的)**: (1) migrator 自身は当面 master 資格情報を継続使用(専用 migrator ロール化・IAM 分離は将来)、(2) task execution role が migrate 用に master secret を読める(ECS では task role と分離され、コンテナプロセスからの直接取得は不可と評価済み)、(3) Minor-3(maintenance DB `postgres` への REVOKE CONNECT 未実施)、(4) Minor-5(並行競合検知のロケール依存メッセージ一致・fail-closed)、(5) ロールパスワードが Terraform state(S3 + 暗号化)に載る(random_password 方式のトレードオフ、ユーザー選択)。将来ハードニングする場合は別 Issue 化を検討する。
+- **apply は未実施**: 実 backend + AWS 認証情報を要する `terraform apply` はユーザー判断に委ねる(agent は実行しない)。iac は fmt + validate まで検証済み。
+- **status を resolved に更新**(updated=2026-07-10)。判定根拠: 本 Issue の 2 課題((m-2)fail-open sslmode / (R-c)最小権限 DB ユーザー)がいずれも修正され、review-security が実 Postgres で権限境界を検証(Blocker 0)し checker green を確認したため。残差は受容済み・文書化済みで、恒久デプロイ反映(apply)のみユーザー判断待ち。
+- 次にやること: 恒久反映は `terraform apply` をユーザーが判断・実行する。受容済み残差((1)〜(5))を将来ハードニングする場合は別 Issue として起票する。

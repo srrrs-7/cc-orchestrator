@@ -1,7 +1,9 @@
 # dev environment values. No secrets: DB master password is managed by RDS
 # via Secrets Manager (manage_master_user_password); the CloudFront<->ALB
-# origin-verify header value is generated at plan/apply time by
-# random_password and is never written here.
+# origin-verify header value and the api_app/auth_app runtime role passwords
+# (ISSUE-016 R-c) are generated at plan/apply time by random_password and are
+# never written here (only their role *names*, which are not secrets, appear
+# below as db_api_app_role_name/db_auth_app_role_name).
 
 region      = "ap-northeast-1"
 project     = "cc-orchestrator"
@@ -24,6 +26,8 @@ db_multi_az                = false
 db_deletion_protection     = false
 db_skip_final_snapshot     = true
 db_backup_retention_period = 1
+db_api_app_role_name       = "api_app"
+db_auth_app_role_name      = "auth_app"
 
 container_image = ""
 task_cpu        = 256

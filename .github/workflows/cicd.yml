@@ -15,7 +15,9 @@
 # api-integration / auth-integration jobs below invoke to create each
 # stack's dedicated Postgres database and apply its migrations — see those
 # jobs' comments for why plain unit-test jobs (`api`/`auth`, memory-backed)
-# do not need to know about it.
+# do not need to know about it. migrator-integration additionally exercises
+# app/migrator's own least-privilege runtime role provisioning (ISSUE-016
+# R-c) against a real Postgres instance.
 name: CI
 
 on:
@@ -157,6 +159,106 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Check (fmt-check + lint + vet + build + test)
         run: make check
+
+  # ---------------------------------------------------------------------------
+  # migrator (Go) — Postgres permission-boundary integration tests (ISSUE-016
+  # R-c, review-security Major-1). Spins up its own pinned postgres service
+  # container (same image/health check as api-integration/auth-integration
+  # below), then runs this module's own binary against it with
+  # APP_DB_USER/APP_DB_PASSWORD set so the "up" migration also provisions the
+  # least-privilege runtime role (infra/postgres.RoleEnsurer, plan
+  # ISSUE-016-plan.md §1.1's api_app/auth_app convention) -- the precondition
+  # the "integration"-tagged permission-boundary test suite (app/migrator,
+  # impl-db) asserts against: the scoped role can do DML on its own database,
+  # cannot do DDL, and cannot CONNECT to another database.
+  #
+  # Deliberately separate from api-integration/auth-integration below (rather
+  # than folding a step into one of them): those two jobs exercise app/api's
+  # and app/auth's own infra/postgres against a migrated database; this job
+  # is about migrator's *own* role-provisioning behavior, which is this
+  # module's test suite (`app/migrator/...`, not app/api's or app/auth's), so
+  # it gets its own throwaway postgres service container and does not touch
+  # the two existing jobs. It reuses the "api" target/database purely as a
+  # fixture to get a real migrated database to provision a role against; it
+  # is not testing app/api's persistence layer.
+  #
+  # Contract: .claude/rules/db.md (ISSUE-016 R-c) + app/migrator's CLI
+  # (`-target`/`-command`/`-migrations-dir`, see app/migrator/cmd/migrator/
+  # main.go) + env.go's APP_DB_USER/APP_DB_PASSWORD contract -- nothing here
+  # invents a different command or environment variable.
+  # ---------------------------------------------------------------------------
+  migrator-integration:
+    name: migrator (Postgres permission boundary integration)
+    needs: changes
+    if: ${{ needs.changes.outputs.migrator == 'true' || needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/migrator
+    services:
+      postgres:
+        # `services.<id>.image` cannot reference the `env` context (see
+        # api-integration below for the same note) -- keep this literal in
+        # sync with env.POSTGRES_VERSION above.
+        image: postgres:17.5-alpine
+        env:
+          POSTGRES_DB: app
+          POSTGRES_USER: app
+          # Disposable credential for this job's ephemeral, throwaway
+          # service container only -- see api-integration below for the
+          # same rationale (never leaves this CI run, unrelated to any
+          # real environment/secret).
+          POSTGRES_PASSWORD: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Master connection settings, matching api-integration's own DB_*
+      # values below (this job reuses the "api" target as a fixture, see
+      # this job's header comment). DB_MAINTENANCE_NAME is left unset so
+      # app/migrator falls back to its own default ("postgres"), same as
+      # api-integration/auth-integration.
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_NAME: api
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+      # Names the least-privilege runtime role (ISSUE-016 R-c naming
+      # convention, app/iac/modules/db/variables.tf's api_app_role_name
+      # default) this job's "up" migration provisions via
+      # infra/postgres.RoleEnsurer -- the role the permission-boundary
+      # test suite below connects as. Disposable, job-scoped value only
+      # (see POSTGRES_PASSWORD above), not a real secret.
+      APP_DB_USER: api_app
+      APP_DB_PASSWORD: api_app_password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: app/migrator/go.sum
+
+      # Creates the "api" database, applies app/api/db/migrations, and --
+      # because APP_DB_USER/APP_DB_PASSWORD are set above -- provisions the
+      # api_app role with least privilege (CONNECT to "api" only, DML but
+      # never DDL on schema public). This is the precondition the
+      # "integration"-tagged suite below asserts against.
+      - name: Create database + migrate up + provision app role (app/migrator)
+        working-directory: ${{ github.workspace }}
+        run: |
+          go -C app/migrator run ./cmd/migrator \
+            -target api -command up \
+            -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
+
+      - name: Permission boundary integration tests (build tag "integration")
+        run: go test -tags=integration ./...
 
   # ---------------------------------------------------------------------------
   # api (Go) — `make check` = fmt-check + lint + vet + build + test.

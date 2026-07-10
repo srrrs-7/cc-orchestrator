@@ -59,3 +59,20 @@ check: fmt-check lint vet build test ## 全チェックを実行する (fmt-chec
 .PHONY: run
 run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")
 	go run ./cmd/migrator $(ARGS)
+
+# Discrete DB_* settings for test-integration below, mirroring
+# app/{api,auth}/Makefile's own defaults (ISSUE-016 review Major-1):
+# these match the local compose Postgres and carry no meaningful
+# secret; real environments (in particular CI) override every one of
+# them via the environment (never edit them into this file).
+# test-integration relies on these being exported in the invoking
+# shell (this Makefile does not forward them itself).
+DB_HOST ?= 127.0.0.1
+DB_PORT ?= 5432
+DB_USER ?= app
+DB_PASSWORD ?= app
+DB_SSLMODE ?= disable
+
+.PHONY: test-integration
+test-integration: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。ISSUE-016 R-c のロール権限境界を実 Postgres に対して検証する。DB_* env で master 資格情報の接続先を指定)
+	go test -tags=integration ./infra/postgres/...

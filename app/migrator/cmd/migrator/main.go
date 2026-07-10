@@ -15,6 +15,14 @@
 //     still uses, so app/api and app/auth's own go.mod never need to
 //     require goose directly -- their only new runtime dependency
 //     stays pgx (plan §RF.1.3).
+//  3. If APP_DB_USER/APP_DB_PASSWORD are set and -command is up, idempotently
+//     provisions that stack's least-privilege runtime role (infra/
+//     postgres.RoleEnsurer, the migration.RoleProvisioner port's
+//     implementation): CONNECT to its own database only, DML on
+//     existing and future tables/sequences in schema public, never DDL
+//     (ISSUE-016 R-c). Both variables unset -- this migrator's
+//     pre-ISSUE-016 default -- skips this step entirely and changes
+//     nothing about steps 1-2.
 //
 // This file is app/migrator's composition root (mirrors
 // app/api/cmd/api/main.go and app/auth/cmd/authz/main.go): it parses
@@ -30,11 +38,13 @@
 //
 // Connection settings are read from the discrete DB_* environment
 // variables documented in env.go's Env/NewEnv/validate: DB_HOST/
-// DB_PORT/DB_USER/DB_PASSWORD/DB_SSLMODE/DB_NAME/DB_MAINTENANCE_NAME.
-// Neither the assembled DSN nor DB_PASSWORD is ever logged; a failure
-// exits non-zero (so an ECS init container's dependsOn: SUCCESS gate,
-// or a CI step, observes it as a failure) without leaking credentials
-// in its message.
+// DB_PORT/DB_USER/DB_PASSWORD/DB_SSLMODE/DB_NAME/DB_MAINTENANCE_NAME,
+// plus the optional APP_DB_USER/APP_DB_PASSWORD pair (env.go's
+// appRole) naming the least-privilege runtime role to provision.
+// Neither the assembled DSN nor DB_PASSWORD/APP_DB_PASSWORD is ever
+// logged; a failure exits non-zero (so an ECS init container's
+// dependsOn: SUCCESS gate, or a CI step, observes it as a failure)
+// without leaking credentials in its message.
 //
 // The goose run itself (as opposed to the initial connectivity checks,
 // bounded by infra/postgres.Open's own pingTimeout) is bounded by
@@ -81,16 +91,30 @@ func run(args []string) error {
 		return fmt.Errorf("migrator: %w", err)
 	}
 
-	svc := service.New(
-		postgres.NewEnsureExister(cfg),
-		goose.NewRunner(cfg, dbName, e.MigratorTimeout),
-	)
-
-	if err := svc.Migrate(ctx, dbName, command, migrationsDir); err != nil {
+	appRole, appPassword, roleRequested, err := e.appRole(dbName)
+	if err != nil {
 		return fmt.Errorf("migrator: %w", err)
 	}
 
-	slog.Info("migrator: done", "target", target, "database", dbName, "command", command, "migrations_dir", migrationsDir)
+	svc := service.New(
+		postgres.NewEnsureExister(cfg),
+		goose.NewRunner(cfg, dbName, e.MigratorTimeout),
+		postgres.NewRoleEnsurer(cfg),
+	)
+
+	var roleReq *service.RoleRequest
+	if roleRequested {
+		roleReq = &service.RoleRequest{Role: appRole, Password: appPassword}
+	}
+
+	if err := svc.Migrate(ctx, dbName, command, migrationsDir, roleReq); err != nil {
+		return fmt.Errorf("migrator: %w", err)
+	}
+
+	slog.Info("migrator: done",
+		"target", target, "database", dbName, "command", command, "migrations_dir", migrationsDir,
+		"role_provisioned", roleRequested && command.IsUp(),
+	)
 	return nil
 }
 

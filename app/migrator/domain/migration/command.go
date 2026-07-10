@@ -27,3 +27,12 @@ func ParseCommand(s string) (Command, error) {
 func (c Command) String() string {
 	return c.value
 }
+
+// IsUp reports whether c is the "up" command. service.Service uses
+// this to decide whether a requested least-privilege role provisioning
+// step (ISSUE-016 R-c) runs: "down" and "status" leave any requested
+// role untouched, since GRANTing access to tables a "down" run may be
+// about to drop (or a "status" run never touches) makes no sense.
+func (c Command) IsUp() bool {
+	return c.value == "up"
+}

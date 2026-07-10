@@ -91,15 +91,21 @@ terraform plan
 push するイメージは `runtime_platform = ARM64` に合わせて **必ず linux/arm64 でビルド**する
 こと(R4。build-push 手順は root `Makefile` を参照)。
 
-## Postgres 永続化・マイグレーション init コンテナについて(SPEC-005、RF リファクタリング後)
+## Postgres 永続化・マイグレーション init コンテナについて(SPEC-005、RF リファクタリング後。ISSUE-016 R-c で資格情報を分離)
 
 `module.service_api` / `module.service_auth` はいずれも `module.db`(RDS PostgreSQL、同一
 インスタンス上に api/auth それぞれ専用のデータベースを持つ。SPEC-005 plan RF.1.1)への接続情報を
 `DB_HOST` / `DB_PORT` / `DB_NAME`(api=`"api"` / auth=`"auth"`、per-service)/ `DB_SSLMODE`
-(`var.db_sslmode`、既定 `"require"`)の plain env と、`DB_USER` / `DB_PASSWORD`
-(`module.db.master_user_secret_arn` の JSON key を ECS `secrets` の `:username::` /
-`:password::` で個別参照)として受け取る(R6。`DB_SCHEMA`/`search_path` は初回実装のみで、この
-リファクタリング後は使わない。詳細な設計判断は `modules/db/README.md` を参照)。
+(`var.db_sslmode`、既定 `"require"`)の plain env として受け取る(`DB_SCHEMA`/`search_path` は
+初回実装のみで、このリファクタリング後は使わない。詳細な設計判断は `modules/db/README.md` を参照)。
+
+**アプリ本体コンテナ**の `DB_USER` / `DB_PASSWORD` は、RDS マスターユーザではなく
+**各サービス専用の最小権限ロール**(api = `module.db.api_app_secret_arn`、auth =
+`module.db.auth_app_secret_arn`。ロール名は `var.db_api_app_role_name` /
+`var.db_auth_app_role_name`、既定 `api_app` / `auth_app`)の JSON secret から ECS `secrets` の
+`:username::` / `:password::` で個別参照する(ISSUE-016 R-c。自分の database のみ・DML のみに
+権限が絞られ、他サービスの database には接続すらできない。詳細は `modules/db/README.md`
+「最小権限ランタイムロール」)。
 
 さらに両サービスとも、アプリ本体の起動前に対象データベースを作成(`CREATE DATABASE`、未存在時
 のみ)し `goose up` を実行する **migrate init コンテナ**(`var.migration_environment` /
@@ -109,6 +115,13 @@ push するイメージは `runtime_platform = ARM64` に合わせて **必ず l
 には `DB_MAINTENANCE_NAME`(既定 `"postgres"`。`CREATE DATABASE` 用の接続先で、RDS で
 `"postgres"` が使えない場合は `module.db.db_name` へ差し替え可能)も含む。方式・並行実行の注意・
 代替案は `modules/service/README.md` の「マイグレーション init コンテナ」を参照)。
+
+この migrate init コンテナは **`DB_USER`/`DB_PASSWORD` に引き続き RDS マスターユーザ**
+(`module.db.master_user_secret_arn`)を使う(`CREATE DATABASE` / `CREATE ROLE` / `GRANT` に
+必要)。加えて `APP_DB_USER` / `APP_DB_PASSWORD`(アプリ本体コンテナと同じ scoped secret 由来)を
+受け取り、app/migrator がそのロールを冪等に作成・GRANT・パスワード同期する(ISSUE-016 R-c、
+`docs/plans/ISSUE-016-plan.md` §1.2/§1.3)。この関係で `secret_read_arns` には両サービスとも
+master secret と自分の scoped secret の 2 つが渡る。
 
 **apply 前の前提条件**: `var.migration_image`(両サービスとも `aws_ecr_repository.migrator` の
 `:latest` タグ)は Terraform が作るのはリポジトリのみで、イメージ自体はまだ push されていない

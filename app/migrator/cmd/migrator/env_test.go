@@ -220,3 +220,198 @@ func TestEnv_Validate_MissingRequiredNeverLeaksPassword(t *testing.T) {
 		t.Errorf("Env.validate() error %q leaks the DB_PASSWORD value", err.Error())
 	}
 }
+
+// setAppRoleEnv sets APP_DB_USER/APP_DB_PASSWORD explicitly for the
+// duration of the calling test (t.Setenv auto-restores on cleanup), so
+// Env.appRole tests are hermetic regardless of whatever the ambient
+// process environment happens to have set -- mirrors setAllDBEnv's
+// rationale for the DB_* variables (SPEC-005 plan §RF.6.2 RB2).
+//
+// It also pins DB_USER (e.DBUser, the master user Env.appRole compares
+// APP_DB_USER against, ISSUE-016 review Major-2) to a fixed value
+// distinct from every APP_DB_USER literal used elsewhere in this file
+// ("api_app", "API_APP; drop role x", ""), so those existing tests
+// never accidentally collide with the master-match check exercised by
+// TestEnv_AppRole_UserEqualsMaster_Errors below. Tests that specifically
+// need DB_USER to equal APP_DB_USER set it themselves afterward via
+// their own t.Setenv("DB_USER", ...) call (which wins, since it runs
+// later in the same test).
+func setAppRoleEnv(t *testing.T, appDBUser, appDBPassword string) {
+	t.Helper()
+	t.Setenv("DB_USER", "migrator_master_user")
+	t.Setenv("APP_DB_USER", appDBUser)
+	t.Setenv("APP_DB_PASSWORD", appDBPassword)
+}
+
+// mustDatabaseName parses a literal known-valid database name for
+// testing Env.appRole, which takes an already-resolved
+// migration.DatabaseName (Env.validate's job, covered by the tests
+// above) rather than resolving one itself from -target/DB_NAME.
+func mustDatabaseName(t *testing.T, name string) migration.DatabaseName {
+	t.Helper()
+	dbName, err := migration.ParseDatabaseName(name)
+	if err != nil {
+		t.Fatalf("migration.ParseDatabaseName(%q) unexpected error: %v", name, err)
+	}
+	return dbName
+}
+
+// TestEnv_AppRole_BothUnset_NotRequested is ISSUE-016 R-c's backward
+// compatibility contract: a deployment that has not wired app/iac's
+// api_app/auth_app secrets through (APP_DB_USER/APP_DB_PASSWORD both
+// left unset, this migrator's pre-ISSUE-016 default) must resolve to
+// requested=false with no error, so main.go's run skips role
+// provisioning entirely and this migrator's behavior is unchanged
+// (CREATE DATABASE + goose only).
+func TestEnv_AppRole_BothUnset_NotRequested(t *testing.T) {
+	setAppRoleEnv(t, "", "")
+
+	e := NewEnv()
+	role, password, requested, err := e.appRole(mustDatabaseName(t, "api"))
+	if err != nil {
+		t.Fatalf("Env.appRole() unexpected error: %v", err)
+	}
+	if requested {
+		t.Errorf("Env.appRole() requested = true, want false (both APP_DB_USER/APP_DB_PASSWORD unset)")
+	}
+	if password != "" {
+		t.Errorf("Env.appRole() password = %q, want empty when not requested", password)
+	}
+	if role != (migration.AppRole{}) {
+		t.Errorf("Env.appRole() role = %+v, want the zero value when not requested", role)
+	}
+}
+
+// TestEnv_AppRole_ExactlyOneSet_Errors is the "misconfiguration, not a
+// valid skip state" contract (env.go's appRole doc comment): exactly
+// one of APP_DB_USER/APP_DB_PASSWORD being set most likely means an
+// app/iac secret reference is missing, and must fail loudly rather
+// than silently behave as if role provisioning were never requested.
+func TestEnv_AppRole_ExactlyOneSet_Errors(t *testing.T) {
+	cases := []struct {
+		name          string
+		appDBUser     string
+		appDBPassword string
+		wantMentions  string // variable name the error must name (the one left unset)
+	}{
+		{
+			name:          "only APP_DB_USER set",
+			appDBUser:     "api_app",
+			appDBPassword: "",
+			wantMentions:  "APP_DB_PASSWORD",
+		},
+		{
+			name:          "only APP_DB_PASSWORD set",
+			appDBUser:     "",
+			appDBPassword: "pw",
+			wantMentions:  "APP_DB_USER",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setAppRoleEnv(t, tc.appDBUser, tc.appDBPassword)
+
+			e := NewEnv()
+			_, _, requested, err := e.appRole(mustDatabaseName(t, "api"))
+			if err == nil {
+				t.Fatalf("Env.appRole() = nil error, want an error naming %s", tc.wantMentions)
+			}
+			if requested {
+				t.Errorf("Env.appRole() requested = true, want false when misconfigured")
+			}
+			if !strings.Contains(err.Error(), tc.wantMentions) {
+				t.Errorf("Env.appRole() error = %q, want it to mention %s", err.Error(), tc.wantMentions)
+			}
+		})
+	}
+}
+
+// TestEnv_AppRole_ExactlyOneSet_NeverLeaksPassword mirrors
+// TestEnv_Validate_MissingRequiredNeverLeaksPassword for the
+// APP_DB_PASSWORD-only-set case: the resulting misconfiguration error
+// must never echo the secret value.
+func TestEnv_AppRole_ExactlyOneSet_NeverLeaksPassword(t *testing.T) {
+	const secret = "sup3r-s3cret-app-role-password"
+	setAppRoleEnv(t, "", secret)
+
+	e := NewEnv()
+	_, _, _, err := e.appRole(mustDatabaseName(t, "api"))
+	if err == nil {
+		t.Fatal("Env.appRole() = nil error, want an error (APP_DB_USER missing)")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("Env.appRole() error %q leaks the APP_DB_PASSWORD value", err.Error())
+	}
+}
+
+// TestEnv_AppRole_BothSet_ResolvesRole is ISSUE-016 R-c's main
+// resolution path: both variables set names the least-privilege
+// runtime role (paired with the caller-supplied DatabaseName, not
+// re-derived) and carries its password through unmodified.
+func TestEnv_AppRole_BothSet_ResolvesRole(t *testing.T) {
+	setAppRoleEnv(t, "api_app", "pw")
+
+	e := NewEnv()
+	dbName := mustDatabaseName(t, "api")
+	role, password, requested, err := e.appRole(dbName)
+	if err != nil {
+		t.Fatalf("Env.appRole() unexpected error: %v", err)
+	}
+	if !requested {
+		t.Fatal("Env.appRole() requested = false, want true (both APP_DB_USER/APP_DB_PASSWORD set)")
+	}
+	if role.Name() != "api_app" {
+		t.Errorf("Env.appRole() role.Name() = %q, want %q", role.Name(), "api_app")
+	}
+	if role.Database().String() != dbName.String() {
+		t.Errorf("Env.appRole() role.Database() = %q, want %q (the dbName argument, unmodified)", role.Database(), dbName)
+	}
+	if password != "pw" {
+		t.Errorf("Env.appRole() password = %q, want %q", password, "pw")
+	}
+}
+
+// TestEnv_AppRole_UserEqualsMaster_Errors is ISSUE-016 review Major-2's
+// regression guard: APP_DB_USER set to the exact same value as this
+// migrator's own master DB_USER must be rejected as a misconfiguration
+// (env.go's appRole doc comment explains why -- ensureRole would
+// otherwise silently ALTER ROLE the master user's own password to the
+// scoped secret's value). Also asserts the resulting error never
+// echoes APP_DB_PASSWORD's value, mirroring this file's other
+// never-leaks-password tests.
+func TestEnv_AppRole_UserEqualsMaster_Errors(t *testing.T) {
+	const secret = "sup3r-s3cret-would-be-master-overwrite"
+	setAppRoleEnv(t, "shared_user", secret)
+	t.Setenv("DB_USER", "shared_user") // overrides setAppRoleEnv's default, deliberately matching APP_DB_USER
+
+	e := NewEnv()
+	_, _, requested, err := e.appRole(mustDatabaseName(t, "api"))
+	if err == nil {
+		t.Fatal("Env.appRole() = nil error, want an error (APP_DB_USER equals master DB_USER)")
+	}
+	if requested {
+		t.Errorf("Env.appRole() requested = true, want false when APP_DB_USER equals master DB_USER")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("Env.appRole() error %q leaks the APP_DB_PASSWORD value", err.Error())
+	}
+}
+
+// TestEnv_AppRole_InvalidIdentifier_Errors asserts a malformed
+// APP_DB_USER (violating migration.ParseAppRole's safe-identifier
+// allowlist, e.g. an app/iac misconfiguration or injection-shaped
+// value) is rejected rather than silently accepted -- appRole must not
+// bypass ParseAppRole's validation.
+func TestEnv_AppRole_InvalidIdentifier_Errors(t *testing.T) {
+	setAppRoleEnv(t, "API_APP; drop role x", "pw")
+
+	e := NewEnv()
+	_, _, requested, err := e.appRole(mustDatabaseName(t, "api"))
+	if err == nil {
+		t.Fatal("Env.appRole() = nil error, want an error (APP_DB_USER is not a safe identifier)")
+	}
+	if requested {
+		t.Errorf("Env.appRole() requested = true, want false when APP_DB_USER is invalid")
+	}
+}
