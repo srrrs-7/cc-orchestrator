@@ -28,6 +28,19 @@
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 include $(REPO_ROOT)/versions.env
 
+# Export every pinned version variable from versions.env as a real shell
+# environment variable, so `docker compose`'s own `${VAR}` substitution
+# (compose.tools.yml's build.args, compose.yml's postgres `image:`) can
+# resolve them from the invoking process's environment. This used to be
+# done via `docker compose --env-file $(REPO_ROOT)/versions.env` instead,
+# but that flag is a *top-level* `docker compose` option (must appear
+# before the subcommand) and some `docker compose` implementations (e.g.
+# nerdctl/Rancher Desktop's compose plugin, confirmed on v5.3.1) reject it
+# outright with "unknown flag: --env-file" even in that position -- so
+# this Makefile no longer relies on it at all, only on plain env export,
+# which every compose implementation honours identically.
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+
 # TOOLBOX_UID/TOOLBOX_GID MUST be exported as real shell environment
 # variables (not passed via `docker compose run -e`) for
 # compose.tools.yml's `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"`
@@ -39,17 +52,18 @@ include $(REPO_ROOT)/versions.env
 # note.
 TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
 
-# `--env-file` is explicit (not relying on a committed `.env`) so the
-# same pinned versions.env this Makefile itself `include`s above is what
-# resolves compose.tools.yml's build args, regardless of cwd.
-COMPOSE    := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+# Version substitution for compose.tools.yml's build args (and, via
+# DB_COMPOSE below, compose.yml's postgres `image:`) comes from the
+# `export`ed versions.env variables above, not `--env-file` -- see that
+# export line's own comment for why.
+COMPOSE    := docker compose -f $(REPO_ROOT)/compose.tools.yml
 # `test-integration` is the one exception that needs a reachable
 # Postgres: layering the sibling compose.yml (which owns the `postgres`
 # service) on top lets `tools` join that project's network and resolve
 # `postgres` by service name (SPEC-009 plan network 切り分け表; the
 # offline `tools-offline` service cannot reach it at all under
 # network_mode:none).
-DB_COMPOSE := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_COMPOSE := docker compose -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
 WORKDIR    := --workdir /workspace/app/api
 
 # tools-offline (network_mode:none): the default execution service for

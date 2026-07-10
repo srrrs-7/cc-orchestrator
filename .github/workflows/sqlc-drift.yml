@@ -11,7 +11,12 @@
 # the same pattern cicd.yml uses — rather than one workflow-wide job. The
 # commands run here are exactly the contract defined in .claude/rules/db.md
 # and each stack's own Makefile (`make sqlc`, the single source of truth for
-# the pinned sqlc version) — do not invent commands here.
+# the pinned sqlc version, itself sourced from versions.env per SPEC-009) —
+# do not invent commands here.
+#
+# SPEC-009 Phase C (2026-07-10): both jobs now run `make sqlc` inside the
+# single pinned toolchain image (docker/toolchain/Dockerfile, built by
+# ./.github/actions/build-toolchain-image) instead of `actions/setup-go`.
 name: sqlc Drift
 
 on:
@@ -28,16 +33,14 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # Must match app/api's and app/auth's go.mod `go 1.24` directive
-  # (cicd.yml's GO_VERSION).
-  GO_VERSION: "1.24"
-
 jobs:
   # ---------------------------------------------------------------------------
   # Detect which stack's sqlc inputs changed, mirroring cicd.yml's `changes`
   # job so api/auth stay independent (a queries/migrations change in one
-  # stack does not trigger the other stack's drift check).
+  # stack does not trigger the other stack's drift check). The toolchain
+  # foundation paths are added to both categories since a version bump there
+  # (in particular versions.env's SQLC_VERSION) can change sqlc's own
+  # generated output.
   # ---------------------------------------------------------------------------
   changes:
     name: Detect changed stacks
@@ -61,11 +64,19 @@ jobs:
               - 'app/api/db/**'
               - 'app/api/infra/postgres/**'
               - 'app/api/sqlc.yaml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
               - '.github/workflows/sqlc-drift.yml'
             auth:
               - 'app/auth/db/**'
               - 'app/auth/infra/postgres/**'
               - 'app/auth/sqlc.yaml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
               - '.github/workflows/sqlc-drift.yml'
 
   # ---------------------------------------------------------------------------
@@ -82,23 +93,26 @@ jobs:
         working-directory: app/api
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-toolchain-image
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
-          # runtime dependency (previously stdlib-only, no go.sum); cache
-          # the module download layer keyed off go.sum. `make sqlc` itself
-          # runs sqlc as `go run pkg@pinned` (not a go.sum entry, see
-          # app/api/Makefile) but shares the same module cache, so repeat
-          # runs also benefit from this.
-          cache: true
-          cache-dependency-path: app/api/go.sum
+      # `make sqlc` itself runs the sqlc binary (baked into the toolchain
+      # image, versions.env's SQLC_VERSION) against local SQL files only —
+      # no app go.sum-declared runtime dependency (pgx) is compiled here.
+      # This warm pass is kept anyway, defensively: it costs one extra
+      # network-enabled `go mod download` call, in exchange for not having
+      # to reason about whether a future sqlc.yaml `overrides` entry (or
+      # sqlc itself) ever needs this module's own dependency graph resolved
+      # under `tools-offline`'s GOPROXY=off.
+      - name: Warm Go module cache (app/api)
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/api tools go mod download
 
       # Regenerates infra/postgres/sqlcgen from db/queries/*.sql +
-      # db/migrations/*.sql (sqlc version pinned in app/api/Makefile, the
-      # single source of truth per docs/plans/SPEC-005-plan.md §0).
-      # Contract: .claude/rules/db.md.
+      # db/migrations/*.sql (sqlc version pinned in versions.env, the
+      # single source of truth per docs/plans/SPEC-005-plan.md §0 /
+      # SPEC-009's versions.env consolidation). Contract: .claude/rules/db.md.
       - name: Regenerate sqlc output (app/api)
         run: make sqlc
 
@@ -106,7 +120,10 @@ jobs:
       # db/queries or db/migrations without re-running `make sqlc` and
       # committing the result. `git add -N` (--intent-to-add) also catches
       # a brand-new generated file that was never committed (plain `git
-      # diff --exit-code` is blind to untracked paths).
+      # diff --exit-code` is blind to untracked paths). Runs directly on
+      # the runner (not inside the toolbox) — see contract-drift.yml's own
+      # such step for why this is safe (same bind-mounted /workspace, same
+      # runner uid:gid the toolbox wrote as).
       - name: Fail on sqlc drift
         run: |
           git add -N -- infra/postgres/sqlcgen
@@ -134,12 +151,13 @@ jobs:
         working-directory: app/auth
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-toolchain-image
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: app/auth/go.sum
+      - name: Warm Go module cache (app/auth)
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/auth tools go mod download
 
       - name: Regenerate sqlc output (app/auth)
         run: make sqlc

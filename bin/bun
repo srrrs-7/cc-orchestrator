@@ -66,12 +66,29 @@ esac
 
 # TOOLBOX_UID/TOOLBOX_GID must be *exported shell env vars*, not `-e`
 # flags to `docker compose run`: compose.tools.yml's `user:` field is
-# resolved by compose itself (from its own process environment / the
-# --env-file) before the container is even created, at which point a `-e`
-# flag would be too late to take effect (see compose.tools.yml's own
-# header comment on this).
+# resolved by compose itself (from its own process environment) before
+# the container is even created, at which point a `-e` flag would be too
+# late to take effect (see compose.tools.yml's own header comment on
+# this).
 export TOOLBOX_UID="$(id -u)"
 export TOOLBOX_GID="$(id -g)"
+
+# Load versions.env's pinned tool/runtime versions as real shell env vars
+# (not via `docker compose --env-file`) so compose's own `${VAR}`
+# substitution (compose.tools.yml's build.args) can resolve them. This
+# used to be `docker compose --env-file "$ROOT/versions.env"` instead,
+# but that flag is a *top-level* `docker compose` option and some `docker
+# compose` implementations (e.g. nerdctl/Rancher Desktop's compose
+# plugin, confirmed on v5.3.1) reject it outright with "unknown flag:
+# --env-file" -- so this shim no longer relies on it at all, only on
+# plain env export, which every compose implementation honours
+# identically (same fix as the root Makefile's own copy of this same
+# comment). versions.env is a plain `KEY=value` file (no `export`
+# keyword), hence the `set -a`/`set +a` bracketing below to mark every
+# variable it defines for export as it's sourced.
+set -a
+. "$ROOT/versions.env"
+set +a
 
 # Prefer the `docker compose` CLI plugin (v2, used throughout this repo's
 # SPEC-009 docs); fall back to the standalone `docker-compose` binary for
@@ -83,5 +100,5 @@ else
   COMPOSE="docker-compose"
 fi
 
-exec $COMPOSE --env-file "$ROOT/versions.env" -f "$ROOT/compose.tools.yml" \
+exec $COMPOSE -f "$ROOT/compose.tools.yml" \
   run --rm -w /workspace/app/web "$SERVICE" bun "$@"

@@ -16,7 +16,24 @@ services:
   # app/api/Makefile and app/auth/Makefile's DB_* defaults) -- never
   # reused for any real environment.
   postgres:
-    image: postgres:17.5-alpine
+    # SPEC-009 review fix (Minor): sourced from versions.env's
+    # POSTGRES_VERSION (the single source of truth for every pinned
+    # tool/runtime version this repo uses) instead of a second hardcoded
+    # copy of "17.5-alpine". The `:-17.5-alpine` fallback matters because,
+    # unlike `db-up`/`migrate` (root Makefile, always invoked with
+    # `--env-file versions.env` — see COMPOSE_DB_FILES) and CI (which also
+    # always passes `--env-file`), the plain `up`/`up-d`/`build` targets
+    # further up this same Makefile intentionally do NOT pass `--env-file`
+    # (they never needed any versions.env value before this change), so
+    # POSTGRES_VERSION would otherwise resolve to empty for those and break
+    # `image: postgres:` entirely. The fallback keeps those call sites
+    # working unchanged while `db-up`/`migrate`/CI (which do pass
+    # --env-file) resolve the real, single-sourced value. If POSTGRES_VERSION
+    # is bumped in versions.env, update this fallback default to match (it
+    # is a safety net for env-file-less invocations, not itself a second
+    # source of truth) -- otherwise those env-file-less targets would keep
+    # starting the old, un-bumped Postgres version.
+    image: postgres:${POSTGRES_VERSION:-17.5-alpine}
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app

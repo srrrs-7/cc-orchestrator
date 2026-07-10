@@ -22,6 +22,19 @@
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 include $(REPO_ROOT)/versions.env
 
+# Export every pinned version variable from versions.env as a real shell
+# environment variable, so `docker compose`'s own `${VAR}` substitution
+# (compose.tools.yml's build.args, compose.yml's postgres `image:`) can
+# resolve them from the invoking process's environment. This used to be
+# done via `docker compose --env-file $(REPO_ROOT)/versions.env` instead,
+# but that flag is a *top-level* `docker compose` option (must appear
+# before the subcommand) and some `docker compose` implementations (e.g.
+# nerdctl/Rancher Desktop's compose plugin, confirmed on v5.3.1) reject it
+# outright with "unknown flag: --env-file" even in that position -- so
+# this Makefile no longer relies on it at all, only on plain env export,
+# which every compose implementation honours identically.
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+
 MODULE_DIR := app/migrator
 
 # docker compose (プラグイン) があればそれを使い、無ければ standalone
@@ -36,8 +49,12 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # created -- a `-e` flag only sets a variable inside the
 # already-created container, too late to affect `user:` (see that
 # file's own header comment).
+# Version substitution for compose.tools.yml's build args (and, via
+# DB_COMPOSE_TOOLS below, compose.yml's postgres `image:`) comes from the
+# `export`ed versions.env variables above, not `--env-file` -- see that
+# export line's own comment for why.
 COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
 
 # network_mode:none -- fmt/fmt-check/lint/vet/build/test/test-race/check
 # never need the network themselves (this module's own go.sum deps are
@@ -71,7 +88,7 @@ OFFLINE := $(COMPOSE_TOOLS) run --rm tools-offline make -C $(MODULE_DIR)
 # (POSTGRES_USER=app/POSTGRES_PASSWORD=app) and app/{api,auth}/Makefile's
 # own DB_* defaults -- carrying no meaningful secret.
 DB_COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
 DB_ONLINE_ENV := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
 ONLINE_DB := $(DB_COMPOSE_TOOLS) run --rm $(DB_ONLINE_ENV) tools make -C $(MODULE_DIR)
 

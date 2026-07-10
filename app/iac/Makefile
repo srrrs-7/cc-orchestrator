@@ -87,6 +87,12 @@ REPO_ROOT := $(shell git rev-parse --show-toplevel)
 # ここではバイナリを名前で呼ぶだけ)。それでも単一ソースの所在を明示する
 # ドキュメントとして include しておく(他スタックの Makefile と同じ扱い)。
 include $(REPO_ROOT)/versions.env
+# 一部の docker compose 実装(nerdctl/Rancher Desktop 系の compose v2 plugin
+# 等)はトップレベル `--env-file` を受け付けず `unknown flag: --env-file` で
+# 落ちる。`--env-file` には頼らず、上の include で読み込んだ版変数を実プロセス
+# 環境へ export し、compose.tools.yml 側の `${GO_VERSION}` 等の変数展開に
+# 委ねる(compose は自プロセスの環境変数からも `${...}` を解決できる)。
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
 
 MODULE_DIR := app/iac
 
@@ -107,7 +113,7 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # コンテナ生成前に自プロセス環境から `${...}` を解決する値であり、`-e` は
 # コンテナ生成後にしか効かず間に合わない(同ファイルの header comment 参照)。
 COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
 
 # 実 backend / AWS provider を使う init(非 --backend=false) / plan / apply
 # 向け。compose.tools.yml はホストの ~/.aws 等を一切マウントしないため、

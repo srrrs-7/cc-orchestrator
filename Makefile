@@ -3,9 +3,15 @@
 # docker compose(プラグイン)があればそれを使い、無ければ standalone docker-compose にフォールバックする
 COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
+# `help`'s grep below needs `-h` (suppress filename prefix): further down,
+# `include $(CURDIR)/versions.env` adds a second entry to $(MAKEFILE_LIST),
+# so a plain `grep` would otherwise prefix every matched line with its
+# source filename ("Makefile:build: ## ...") once more than one file is in
+# that list, which breaks this awk's ":.*?## "-based field split (the
+# target-name column would print the filename instead of the target).
 .PHONY: help
 help: ## ターゲット一覧を表示する (起動後: web http://localhost:8080 / api http://localhost:8081 / auth http://localhost:8082)
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 .PHONY: build
 build: ## 全サービスのイメージをビルドする
@@ -74,6 +80,19 @@ clean: ## 停止・コンテナ・volume を削除する
 # just below -- its *compose file combination* must be aligned with
 # `migrate`'s, for a network-consistency reason unrelated to toolchain
 # wrapping itself.
+# Pinned tool/runtime versions (SPEC-009's single source of truth), needed
+# here so `docker compose`'s own `${VAR}` substitution (compose.tools.yml's
+# build.args, compose.yml's postgres `image:`) can resolve them. This used
+# to be done via `docker compose --env-file $(CURDIR)/versions.env` instead,
+# but that flag is a *top-level* `docker compose` option and some `docker
+# compose` implementations (e.g. nerdctl/Rancher Desktop's compose plugin,
+# confirmed on v5.3.1) reject it outright with "unknown flag: --env-file" --
+# so this Makefile no longer relies on it at all, only on plain env export,
+# which every compose implementation honours identically (same fix as
+# app/api/Makefile's own copy of this same comment).
+include $(CURDIR)/versions.env
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+
 TOOLBOX_UID := $(shell id -u)
 TOOLBOX_GID := $(shell id -g)
 # TOOLBOX_UID/TOOLBOX_GID must be real *shell* environment variables --
@@ -87,9 +106,9 @@ TOOLBOX_ENV := TOOLBOX_UID=$(TOOLBOX_UID) TOOLBOX_GID=$(TOOLBOX_GID)
 
 # Compose file combination shared by `db-up` below and `migrate`'s
 # DB_TOOLS_RUN further down: both MUST resolve to the *exact same*
-# docker-compose project config (same `--env-file`, same `-f ... -f ...`
-# file list), so that the CLI computes an identical config hash for the
-# implicit default network on every invocation.
+# docker-compose project config (same exported version env, same
+# `-f ... -f ...` file list), so that the CLI computes an identical
+# config hash for the implicit default network on every invocation.
 #
 # Observed empirically during Phase B implementation: `db-up` originally
 # ran bare `$(COMPOSE) up -d --wait postgres` (compose.yml alone), while
@@ -121,7 +140,7 @@ TOOLBOX_ENV := TOOLBOX_UID=$(TOOLBOX_UID) TOOLBOX_GID=$(TOOLBOX_GID)
 # specifically about two *separate* invocations (`db-up` alone, then
 # `migrate` alone) disagreeing with each other; `up`/`up-d` never split
 # postgres's startup from api/auth/web's this way.
-COMPOSE_DB_FILES := --env-file $(CURDIR)/versions.env -f compose.yml -f compose.tools.yml
+COMPOSE_DB_FILES := -f compose.yml -f compose.tools.yml
 
 .PHONY: db-up
 db-up: ## postgres のみを起動し healthy になるまで待つ(migrate と同じ compose ファイル構成で network 整合を保つ)
@@ -141,7 +160,7 @@ DB_TOOLS_RUN := $(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) run --rm
 # to run `bun run build` -- an exec-phase command per the SPEC-009 plan's
 # network-要否 table (no network needed once app/web's dependencies are
 # already installed via a prior `bun install`).
-TOOLS_OFFLINE_RUN := $(TOOLBOX_ENV) $(COMPOSE) --env-file $(CURDIR)/versions.env -f compose.tools.yml run --rm
+TOOLS_OFFLINE_RUN := $(TOOLBOX_ENV) $(COMPOSE) -f compose.tools.yml run --rm
 
 MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
 

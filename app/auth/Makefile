@@ -30,6 +30,19 @@
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
 include $(REPO_ROOT)/versions.env
 
+# `docker compose`'s top-level `--env-file` flag is not portable across all
+# `docker compose` implementations this Makefile is run against (e.g.
+# nerdctl/Rancher Desktop's compose plugin v5.3.1 rejects it outright with
+# `unknown flag: --env-file`), so this Makefile no longer passes it. Instead,
+# every version variable this file itself `include`s from versions.env above
+# is re-exported as a real make/shell environment variable; `docker compose`
+# already resolves a YAML value's `${VAR}` substitution (compose.tools.yml's
+# `build.args`, `user:`, etc.) from its own process environment with no
+# `--env-file` needed, as long as the variable is actually exported into that
+# process's environment (bare `include`d make variables are not -- hence the
+# explicit `export` below).
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+
 # TOOLBOX_UID/TOOLBOX_GID MUST be exported as real shell environment
 # variables (not passed via `docker compose run -e`) for
 # compose.tools.yml's `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"`
@@ -41,17 +54,14 @@ include $(REPO_ROOT)/versions.env
 # note.
 TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
 
-# `--env-file` is explicit (not relying on a committed `.env`) so the
-# same pinned versions.env this Makefile itself `include`s above is what
-# resolves compose.tools.yml's build args, regardless of cwd.
-COMPOSE    := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+COMPOSE    := docker compose -f $(REPO_ROOT)/compose.tools.yml
 # `test-integration` is the one exception that needs a reachable
 # Postgres: layering the sibling compose.yml (which owns the `postgres`
 # service) on top lets `tools` join that project's network and resolve
 # `postgres` by service name (SPEC-009 plan network 切り分け表; the
 # offline `tools-offline` service cannot reach it at all under
 # network_mode:none).
-DB_COMPOSE := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_COMPOSE := docker compose -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
 WORKDIR    := --workdir /workspace/app/auth
 
 # tools-offline (network_mode:none): the default execution service for
