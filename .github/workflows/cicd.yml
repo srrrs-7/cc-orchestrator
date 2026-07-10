@@ -20,7 +20,7 @@
 # R-c) against a real Postgres instance.
 #
 # SPEC-009 Phase C (2026-07-10): every job below now runs its commands
-# inside the single pinned toolchain image (docker/toolchain/Dockerfile,
+# inside the single pinned toolchain image (.devcontainer/toolchain/Dockerfile,
 # built by ./.github/actions/build-toolchain-image with a GitHub Actions
 # cache; see that action's own header for why no job here uses a
 # `container:`/GHCR-hosted image — that was a deliberate user decision, not
@@ -28,11 +28,10 @@
 # terraform/tflint/trivy. Concretely: `setup-go` / `setup-bun` /
 # golangci-lint's curl installer / `setup-terraform` / `setup-tflint` /
 # `setup-trivy` are gone from every job; each job instead runs the exact
-# same `make <target>` / `bun run <script>` a developer runs locally, which
-# (per each stack's own Makefile / bin/bun, all already SPEC-009-Phase-B
+# (per each stack's own Makefile, all already SPEC-009-Phase-B
 # transparent-toolbox wrappers — nothing in *those* files changes here)
 # themselves delegate into that same image via `docker compose ... -f
-# compose.tools.yml run --rm tools[-offline] ...`. This is what makes local
+# .devcontainer/compose.tools.yml run --rm tools[-offline] ...`. This is what makes local
 # and CI genuinely the same execution environment (SPEC-009 R6), not just
 # the same version numbers.
 #
@@ -40,22 +39,22 @@
 # own `env:` block (pre-SPEC-009, this file was itself the pin source for
 # GO_VERSION/BUN_VERSION/GOLANGCI_LINT_VERSION/TERRAFORM_VERSION/
 # TFLINT_VERSION/TRIVY_VERSION, later found to have drifted from
-# contract-drift.yml's own separate BUN_VERSION pin — see versions.env's own
-# header comment on that history). versions.env (repo root) is now the only
+# contract-drift.yml's own separate BUN_VERSION pin — see .devcontainer/versions.env's own
+# header comment on that history). .devcontainer/versions.env (repo root) is now the only
 # place any of these are written; ./.github/actions/build-toolchain-image
 # loads it directly. This also removes the drift risk this task set out to
 # fix for TRIVY_VERSION specifically (previously pinned here as v0.58.1,
-# whose upstream release was deleted — see versions.env's own TRIVY_VERSION
+# whose upstream release was deleted — see .devcontainer/versions.env's own TRIVY_VERSION
 # comment for the verified detail): rather than re-pinning a second
 # `TRIVY_VERSION: v0.69.2` copy in this file that could drift again, trivy
-# now only has the one pin, in versions.env, and this file has nothing left
+# now only has the one pin, in .devcontainer/versions.env, and this file has nothing left
 # to keep in sync.
 #
 # POSTGRES_VERSION is the one exception still worth a comment: none of this
 # file's jobs start a GitHub Actions-native `services:` Postgres container
 # anymore (see api-integration/auth-integration/migrator-integration below)
 # — Postgres now comes from the repo's own compose.yml (root `make db-up`),
-# which is what keeps its version pinned in sync with versions.env
+# which is what keeps its version pinned in sync with .devcontainer/versions.env
 # (compose.yml's own header documents that it is a fixed, non-secret
 # local/CI-only Postgres). Nothing in this file duplicates that pin either.
 name: CI
@@ -78,8 +77,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # Detect which stacks changed so each stack job can be skipped when untouched.
   # The workflow file itself is added to every filter so CI changes re-run all.
-  # SPEC-009 Phase C: the toolchain foundation (versions.env, docker/toolchain,
-  # compose.tools.yml, the build-toolchain-image composite action) is now
+  # SPEC-009 Phase C: the toolchain foundation (.devcontainer/versions.env, .devcontainer/toolchain,
+  # .devcontainer/compose.tools.yml, the build-toolchain-image composite action) is now
   # every job's actual execution environment, so a change to any of those
   # also has to re-run every stack's job, not just "the CI workflow file" —
   # added to every category below alongside the pre-existing
@@ -119,53 +118,52 @@ jobs:
             web:
               - 'app/web/**'
               - '.github/workflows/cicd.yml'
-              - 'versions.env'
-              - 'docker/toolchain/**'
-              - 'compose.tools.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
             api:
               - 'app/api/**'
               - 'compose.yml'
               - 'Makefile'
               - '.github/workflows/cicd.yml'
-              - 'versions.env'
-              - 'docker/toolchain/**'
-              - 'compose.tools.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
             auth:
               - 'app/auth/**'
               - 'compose.yml'
               - 'Makefile'
               - '.github/workflows/cicd.yml'
-              - 'versions.env'
-              - 'docker/toolchain/**'
-              - 'compose.tools.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
             iac:
               - 'app/iac/**'
               - '.github/workflows/cicd.yml'
-              - 'versions.env'
-              - 'docker/toolchain/**'
-              - 'compose.tools.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
             migrator:
               - 'app/migrator/**'
               - 'compose.yml'
               - 'Makefile'
               - '.github/workflows/cicd.yml'
-              - 'versions.env'
-              - 'docker/toolchain/**'
-              - 'compose.tools.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
 
   # ---------------------------------------------------------------------------
   # web (TypeScript / React) — Bun runtime/pm, Biome, tsc, Vitest, Vite.
-  # Contract: .claude/rules/web.md (package.json scripts).
+  # Contract: .claude/rules/web.md (app/web/Makefile targets).
   #
-  # SPEC-009 Phase C: `oven-sh/setup-bun` is gone; `bin/bun` (Phase B's
-  # transparent host shim, unchanged by this task) resolves every `bun ...`
-  # call below into the toolchain image's real bun instead, once this repo's
-  # bin/ directory is put on PATH.
+  # SPEC-009: `app/web/Makefile` transparently delegates every target into
+  # the toolchain image (install → tools; check/build/test/… → tools-offline).
+  # Host/CI never invokes bun directly.
   # ---------------------------------------------------------------------------
   web:
     name: web (TypeScript / React)
@@ -180,32 +178,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-toolchain-image
 
-      # bin/bun (SPEC-009 Phase B, unchanged here) is a POSIX-sh shim that
-      # dispatches `bun ...` into the toolchain image; putting it at the
-      # FRONT of PATH is this job's only toolchain-specific setup (the exact
-      # same one-time step CLAUDE.md documents for local development).
-      - name: Add repo bin/ (bun shim) to PATH
-        shell: bash
-        run: echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
-
-      # --frozen-lockfile installs exactly what bun.lock pins; the
-      # bunfig.toml minimumReleaseAge gate only affects resolving new versions,
-      # so locked deps are unaffected in CI. `install` is one of bin/bun's
-      # network-needing subcommands, so this runs through the toolbox's
-      # network-enabled `tools` service; every step below is offline
-      # (`tools-offline`, network_mode: none).
       - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Format check
-        run: bun run format:check
-      - name: Lint
-        run: bun run lint
-      - name: Type check
-        run: bun run typecheck
-      - name: Test
-        run: bun run test
-      - name: Build
-        run: bun run build
+        run: make install INSTALL_FLAGS=--frozen-lockfile
+
+      - name: Check (format-check + lint + typecheck + test + build)
+        run: make check
 
   # ---------------------------------------------------------------------------
   # app/migrator (Go) — SPEC-005's shared migration runner (2026-07-09
@@ -225,7 +202,7 @@ jobs:
   # own go.sum-declared runtime deps (goose, pgx — see .claude/rules/db.md
   # "goose の閉じ込め") need one prior network-enabled pass to land in that
   # same named volume before the offline `make check` can see them (see
-  # docker/toolchain/Dockerfile's own comment on this two-phase need, which
+  # .devcontainer/toolchain/Dockerfile's own comment on this two-phase need, which
   # this step exists to satisfy — sqlc/goose(-as-a-CLI)/swag/goimports'
   # OWN module graphs are pre-warmed at image-build time, but this is a
   # different module graph: app/migrator's own go.sum).
@@ -246,8 +223,8 @@ jobs:
 
       - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
-          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/migrator tools go mod download
 
       - name: Check (fmt-check + lint + vet + build + test)
@@ -279,7 +256,7 @@ jobs:
   # runner's own 127.0.0.1, which a *separate* toolbox container (a sibling
   # container, not the job's own process) cannot reach without extra network
   # plumbing (host.docker.internal / --network host), whereas layering
-  # `-f compose.yml -f compose.tools.yml` (exactly what app/migrator's own
+  # `-f compose.yml -f .devcontainer/compose.tools.yml` (exactly what app/migrator's own
   # `make run`/`make test-integration` already do locally, per that
   # Makefile's own ONLINE_DB/DB_COMPOSE comments) lets these containers
   # resolve `postgres` by its compose service name, giving CI the identical
@@ -335,9 +312,9 @@ jobs:
       # suite below asserts against.
       - name: Create database + migrate up + provision app role (app/migrator)
         run: |
-          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
-          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" \
-            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
+            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/migrator \
             -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
             -e APP_DB_USER -e APP_DB_PASSWORD \
@@ -345,9 +322,9 @@ jobs:
 
       - name: Permission boundary integration tests (build tag "integration")
         run: |
-          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
-          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" \
-            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
+            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/migrator \
             -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
             -e APP_DB_USER -e APP_DB_PASSWORD \
@@ -376,8 +353,8 @@ jobs:
 
       - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
-          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/api tools go mod download
 
       - name: Check (fmt-check + lint + vet + build + test)
@@ -462,8 +439,8 @@ jobs:
 
       - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
-          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/auth tools go mod download
 
       - name: Check (fmt-check + lint + vet + build + test)

@@ -4,7 +4,7 @@ title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
 updated: 2026-07-10
-issues: [ISSUE-026]  # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-026, ISSUE-027]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -84,6 +84,28 @@ supersedes: null # 置き換える旧Spec ID
 | ホスト実行のまま lockfile 等だけで対処 | 第一線は維持するが、install 時のホスト秘密露出という根本リスクが残る |
 | docker socket をマウントしてコンテナから docker 操作 | ソケット露出は事実上のホスト root 相当。非マウントを維持 |
 
+### 配置の再編: toolchain を `.devcontainer/` へ集約(2026-07-10 決定)
+
+当初 Phase A–C は toolchain 一式をリポジトリルート直下に配置した(`compose.tools.yml` / `docker/toolchain/` / `versions.env` / `bin/bun`)。これらを **`.devcontainer/` 配下へ物理集約**し、「devcontainer / toolchain 関連はすべて `.devcontainer/` で管理する」方針に変更する。目的はリポジトリルート直下の散らかり解消と、開発環境定義の一元化。**実行の正典が `docker compose run` である点(§4 方針)は不変**で、変わるのはファイルの物理配置と参照パスのみ。
+
+**移設マッピング(旧 → 新)**:
+
+| 旧(root) | 新(`.devcontainer/`) |
+|---|---|
+| `compose.tools.yml` | `.devcontainer/compose.tools.yml` |
+| `docker/toolchain/{Dockerfile,README.md}` | `.devcontainer/docker/toolchain/{Dockerfile,README.md}` |
+| `versions.env`(+ ルート `.env` symlink) | `.devcontainer/versions.env`(`.env` の要否・配置は compose の env 解決に合わせ planner が決定) |
+| `bin/bun` | `.devcontainer/bin/bun` |
+| `.devcontainer/devcontainer.json` | 位置は不変。`dockerComposeFile` を `../compose.tools.yml` → 同ディレクトリ `compose.tools.yml` に更新 |
+
+**不変条件(SPEC-009 R4 を維持)**:
+
+- `make check` / `make test` 等(api/auth/migrator/iac)、`bun run <script>`(web)のコマンド契約・入口は変えない。ルート `Makefile` と各 stack `Makefile` は**内部の参照パスのみ** `.devcontainer/compose.tools.yml` / `.devcontainer/versions.env` へ更新する
+- `bin/bun` の呼び出し契約を壊さない。直接 `bin/bun` を叩く箇所が残る場合は、ルートに薄い shim を残すか全呼び出し元を `.devcontainer/bin/bun` に更新する(planner が呼び出し元を列挙して決定)
+- 2 フェーズ network(deps 有効 / check・build・test は `--network none`)・秘密非マウント・`cap_drop`/`no-new-privileges` 等の隔離特性は変えない
+
+**更新が必要な参照元(planner が網羅列挙)**: ルート `Makefile` / `compose.yml` / `app/{api,auth,iac,migrator}/Makefile` / `bin/bun` 自身 / `.github/workflows/*`(`cicd.yml` / `contract-drift.yml` / `sqlc-drift.yml` / `deploy.yml`)/ `.devcontainer/devcontainer.json` / `docker/toolchain/Dockerfile` 内の相対参照・コメント / `.gitignore` / `.dockerignore` / dependabot 設定(base-image 追跡パス)/ `.claude/rules/*` / CLAUDE.md の配置記述。
+
 ## 5. 実装計画
 
 詳細は `docs/plans/SPEC-009-plan.md`(planner が作成)。着手前に planner が以下を設計する:
@@ -94,6 +116,14 @@ supersedes: null # 置き換える旧Spec ID
 - [ ] T4: admin が `.claude/rules/*` / CLAUDE.md をコンテナ実行前提の注記に更新(`.claude`/CLAUDE.md 整備は admin 権限)
 - [ ] T5: checker / tester が「ホストに runtime を入れない状態」での全コマンド疎通と `--network none` 完走、CI green を検証
 - [ ] T6: review-security(秘密非保持・egress・socket 非マウント・network-none の妥当性)/ review-spec
+
+**配置の再編(`.devcontainer/` 集約)タスク**:
+
+- [ ] T7: planner が移設対象と全参照元を網羅列挙し、所有者別(impl-ci = ルート/横断/CI/devcontainer、各 impl = 自 stack の Makefile)に手順化。`bin/bun` 契約維持方針(root shim か全書換)・`.env` の要否を決定
+- [ ] T8: impl-ci が移設(`git mv` 相当)+ ルート `Makefile` / `compose.yml` / `.github/workflows/*` / `.devcontainer/devcontainer.json` / `docker/toolchain/Dockerfile` 内相対参照 / `.gitignore` / `.dockerignore` / dependabot の参照を更新
+- [ ] T9: impl-api / impl-auth / impl-iac / impl-db が各 stack `Makefile` の参照パスを `.devcontainer/` 配下へ更新
+- [ ] T10: admin が `.claude/rules/*` / CLAUDE.md の配置記述を更新(`.claude`/CLAUDE.md 整備は admin 権限)
+- [ ] T11: checker / tester が移設後の全コマンド疎通(コンテナ経由 green・`--network none` 完走)を検証、review-spec が契約非変更を確認
 
 ## 6. 経緯(時系列・追記のみ)
 
@@ -111,3 +141,14 @@ supersedes: null # 置き換える旧Spec ID
 - **残留リスク(§4 補足)**: (a) iac の `plan`/`apply` は net 有効コンテナに AWS 資格情報を透過し provider を fetch する(lock file hash で緩和)。(b) named cache volume は単一テナント前提の 0777。(c) monorepo 全体を単一 bind-mount(単一 install 侵害の blast-radius は repo 全体、ただしホスト秘密は非漏洩)。(d) bun/golangci-lint は curl|sh の TOFU インストール。(e) devcontainer は UID 自動注入なしで固定 uid 1000。いずれも主目的(install 時のホスト秘密窃取の防止)は満たしつつ受容。
 - **残タスク(follow-up)**: (1) 実 PR での CI green 確認(GHA build cache / container job の実機初回実行。ローカル未確認のため status は in-progress を維持)。(2) `.github/copilot-instructions.md` のコンテナ実行注記・`.claude/rules/*` の各コマンド表への注記(CLAUDE.md 中央注記は反映済み)。(3) SPEC-009-plan の「CI 配布方式」節を実決定(各 job build + gha cache)に更新。将来ハードニング: rootless/Podman、action の SHA pin、cache volume の権限厳格化。
 - **ISSUE-026 起票(本 SPEC 由来の混入バグ)**: SPEC-010 の tester 作業中に、`app/auth/Makefile` の `test-integration` が `docker compose run` の引数順違反(`DB_ONLINE` に `tools` を内包した上で後ろに `-e ...` を追記 → `-e` が in-container コマンドに回る)で `exec: "-e": executable file not found in $PATH` になる既存バグを発見。api 側(正常)と非対称で、SPEC-009 Phase B(Makefile の toolbox ラッパー化)で混入したと推定。CI の `auth-integration` ジョブも同じ `make test-integration` を呼ぶため fail の可能性が高い(要確認)。ISSUE-026 として起票(修正は impl-auth、本 SPEC 側は相互リンクのみ)。
+
+### 2026-07-10(追記: toolchain を `.devcontainer/` へ集約)
+
+- ユーザー方針:「devcontainer 関連のファイルや設定は `.devcontainer/` 配下で全て管理する」。admin がスコープを確認し、**共有 toolchain(`compose.tools.yml` / `docker/toolchain/` / `versions.env` / `bin/`)一式をルート直下から `.devcontainer/` へ物理移設**する選択をユーザーが決定(「devcontainer 専用設定のみ集約」という narrow 案ではなく、toolchain 一式の移設)。
+- 本変更は SPEC-009 の配置設計(§4)の更新に閉じる。**実行の正典が `docker compose run` である点・隔離特性・コマンド契約(R4)は不変**で、変わるのはファイルの物理配置と参照パスのみ。移設マッピング・不変条件・参照元一覧は §4「配置の再編」小節に追記。
+- パイプライン: planner(T7: 参照元の網羅列挙と所有者別の手順化、`bin/bun` 契約維持=root shim か全書換の決定)→ impl-ci(T8: 移設 + ルート/横断/CI/devcontainer の参照更新)+ 各 stack impl(T9: 自 Makefile の参照更新)→ admin(T10: `.claude/rules/*` / CLAUDE.md の配置記述更新)→ checker/tester(T11: 疎通・CI green)→ review-spec(契約非変更の確認)。
+- status は in-progress を維持(移設完了 + 全コマンド疎通・CI green の確認まで)。
+
+### 2026-07-10(追記: ISSUE-027 起票 — Go 1.26 bump の相互リンク)
+
+- 本 SPEC 所有の `versions.env`(`GO_VERSION`)/ `docker/toolchain/Dockerfile`(`ARG GO_VERSION` / sqlc の `GOTOOLCHAIN=auto` 回避策)を含む、Go 1.24 → 1.26 の横断 bump 課題を **ISSUE-027** として起票。pin が ~8 箇所(`versions.env` / 各 `go.mod` / 各 app `Dockerfile` / toolchain `ARG` 既定値 / dependabot コメント)に分散し横断編集が要る点、最大の不確定要素が golangci-lint 2.12.2 の Go 1.26 対応可否である点を記録。本 SPEC 側は**相互リンクのみ**(bump 実装は ISSUE-027 側で impl-ci / impl-api / impl-auth / impl-db に分担)。

@@ -8,7 +8,7 @@
 # `make test`, `make openapi`, ... -- see .claude/rules/api.md's command
 # table, which this Makefile remains the single source of truth for);
 # what changed is that the real recipe now runs inside the pinned
-# toolbox container (docker/toolchain/Dockerfile via compose.tools.yml,
+# toolbox container (.devcontainer/toolchain/Dockerfile via compose.tools.yml,
 # docs/plans/SPEC-009-plan.md) instead of directly on the host, so a
 # host with no go/golangci-lint/etc. installed can still run every
 # target here.
@@ -26,7 +26,9 @@
 #     already-toolboxed container fails fast (target not found) instead
 #     of nesting another container.
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-include $(REPO_ROOT)/versions.env
+DEVCONTAINER_DIR := $(REPO_ROOT)/.devcontainer
+COMPOSE_TOOLS_FILE := $(DEVCONTAINER_DIR)/compose.tools.yml
+include $(DEVCONTAINER_DIR)/versions.env
 
 # Export every pinned version variable from versions.env as a real shell
 # environment variable, so `docker compose`'s own `${VAR}` substitution
@@ -50,7 +52,8 @@ export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VER
 # variable *inside* the already-created container -- too late to affect
 # `user:`. See compose.tools.yml's own header comment for the same
 # note.
-TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
+TOOLBOX_ENV := COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)" \
+	TOOLBOX_WORKSPACE="$(REPO_ROOT)" TOOLBOX_CONTEXT="$(DEVCONTAINER_DIR)/toolchain"
 
 # docker compose (プラグイン) があればそれを使い、無ければ standalone
 # docker-compose にフォールバックする(root Makefile / app/iac/Makefile /
@@ -63,14 +66,14 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # DB_COMPOSE below, compose.yml's postgres `image:`) comes from the
 # `export`ed versions.env variables above, not `--env-file` -- see that
 # export line's own comment for why.
-COMPOSE    := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
+COMPOSE    := $(COMPOSE_BIN) -f $(COMPOSE_TOOLS_FILE)
 # `test-integration` is the one exception that needs a reachable
 # Postgres: layering the sibling compose.yml (which owns the `postgres`
 # service) on top lets `tools` join that project's network and resolve
 # `postgres` by service name (SPEC-009 plan network 切り分け表; the
 # offline `tools-offline` service cannot reach it at all under
 # network_mode:none).
-DB_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(COMPOSE_TOOLS_FILE)
 WORKDIR    := --workdir /workspace/app/api
 
 # tools-offline (network_mode:none): the default execution service for
@@ -92,7 +95,7 @@ DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR)
 # run pkg@version` cannot resolve offline even with the exact
 # module+version fully warmed in GOMODCACHE (it performs an
 # unconditional module-proxy lookup every invocation) -- see
-# compose.tools.yml's and docker/toolchain/Dockerfile's header comments
+# compose.tools.yml's and .devcontainer/toolchain/Dockerfile's header comments
 # for the verified detail. The toolbox image instead `go install`s each
 # at its pinned version (versions.env's SQLC_VERSION / GOOSE_VERSION /
 # SWAG_VERSION / GOIMPORTS_VERSION, `include`d above) onto

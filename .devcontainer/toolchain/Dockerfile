@@ -1,4 +1,4 @@
-# docker/toolchain/Dockerfile
+# .devcontainer/toolchain/Dockerfile
 #
 # Single polyglot "toolchain" image (SPEC-009). Bakes every pinned
 # developer/CI tool this monorepo needs -- go, bun, golangci-lint,
@@ -8,18 +8,18 @@
 # exact same pinned toolchain instead of each installing its own copies.
 # Threat model / rationale: docs/specs/20260710-009-containerized-toolchain-no-host-runtime.md.
 #
-# Every version below is a build ARG, populated from ../../versions.env
-# (the single source of truth) via compose.tools.yml's `build.args` --
+# Every version below is a build ARG, populated from ../versions.env
+# (the single source of truth) via .devcontainer/compose.tools.yml's `build.args` --
 # nothing in this file hardcodes a version.
 #
 # Build context is intentionally this directory ONLY
-# (`docker/toolchain`), never the repo root: this image bakes in
+# (`.devcontainer/toolchain`), never the repo root: this image bakes in
 # *tools*, not repository *source* (source is bind-mounted at
-# /workspace at run time -- see compose.tools.yml), so there is nothing
+# /workspace at run time -- see .devcontainer/compose.tools.yml), so there is nothing
 # here that needs a large build context or a .dockerignore.
 #
 # Non-root by design (a fixed `tools` user, uid/gid 1000). At run time
-# compose.tools.yml overrides the effective user to the *invoking host
+# .devcontainer/compose.tools.yml overrides the effective user to the *invoking host
 # user's* uid:gid (not this image's fixed 1000:1000), so that files
 # created under the /workspace bind-mount are owned by the calling
 # developer/CI user rather than by this image's baked-in uid. Every
@@ -29,7 +29,7 @@
 # time can still write new cache entries into it.
 #
 # GOMODCACHE/GOCACHE below are deliberately the SAME paths
-# compose.tools.yml mounts named volumes over (/cache/go/mod,
+# .devcontainer/compose.tools.yml mounts named volumes over (/cache/go/mod,
 # /cache/go/build). Docker copies a directory's existing image content
 # into a brand-new named volume the first time that volume is mounted
 # (documented Docker volume behaviour, not specific to this Dockerfile) --
@@ -41,7 +41,7 @@
 # dependencies (pgx, goose-as-a-library in app/migrator, etc.) are a
 # separate concern and still need one network-enabled `go mod download`
 # (via the `tools` service) before *that* module can build/test offline
-# too -- see compose.tools.yml's header comment and this directory's
+# too -- see .devcontainer/compose.tools.yml's header comment and this directory's
 # README.md "検証" section for how that two-phase flow is exercised.
 #
 # IMPORTANT (verified during Phase A implementation, corrects the
@@ -62,7 +62,7 @@
 # from `go run` to the installed binary) -- confirmed necessary here,
 # not merely a hypothetical risk.
 
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-bookworm
 
 # ARGs declared before FROM only survive for the FROM instruction itself;
@@ -86,7 +86,7 @@ ARG GOIMPORTS_VERSION
 # "amd64"/"arm64" strings Docker's TARGETARCH would (Debian's dpkg arch
 # names happen to match), regardless of which builder is in use.
 
-# Fail fast (before any network calls below) if compose.tools.yml /
+# Fail fast (before any network calls below) if .devcontainer/compose.tools.yml /
 # versions.env did not actually supply a version -- an unset ARG would
 # otherwise silently expand to an empty string in a URL and produce a
 # confusing 404 several layers down.
@@ -94,7 +94,7 @@ RUN set -eu; \
     for v in "$BUN_VERSION" "$GOLANGCI_LINT_VERSION" "$TERRAFORM_VERSION" \
              "$TFLINT_VERSION" "$TRIVY_VERSION" "$SQLC_VERSION" \
              "$GOOSE_VERSION" "$SWAG_VERSION" "$GOIMPORTS_VERSION"; do \
-        if [ -z "$v" ]; then echo "docker/toolchain/Dockerfile: a required ARG is empty" >&2; exit 1; fi; \
+        if [ -z "$v" ]; then echo ".devcontainer/toolchain/Dockerfile: a required ARG is empty" >&2; exit 1; fi; \
     done
 
 # --- OS packages -------------------------------------------------------
@@ -113,14 +113,14 @@ RUN apt-get update \
 # --- non-root user -------------------------------------------------------
 # Fixed uid/gid 1000 as the image's own sane default (e.g. a plain
 # `docker run` with no `user:` override, or the devcontainer's
-# remoteUser). compose.tools.yml overrides this at run time to the
+# remoteUser). .devcontainer/compose.tools.yml overrides this at run time to the
 # invoking host user's uid:gid instead -- see this file's header comment.
 RUN groupadd --gid 1000 tools \
     && useradd --uid 1000 --gid tools --create-home --shell /bin/bash tools
 ENV HOME=/home/tools
 
-# --- cache / tool directories, shared with compose.tools.yml ------------
-# These paths are exactly what compose.tools.yml mounts named volumes
+# --- cache / tool directories, shared with .devcontainer/compose.tools.yml ------------
+# These paths are exactly what .devcontainer/compose.tools.yml mounts named volumes
 # over (gomodcache/gobuild/buncache/tfplugincache) -- see this file's
 # header comment for why baking content in here still matters despite
 # the volume mount. GOBIN is deliberately NOT one of those paths, so the
@@ -137,7 +137,7 @@ ENV GOPATH=/cache/go \
 
 RUN mkdir -p /cache/go/mod /cache/go/build /cache/bun /cache/tf-plugins \
         /usr/local/go-tools/bin "$BUN_INSTALL" "$HOME" /workspace \
-    # World-writable: an arbitrary uid:gid (compose.tools.yml's `user:`
+    # World-writable: an arbitrary uid:gid (.devcontainer/compose.tools.yml's `user:`
     # override, see above) must be able to write new cache entries at
     # run time, not just read what was baked in here at build time.
     && chmod -R 0777 /cache /usr/local/go-tools "$BUN_INSTALL" "$HOME" /workspace
@@ -209,34 +209,20 @@ RUN curl -fsSL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib
 # `go install` (not `go run`) here so this build (a) has an actual
 # binary to smoke-test below, and (b) warms GOMODCACHE/GOCACHE with
 # these exact module graphs at these exact pinned versions. GOBIN above
-# is NOT one of the paths compose.tools.yml mounts a volume over, so
+# is NOT one of the paths .devcontainer/compose.tools.yml mounts a volume over, so
 # these installed binaries are always present regardless of volume
 # state -- and, per this file's header comment, each stack's Makefile
 # (Phase B) needs to invoke these binaries BY NAME (`sqlc` / `goose` /
 # `swag` / `goimports`, already on PATH here), not via `go run
 # pkg@version`, since the latter fails offline even when fully cached.
 #
-# sqlc's own go.mod requires a newer `go` directive (>=1.26.0) than this
-# image's pinned GO_VERSION (1.24, matching versions.env/cicd.yml). Go's
-# toolchain directive would normally auto-download and use a newer
-# toolchain for just this one `go install` invocation when needed (this
-# RUN step has network, so that download would succeed) -- but the
-# official golang:*-bookworm base image itself sets `GOTOOLCHAIN=local`
-# (verified: `docker run --rm golang:1.24-bookworm go env GOTOOLCHAIN`
-# prints "local"), which disables that auto-download and makes `go
-# install` fail fast instead ("requires go >= 1.26.0 ... GOTOOLCHAIN=
-# local"). GOTOOLCHAIN=auto is restored for just this one RUN step
-# (not image-wide, so every other `go` invocation in this image keeps
-# the base image's deliberate "never silently fetch a newer toolchain"
-# default) so sqlc's `go install` can fetch+use go1.26.x for its own
-# build; the resulting sqlc binary and its cached module graph are
-# unaffected by which toolchain built them, and this image's own `go`
-# on PATH remains ${GO_VERSION} for everything else.
+# sqlc's own go.mod requires `go >= 1.26.0`, matching this image's
+# pinned GO_VERSION (versions.env). No GOTOOLCHAIN override is needed.
 #
 # goimports has no --version/-version flag (and running it with no
 # arguments blocks reading stdin), so it is verified below by checking
 # the installed binary exists/is executable rather than invoking it.
-RUN GOTOOLCHAIN=auto go install "github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION}" \
+RUN go install "github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSION}" \
     && go install "github.com/pressly/goose/v3/cmd/goose@${GOOSE_VERSION}" \
     && go install "github.com/swaggo/swag/v2/cmd/swag@${SWAG_VERSION}" \
     && go install "golang.org/x/tools/cmd/goimports@${GOIMPORTS_VERSION}" \
@@ -249,7 +235,7 @@ RUN GOTOOLCHAIN=auto go install "github.com/sqlc-dev/sqlc/cmd/sqlc@${SQLC_VERSIO
 WORKDIR /workspace
 USER tools
 
-# Smoke-testable expectation (docker/toolchain/README.md "検証"):
+# Smoke-testable expectation (.devcontainer/toolchain/README.md "検証"):
 # `go version` / `bun --version` / `golangci-lint version` /
 # `terraform version` / `tflint --version` / `trivy --version` /
 # `sqlc version` / `goose -version` / `swag --version` should all report

@@ -8,8 +8,8 @@ Follow the conventions below when suggesting or editing code.
 | Path | Stack | Tooling |
 |---|---|---|
 | `app/web` | Frontend (TypeScript / React) | Bun, Biome, tsc, Vitest, Vite |
-| `app/api` | Backend API (Go, DDD) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
-| `app/auth` | Auth API (Go, OAuth 2.0 + OIDC) | Go 1.24 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
+| `app/api` | Backend API (Go, DDD) | Go 1.26 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
+| `app/auth` | Auth API (Go, OAuth 2.0 + OIDC) | Go 1.26 (stdlib + pgx/v5 for Postgres only), Make, goose, sqlc |
 | `app/iac` | Infrastructure (Terraform / AWS) | Terraform `>= 1.10`, tflint, trivy |
 | `docs/` | Specs / issues / plans | Markdown |
 
@@ -17,7 +17,7 @@ Do not change code outside the stack you are working in.
 
 ## Commands (per stack — do not invent others)
 
-- **web** (`app/web`): `bun install`, `bun run format:check` / `format` / `lint` / `typecheck` / `test` / `build`.
+- **web** (`app/web`): `make install`, `make format-check` / `format` / `lint` / `typecheck` / `test` / `build` / `generate` / `check`.
 - **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`. Postgres persistence (SPEC-005, not part of `make check`): `make sqlc` (generate `infra/postgres/sqlcgen` from `db/queries`; commit the output), `make migrate-up` / `migrate-down` / `migrate-status` / `migrate-create name=<slug>` (goose, `db/migrations`), `make test-integration` (build tag `integration`, requires a migrated Postgres reachable via `DB_*` env vars).
 - **iac** (`app/iac`): `make check ENV=dev` (= `fmt-check` + `validate` + `lint` + `security`). Never run `terraform apply`.
 

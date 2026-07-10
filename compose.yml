@@ -21,7 +21,7 @@ services:
     # tool/runtime version this repo uses) instead of a second hardcoded
     # copy of "17.5-alpine". The `:-17.5-alpine` fallback matters because,
     # unlike `db-up`/`migrate` (root Makefile, always invoked with
-    # `--env-file versions.env` — see COMPOSE_DB_FILES) and CI (which also
+    # `--env-file .devcontainer/versions.env` — see COMPOSE_DB_FILES) and CI (which also
     # always passes `--env-file`), the plain `up`/`up-d`/`build` targets
     # further up this same Makefile intentionally do NOT pass `--env-file`
     # (they never needed any versions.env value before this change), so

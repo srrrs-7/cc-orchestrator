@@ -1,8 +1,7 @@
-# docker/toolchain
+# .devcontainer/toolchain
 
 Single polyglot developer/CI toolchain image (SPEC-009: `docs/specs/20260710-009-containerized-toolchain-no-host-runtime.md`).
-Bakes every pinned tool this monorepo's Makefiles / `bun run` scripts
-need — go, bun, golangci-lint, terraform, tflint, trivy, plus the CLIs
+Bakes every pinned tool this monorepo's Makefiles need — go, bun, golangci-lint, terraform, tflint, trivy, plus the CLIs
 each Go stack's Makefile shells out to (sqlc / goose / swag / goimports)
 — into one image, so local dev, CI, and the devcontainer all run the
 exact same pinned toolchain instead of each installing (and potentially
@@ -17,14 +16,14 @@ supply-chain attack (e.g. a Shai-Hulud-style npm worm) to read host
 secrets (`~/.aws`, `~/.ssh`, `~/.npmrc`, ambient env vars) and exfiltrate
 or self-propagate. Running that code inside a disposable container that
 holds no host secrets, with normal execution additionally running
-`--network none`, removes that access entirely — see `compose.tools.yml`
+`--network none`, removes that access entirely — see `.devcontainer/compose.tools.yml`
 for how the two services (`tools` / `tools-offline`) apply this.
 
 ## Versions
 
 Every tool version baked into this image is an ARG, supplied from
-`../../versions.env` (the repo's single source of truth for tool
-versions) via `compose.tools.yml`'s `build.args`. **Do not hardcode a
+`../versions.env` (the repo's single source of truth for tool
+versions) via `.devcontainer/compose.tools.yml`'s `build.args`. **Do not hardcode a
 version in this Dockerfile** — bump it in `versions.env` instead, then
 rebuild.
 
@@ -53,13 +52,13 @@ Phase C.
 ## Build
 
 ```sh
-docker compose --env-file versions.env -f compose.tools.yml build
+docker compose --env-file versions.env -f .devcontainer/compose.tools.yml build
 ```
 
 If your `docker` CLI has no `compose` subcommand (no buildx-backed
 compose v2 plugin installed), fall back to the standalone `docker-compose`
 binary instead — same syntax, e.g. `docker-compose --env-file versions.env
--f compose.tools.yml build` (this is exactly the fallback the repo-root
+-f .devcontainer/compose.tools.yml build` (this is exactly the fallback the repo-root
 `Makefile` already probes for). Note the standalone binary shells out to
 the legacy (non-BuildKit) `docker build`, under which BuildKit's
 automatic `TARGETARCH` build arg is NOT populated — this Dockerfile
@@ -67,21 +66,22 @@ deliberately does not rely on it for that reason (see its own comment;
 architecture is instead resolved at build time via `dpkg
 --print-architecture`).
 
-(`versions.env` is symlinked at the repo root as `.env` too, so a plain
-`docker compose -f compose.tools.yml build` / `docker-compose -f
-compose.tools.yml build` — no `--env-file` flag, e.g. what the VS Code
-Dev Containers extension runs internally — also picks up the same pinned
-versions via Compose's own default `.env` auto-load.)
+(A plain `docker compose -f .devcontainer/compose.tools.yml build` — no
+`--env-file` flag, e.g. what the VS Code Dev Containers extension runs
+internally — resolves build args via the fallback defaults baked into
+`compose.tools.yml`'s `build.args` (e.g. `GO_VERSION: ${GO_VERSION:-1.26}`).
+These defaults mirror `.devcontainer/versions.env` and must be kept in sync
+with it whenever a version is bumped there.)
 
 ## Design notes
 
-- **Build context is this directory only** (`docker/toolchain`), never
+- **Build context is this directory only** (`.devcontainer/toolchain`), never
   the repo root — this image bakes in *tools*, not repository *source*.
   Source is bind-mounted at `/workspace` at run time by
-  `compose.tools.yml`, so there is nothing here that needs a large build
+  `.devcontainer/compose.tools.yml`, so there is nothing here that needs a large build
   context or a `.dockerignore`.
 - **Non-root**: a fixed `tools` user (uid/gid 1000) is the image's own
-  default, but `compose.tools.yml` overrides the effective `user:` at
+  default, but `.devcontainer/compose.tools.yml` overrides the effective `user:` at
   run time to the invoking host user's uid:gid, so files created under
   the `/workspace` bind-mount are owned by the calling developer/CI
   user, not by this image's baked-in uid. Every cache directory this
@@ -90,7 +90,7 @@ versions via Compose's own default `.env` auto-load.)
 - **Cache paths double as compose volume mount points**:
   `GOMODCACHE=/cache/go/mod`, `GOCACHE=/cache/go/build`,
   `BUN_INSTALL_CACHE_DIR=/cache/bun`, `TF_PLUGIN_CACHE_DIR=/cache/tf-plugins`
-  are exactly the paths `compose.tools.yml` mounts named volumes over.
+  are exactly the paths `.devcontainer/compose.tools.yml` mounts named volumes over.
   Docker copies a directory's existing image content into a brand-new
   named volume the first time it is mounted (documented Docker volume
   behaviour), so the module/build cache this Dockerfile warms by
@@ -121,7 +121,7 @@ versions via Compose's own default `.env` auto-load.)
   effective uid (observed here under colima/virtiofs: the mount point
   itself reports uid 0 while files inside it correctly report the host
   uid — a real-world instance of exactly the mismatch Git's
-  CVE-2022-24765 mitigation guards against). `compose.tools.yml` works
+  CVE-2022-24765 mitigation guards against). `.devcontainer/compose.tools.yml` works
   around this with Git's env-var config injection
   (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` =
   `safe.directory=/workspace`) rather than a persistent `~/.gitconfig`
@@ -132,23 +132,14 @@ versions via Compose's own default `.env` auto-load.)
   dependencies (e.g. `app/migrator`'s `pgx` + `goose`-as-a-library) are
   a separate concern and still need one network-enabled `go mod
   download` (via the `tools` service) before *that* module can build/
-  test fully offline — see the repo-root `compose.tools.yml`'s header
+  test fully offline — see the repo-root `.devcontainer/compose.tools.yml`'s header
   comment and this file's "検証" section below.
-- **sqlc needs a newer Go toolchain than this image is pinned to.**
-  `github.com/sqlc-dev/sqlc@<SQLC_VERSION>`'s own `go.mod` requires
-  `go >= 1.26.0`, newer than `GO_VERSION` (1.24, matching
-  `versions.env`/`cicd.yml`). The official `golang:*-bookworm` base
-  image sets `GOTOOLCHAIN=local` (verified: `docker run --rm
-  golang:1.24-bookworm go env GOTOOLCHAIN` prints `local`), which
-  normally would make `go install` fail outright instead of
-  auto-fetching a newer toolchain; the sqlc install step below
-  overrides this to `GOTOOLCHAIN=auto` for just that one `RUN`
-  instruction (network available at build time), so every other `go`
-  invocation in the image keeps the base image's stricter default.
+- **sqlc's `go.mod` requires `go >= 1.26.0`, matching `GO_VERSION` in
+  `versions.env`.** No `GOTOOLCHAIN=auto` override is needed (ISSUE-027
+  removed the workaround that existed while the base was go1.24).
 - **Image size (~5.9GB) is dominated by sqlc's own dependency graph**
   (it vendors client libraries for essentially every SQL engine it
-  supports — MySQL/Postgres/SQLite/ClickHouse/YDB/etc. — plus the
-  go1.26 toolchain `GOTOOLCHAIN=auto` downloads to build it). This is
+  supports — MySQL/Postgres/SQLite/ClickHouse/YDB/etc.). This is
   baked-in `GOMODCACHE`/`GOCACHE` content deliberately kept (not
   pruned) so it can seed the `gomodcache`/`gobuild` named volumes on
   first use (see above) — trimming it after the fact would defeat that
@@ -159,14 +150,14 @@ versions via Compose's own default `.env` auto-load.)
 
 ```sh
 # 1. Build
-docker compose --env-file versions.env -f compose.tools.yml build
+docker compose --env-file versions.env -f .devcontainer/compose.tools.yml build
 
 # 2. compose config is valid
-docker compose --env-file versions.env -f compose.tools.yml config >/dev/null
+docker compose --env-file versions.env -f .devcontainer/compose.tools.yml config >/dev/null
 
 # 3. Smoke test every tool version inside tools-offline (network_mode: none)
 TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
-  docker compose --env-file versions.env -f compose.tools.yml \
+  docker compose --env-file versions.env -f .devcontainer/compose.tools.yml \
   run --rm tools-offline sh -c '
     go version
     bun --version
@@ -184,11 +175,11 @@ TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
 #    (network none, GOPROXY=off) -- calling golangci-lint/gofmt/goimports
 #    directly (not `go run`), per the "does not work offline" note above
 TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
-  docker compose --env-file versions.env -f compose.tools.yml \
+  docker compose --env-file versions.env -f .devcontainer/compose.tools.yml \
   run --rm -w /workspace/app/migrator tools go mod download
 
 TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
-  docker compose --env-file versions.env -f compose.tools.yml \
+  docker compose --env-file versions.env -f .devcontainer/compose.tools.yml \
   run --rm -w /workspace/app/migrator tools-offline sh -c '
     go build ./... && go vet ./... && go test ./... \
       && golangci-lint run ./... && gofmt -l . && goimports -l .
@@ -202,7 +193,7 @@ version; step 4's `tools-offline` run completed `go build` / `go vet` /
 `go test` (all packages `ok`) / `golangci-lint run` (`0 issues`) /
 `gofmt -l` / `goimports -l` (both empty, i.e. no diff) fully offline,
 confirming the warm-then-run-offline flow before any Phase B Makefile
-wrapper depends on it. `docker compose --env-file versions.env -f
-compose.tools.yml config` also validated cleanly both with and without
-the `--env-file` flag (the latter exercising the `.env` symlink
-auto-load path devcontainer relies on).
+wrapper depends on it. `docker compose --env-file .devcontainer/versions.env -f
+.devcontainer/compose.tools.yml config` also validated cleanly both with and without
+the `--env-file` flag (the latter exercising the `build.args` fallback
+defaults in `compose.tools.yml` that devcontainer relies on).

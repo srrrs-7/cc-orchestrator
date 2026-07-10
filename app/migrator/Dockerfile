@@ -15,11 +15,11 @@
 #   docker build -f app/migrator/Dockerfile .
 #
 # --- build stage -------------------------------------------------------
-# Go 1.24 on Alpine (musl). CGO_ENABLED=0 produces a fully static
-# binary, so glibc/gcc from the full golang:1.24 image are not needed;
+# Go 1.26 on Alpine (musl). CGO_ENABLED=0 produces a fully static
+# binary, so glibc/gcc from the full golang:1.26 image are not needed;
 # the binary still runs unmodified on the distroless runtime stage
 # below (same pattern as app/api/Dockerfile and app/auth/Dockerfile).
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Copy only the dependency manifest first so `go mod download` is

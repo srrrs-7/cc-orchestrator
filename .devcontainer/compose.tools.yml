@@ -1,7 +1,7 @@
 # compose.tools.yml — containerized developer/CI toolchain (SPEC-009).
 #
 # Two services built from the single polyglot image
-# docker/toolchain/Dockerfile, whose tool versions all come from
+# .devcontainer/toolchain/Dockerfile, whose tool versions all come from
 # versions.env (the single source of truth -- see that file):
 #
 #   tools          network enabled. Reserved for "deps" phases that must
@@ -33,16 +33,16 @@
 # from its own process environment or an --env-file, before the
 # container is even created; a `-e` flag passed to `docker compose run`
 # only sets a variable *inside* the already-created container, which is
-# too late to affect the `user:` field). Callers (Phase B's Makefile
-# wrappers, bin/bun, or a human) must export both, e.g.:
+# too late to affect the `user:` field). Callers (Makefile wrappers, or a
+# human) must export both, e.g.:
 #
 #   TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
-#     docker compose --env-file versions.env -f compose.tools.yml \
+#     docker compose --env-file versions.env -f .devcontainer/compose.tools.yml \
 #     run --rm tools-offline make -C app/api check
 #
 # This keeps files created under the /workspace bind-mount owned by the
 # calling developer/CI user, never by root or this image's baked-in
-# uid:gid 1000 (see docker/toolchain/Dockerfile). When TOOLBOX_UID/
+# uid:gid 1000 (see .devcontainer/toolchain/Dockerfile). When TOOLBOX_UID/
 # TOOLBOX_GID are not exported (e.g. a plain `docker compose up` from an
 # editor), both default to 1000:1000 -- the image's own built-in `tools`
 # user.
@@ -52,12 +52,12 @@
 # of the sibling compose.yml (which owns the `postgres` service) instead
 # of using network_mode:none:
 #
-#   docker compose --env-file versions.env -f compose.yml -f compose.tools.yml \
+#   docker compose --env-file versions.env -f compose.yml -f .devcontainer/compose.tools.yml \
 #     run --rm tools <command reaching DB_HOST=postgres>
 #
 # This file only defines the two service *shapes*; deciding which
 # service (and which compose file combination) a given command goes
-# through is Phase B's Makefile-wrapper/bin-bun concern, not this file's.
+# through is each stack's Makefile-wrapper concern, not this file's.
 #
 # IMPORTANT for Phase B (verified during Phase A implementation): `go
 # run pkg@version` (sqlc/goose/swag/goimports, as every Go stack's
@@ -67,7 +67,7 @@
 # module-proxy lookup on every invocation, unconditionally, and fails
 # under GOPROXY=off regardless of cache state. `go install` (a one-time
 # build, different code path) does not hit this, so
-# docker/toolchain/Dockerfile still uses it to pre-warm the cache, but
+# .devcontainer/toolchain/Dockerfile still uses it to pre-warm the cache, but
 # each stack's Makefile must invoke these four tools BY THEIR INSTALLED
 # BINARY NAME (`sqlc` / `goose` / `swag` / `goimports`, all already on
 # PATH in every image via GOBIN=/usr/local/go-tools/bin, present
@@ -75,22 +75,60 @@
 # exec phase to actually complete under `tools-offline`. This is the
 # SPEC-009 plan's own pre-approved fallback for this exact scenario, now
 # confirmed necessary rather than hypothetical -- see
-# docker/toolchain/Dockerfile's own comment on this for detail.
+# .devcontainer/toolchain/Dockerfile's own comment on this for detail.
 
+# Build context and workspace bind-mount source are interpolated so this
+# one file works from either project-directory Compose may pick:
+#
+#   - The devcontainer (VS Code Dev Containers extension) runs Compose
+#     with THIS file's own directory (.devcontainer/) as the project
+#     directory, and sets none of the vars below -- so the defaults
+#     (`./toolchain` and `..`, both relative to .devcontainer/) resolve
+#     to .devcontainer/toolchain and the repo root respectively.
+#   - Every CLI/CI caller (the Makefile wrappers, the CI jobs)
+#     instead exports TOOLBOX_CONTEXT / TOOLBOX_WORKSPACE as *absolute*
+#     paths (repo-root-anchored), so the paths are correct regardless of
+#     which project directory Compose derives (tools-only invocations get
+#     .devcontainer/, `-f compose.yml -f ...` overlays get the repo root)
+#     and never depend on `-f` ordering. Those callers also pin
+#     COMPOSE_PROJECT_NAME=cc-orchestrator so the named cache volumes
+#     below stay a single shared set across every invocation (a
+#     tools-only project would otherwise default its name to
+#     "devcontainer" -- this file's parent dir -- and silently use a
+#     separate, unwarmed cache).
 x-tools-base: &tools-base
   build:
-    context: ./docker/toolchain
+    context: ${TOOLBOX_CONTEXT:-./toolchain}
+    # Fallback defaults for build.args below: these are safety-nets for
+    # callers that do not supply an --env-file and have not exported the
+    # variables into their shell environment (e.g. `docker compose -f
+    # compose.tools.yml build` without --env-file, which is what the VS
+    # Code Dev Containers extension runs internally). They are the same
+    # pattern as compose.yml's `image: postgres:${POSTGRES_VERSION:-...}`.
+    #
+    # Source of truth for all pinned versions is .devcontainer/versions.env.
+    # These defaults MUST be kept in sync with that file whenever a version
+    # is bumped there (same discipline as compose.yml's POSTGRES_VERSION).
+    #
+    # Callers that DO supply the env file (make, CI --env-file versions.env)
+    # resolve the real values directly and never reach these fallbacks.
+    #
+    # Previously a `.env` symlink at the repo root pointing to
+    # .devcontainer/versions.env served this role via Compose's automatic
+    # default-.env auto-load; that symlink has been removed in favour of
+    # explicit fallback defaults here, which require no out-of-band file on
+    # disk.
     args:
-      GO_VERSION: ${GO_VERSION}
-      BUN_VERSION: ${BUN_VERSION}
-      GOLANGCI_LINT_VERSION: ${GOLANGCI_LINT_VERSION}
-      TERRAFORM_VERSION: ${TERRAFORM_VERSION}
-      TFLINT_VERSION: ${TFLINT_VERSION}
-      TRIVY_VERSION: ${TRIVY_VERSION}
-      SQLC_VERSION: ${SQLC_VERSION}
-      GOOSE_VERSION: ${GOOSE_VERSION}
-      SWAG_VERSION: ${SWAG_VERSION}
-      GOIMPORTS_VERSION: ${GOIMPORTS_VERSION}
+      GO_VERSION: ${GO_VERSION:-1.26}
+      BUN_VERSION: ${BUN_VERSION:-1.3.14}
+      GOLANGCI_LINT_VERSION: ${GOLANGCI_LINT_VERSION:-2.12.2}
+      TERRAFORM_VERSION: ${TERRAFORM_VERSION:-1.10.5}
+      TFLINT_VERSION: ${TFLINT_VERSION:-v0.55.1}
+      TRIVY_VERSION: ${TRIVY_VERSION:-v0.69.2}
+      SQLC_VERSION: ${SQLC_VERSION:-v1.31.1}
+      GOOSE_VERSION: ${GOOSE_VERSION:-v3.24.1}
+      SWAG_VERSION: ${SWAG_VERSION:-v2.0.0-rc5}
+      GOIMPORTS_VERSION: ${GOIMPORTS_VERSION:-v0.42.0}
   image: cc-orchestrator/toolchain:local
   # See file header: host-caller-supplied uid:gid via shell env vars,
   # defaulting to the image's own built-in tools user (1000:1000).
@@ -103,7 +141,7 @@ x-tools-base: &tools-base
     # this materially speeds up large bind-mounted trees; under the
     # current VirtioFS-based backend it is close to a no-op, but is kept
     # since it is harmless on Linux and correct either way.
-    - .:/workspace:delegated
+    - ${TOOLBOX_WORKSPACE:-..}:/workspace:delegated
     - gomodcache:/cache/go/mod
     - gobuild:/cache/go/build
     - buncache:/cache/bun
@@ -125,7 +163,7 @@ x-tools-env: &tools-env
   BUN_INSTALL_CACHE_DIR: /cache/bun
   TF_PLUGIN_CACHE_DIR: /cache/tf-plugins
   # Marks "already inside the toolbox" for the IN_TOOLBOX-guarded
-  # Makefile wrappers (Phase B) and bin/bun shim, preventing them from
+  # Makefile wrappers, preventing them from
   # re-invoking `docker compose run` from inside a container that is
   # already the target (no multi-level re-wrapping).
   IN_TOOLBOX: "1"
@@ -173,7 +211,7 @@ services:
 
 volumes:
   # Named volumes (never bind-mounted into the repo tree): survive across
-  # `run` invocations, are seeded from docker/toolchain/Dockerfile's own
+  # `run` invocations, are seeded from .devcontainer/toolchain/Dockerfile's own
   # baked-in cache content the first time each is created (see that
   # file's header comment on Docker's volume-seeding behaviour), and are
   # the only place install-time cache data lives.
