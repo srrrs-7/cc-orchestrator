@@ -12,7 +12,9 @@ import { TaskList } from "./TaskList";
 // the hook lets each test drive the filter directly, and mocking Link
 // (used by the nested TaskItem) avoids needing that router context too.
 const { mockUseSearch } = vi.hoisted(() => {
-  return { mockUseSearch: vi.fn<() => { status: TaskStatus | "all" }>() };
+  return {
+    mockUseSearch: vi.fn<() => { status: TaskStatus | "all"; limit: number; offset: number }>(),
+  };
 });
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -32,7 +34,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 describe("TaskList", () => {
   it('renders every task from the API, sorted by priority, for status "all" (normal)', async () => {
-    mockUseSearch.mockReturnValue({ status: "all" });
+    mockUseSearch.mockReturnValue({ status: "all", limit: 20, offset: 0 });
     renderWithQueryClient(<TaskList />);
 
     await screen.findByText("Set up project scaffolding");
@@ -47,7 +49,7 @@ describe("TaskList", () => {
   });
 
   it("filters the list down to only the requested status", async () => {
-    mockUseSearch.mockReturnValue({ status: "todo" });
+    mockUseSearch.mockReturnValue({ status: "todo", limit: 20, offset: 0 });
     renderWithQueryClient(<TaskList />);
 
     await screen.findByText("Review pull requests");
@@ -57,8 +59,12 @@ describe("TaskList", () => {
   });
 
   it("shows an empty state when no task matches the filter (boundary: zero results)", async () => {
-    server.use(http.get("/api/tasks", () => HttpResponse.json([])));
-    mockUseSearch.mockReturnValue({ status: "done" });
+    server.use(
+      http.get("/api/tasks", () =>
+        HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 }),
+      ),
+    );
+    mockUseSearch.mockReturnValue({ status: "done", limit: 20, offset: 0 });
     renderWithQueryClient(<TaskList />);
 
     expect(await screen.findByText("No tasks found.")).toBeInTheDocument();
@@ -68,7 +74,7 @@ describe("TaskList", () => {
     server.use(
       http.get("/api/tasks", () => HttpResponse.json({ message: "boom" }, { status: 500 })),
     );
-    mockUseSearch.mockReturnValue({ status: "all" });
+    mockUseSearch.mockReturnValue({ status: "all", limit: 20, offset: 0 });
     renderWithQueryClient(<TaskList />);
 
     const alert = await screen.findByRole("alert");

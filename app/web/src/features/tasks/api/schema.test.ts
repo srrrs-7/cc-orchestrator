@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "../domain/task";
 import type { TaskDto } from "./schema";
-import { createTaskRequestSchema, taskListSchema, taskSchema, toDomain, toDto } from "./schema";
+import {
+  createTaskRequestSchema,
+  taskListSchema,
+  taskSchema,
+  toDomain,
+  toDomainPage,
+  toDto,
+} from "./schema";
 
 const validDto: TaskDto = {
   id: "1",
@@ -15,10 +22,6 @@ const validDto: TaskDto = {
 describe("taskSchema", () => {
   it("parses a valid DTO (normal)", () => {
     expect(taskSchema.parse(validDto)).toEqual(validDto);
-  });
-
-  it("parses a list of valid DTOs (normal)", () => {
-    expect(taskListSchema.parse([validDto])).toEqual([validDto]);
   });
 
   it("fails when a required field is missing (abnormal)", () => {
@@ -36,6 +39,32 @@ describe("taskSchema", () => {
   it("fails for an unrecognized priority enum value (abnormal)", () => {
     const result = taskSchema.safeParse({ ...validDto, priority: "urgent" });
     expect(result.success).toBe(false);
+  });
+});
+
+// SPEC-008: GET /tasks now returns the envelope
+// {items,total,limit,offset} instead of a bare array.
+describe("taskListSchema / toDomainPage", () => {
+  it("parses a valid envelope (normal)", () => {
+    const envelope = { items: [validDto], total: 1, limit: 20, offset: 0 };
+    expect(taskListSchema.parse(envelope)).toEqual(envelope);
+  });
+
+  it("fails when the envelope is missing a required field (abnormal)", () => {
+    const result = taskListSchema.safeParse({ items: [validDto], total: 1, limit: 20 });
+    expect(result.success).toBe(false);
+  });
+
+  it("maps the envelope DTO to a domain TaskPage", () => {
+    const envelope = { items: [validDto], total: 1, limit: 20, offset: 0 };
+    const page = toDomainPage(envelope);
+
+    expect(page).toEqual({
+      items: [toDomain(validDto)],
+      total: 1,
+      limit: 20,
+      offset: 0,
+    });
   });
 });
 

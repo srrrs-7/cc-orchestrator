@@ -10,8 +10,8 @@ import {
   postTasksByIdStart,
 } from "./generated";
 import { client } from "./generated/client.gen";
-import type { CreateTaskInput } from "./schema";
-import { taskListSchema, taskSchema, toDomain } from "./schema";
+import type { CreateTaskInput, TaskPage } from "./schema";
+import { taskListSchema, taskSchema, toDomain, toDomainPage } from "./schema";
 
 const rawBaseUrl = import.meta.env.VITE_API_BASE_URL;
 const DEFAULT_BASE_PATH = "/api";
@@ -87,10 +87,24 @@ function parseResponse<T>(schema: z.ZodType<T>, data: unknown, status: number): 
   }
 }
 
-/** GET /tasks — list every task, validated and mapped to domain Task. */
-export async function fetchTasks(): Promise<Task[]> {
-  const { data, response } = await getTasks({ throwOnError: true });
-  return parseResponse(taskListSchema, data, response.status).map(toDomain);
+export type FetchTasksParams = {
+  readonly limit?: number;
+  readonly offset?: number;
+};
+
+/**
+ * GET /tasks — a page of tasks (SPEC-008), validated and mapped to the
+ * domain `TaskPage` envelope. `limit`/`offset` are optional on the
+ * request (the server applies its own defaults/clamping, see
+ * app/api/domain/task/page.go), but the response always echoes back
+ * the values it actually applied.
+ */
+export async function fetchTasks(params: FetchTasksParams = {}): Promise<TaskPage> {
+  const { data, response } = await getTasks({
+    query: { limit: params.limit, offset: params.offset },
+    throwOnError: true,
+  });
+  return toDomainPage(parseResponse(taskListSchema, data, response.status));
 }
 
 /** GET /tasks/:id — a single task, validated and mapped to domain Task. */

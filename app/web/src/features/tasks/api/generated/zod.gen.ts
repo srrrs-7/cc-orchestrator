@@ -40,10 +40,22 @@ export const zRouteTaskResponse = z.object({
   updated_at: z.string()
 });
 
+export const zRouteTaskListResponse = z.object({
+  items: z.array(zRouteTaskResponse),
+  limit: z.int(),
+  offset: z.int(),
+  total: z.int()
+});
+
+export const zGetTasksQuery = z.object({
+  limit: z.int().optional(),
+  offset: z.int().optional()
+});
+
 /**
  * OK
  */
-export const zGetTasksResponse = z.array(zRouteTaskResponse);
+export const zGetTasksResponse = zRouteTaskListResponse;
 
 /**
  * Task to create

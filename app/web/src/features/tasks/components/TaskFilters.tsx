@@ -26,7 +26,9 @@ export function TaskFilters() {
           key={option.value}
           type="button"
           aria-pressed={status === option.value}
-          onClick={() => navigate({ search: { status: option.value } })}
+          onClick={() =>
+            navigate({ search: (prev) => ({ ...prev, status: option.value, offset: 0 }) })
+          }
           className={
             status === option.value
               ? "rounded bg-blue-600 px-3 py-1 text-sm text-white pointer-coarse:min-h-11 pointer-coarse:px-4"

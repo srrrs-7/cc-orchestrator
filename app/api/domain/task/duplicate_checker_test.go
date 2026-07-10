@@ -26,8 +26,8 @@ func (f *fakeRepository) FindByTitle(ctx context.Context, title task.Title) (*ta
 	return f.findByTitleFunc(ctx, title)
 }
 
-func (f *fakeRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
-	return nil, nil
+func (f *fakeRepository) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
+	return nil, 0, nil
 }
 
 var errRepoBoom = errors.New("boom")

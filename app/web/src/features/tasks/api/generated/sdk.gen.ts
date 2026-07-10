@@ -21,7 +21,7 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 /**
  * List tasks
  *
- * Returns every task.
+ * Returns a page of tasks ordered by creation time (created_at, id ascending). limit defaults to 20 and is clamped to a maximum of 100; offset defaults to 0.
  */
 export const getTasks = <ThrowOnError extends boolean = false>(options?: Options<GetTasksData, ThrowOnError>): RequestResult<GetTasksResponses, GetTasksErrors, ThrowOnError> => (options?.client ?? client).get<GetTasksResponses, GetTasksErrors, ThrowOnError>({ url: '/tasks', ...options });
 

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-008
 title: app/api の Task 一覧にページネーションが無く、web に単一取得(GET /tasks/{id})契約が無いため、本番データ規模で全件転送・線形探索がタスク総数に比例して悪化する(cross-stack)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
 updated: 2026-07-10
@@ -129,3 +129,21 @@ specs: [SPEC-002, SPEC-008]  # 関連Spec ID (例: [SPEC-002])
 - 相互リンク: frontmatter `specs` に **SPEC-008** を追記(既存の SPEC-002 は維持)。SPEC-008 側 frontmatter の `issues` には ISSUE-008 が既に記載済み。
 - **status は open を維持。** 理由: 本 Issue 本体(API のページネーション・単一取得契約の整合・P1 の created_at インデックス)は SPEC-008 として起票しただけで実装は未着手のため。実装は SPEC-008 / planner 経由で進める。severity は **low** を維持(現状サンプル規模で実害ゼロの予防的・構造的課題という性質は不変)。frontmatter は status=open 維持・updated=2026-07-10。
 - 次にやること: SPEC-008 を approved にしたうえで planner に計画化を依頼し、SPEC-008 の実装完了(本体 + P1)と単一取得契約の整合(A)が解消した時点で本 Issue をクローズ可能。
+
+### 2026-07-10(本体を SPEC-008 として実装完了・resolved)
+
+- 本 Issue の本体である一覧ページネーションを **SPEC-008 として実装完了**した。これにより (B) 一覧の無制限返却・(A) 単一取得契約・P1(created_at インデックス)・以前対応済みの web P2/P3 が出そろい、本 Issue の懸案は解消した。
+- 実施内容(SPEC-008):
+  - **(B) 一覧ページネーション**: `GET /tasks` に `offset` / `limit` クエリパラメータ(既定 `limit=20` / 最大 `100` はサーバ側クランプ、非整数・`limit<1`・負 offset は 400)と、レスポンス封筒 `{items, total, limit, offset}` を導入。業務ルールは domain の値オブジェクト `task.Page`(`NewPage`。`app/api/domain/task/page.go`)に集約し、port を `FindAll` → `ListPage(ctx, task.Page) ([]*Task, int, error)` へ置換。両永続化実装で満たした(postgres = `LIMIT`/`OFFSET` + `COUNT(*)`、`app/api/infra/postgres/task_repository.go`・`db/queries/tasks.sql`。memory = ソート済みスライスの範囲切り出し + 件数)。
+  - **契約整合(SPEC-003)**: OpenAPI 契約(`app/api/docs/openapi.yaml`)に query パラメータ + 封筒スキーマを反映し、web の生成物(型 / zod / TanStack Query クライアント)を再生成。`contract-drift` CI は green。
+  - **web**: 封筒レスポンスを消費し、`TaskPager`(next / prev)で最低限のページ送りを実装。
+  - **P1(created_at インデックス)**: `app/api/db/migrations/000002_*` として `tasks.created_at`(ソートキー `ORDER BY created_at, id` と同順)のインデックスを追加。深い offset の劣化緩和。
+- 検証(このラウンドのパイプライン):
+  - **tester**: api(ページネーションの件数制御 / 境界 / 不正パラメータ、単一取得)と web(ページャの境界)のテストを追加し、全 pass。
+  - **checker**: 全スタック green(gosec v2 含む)。
+  - **review-spec**: SPEC-008 の全 7 要件(R1〜R7)充足・**Blocker / Major 0** と判定。
+  - **review-security / review-performance**: いずれも **Blocker 0**。performance レビューで残った技術的負債(下記)は別 Issue へ切り出し。
+- 併せて既解消の関連事項を確認: web の軽微改善 **P2(一覧ソートの useMemo 化)/ P3(queryClient の staleTime)** は本 Issue の 2026-07-10 追記で対応済み、**単一取得契約(A)** は **ISSUE-009 で解消済み**。これらと本ラウンドの (B) + P1 により、本 Issue の懸案はすべて解消した。
+- **status を open → resolved に変更。** 検証方法と結果は上記(tester 全 pass / checker 全スタック green / review-spec が全要件充足・Blocker/Major 0 と判定)。severity は **low** を維持(現状サンプル規模で実害ゼロの予防的・構造的課題であった性質は不変で、深刻度の再評価要因はない)。frontmatter は status=resolved・updated=2026-07-10。
+- **残る技術的負債の追跡**: SPEC-008 実装が持つスケーリング / DoS フォローアップ(`COUNT(*)` の全件カウント / LIST・COUNT の逐次 2 クエリ / offset 無上限)は本 Issue では扱わず、**ISSUE-025** で追跡する。本番データ規模でのスケール対応時にそちらで検討する。
+- 次にやること: 本 Issue は resolved。残課題は ISSUE-025 で追う。

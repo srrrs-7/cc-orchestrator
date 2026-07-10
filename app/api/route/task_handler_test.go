@@ -46,8 +46,8 @@ func (failingRepository) FindByTitle(context.Context, task.Title) (*task.Task, e
 	return nil, errors.New("failingRepository: find by title always fails")
 }
 
-func (failingRepository) FindAll(context.Context) ([]*task.Task, error) {
-	return nil, errors.New("failingRepository: find all always fails")
+func (failingRepository) ListPage(context.Context, task.Page) ([]*task.Task, int, error) {
+	return nil, 0, errors.New("failingRepository: list page always fails")
 }
 
 // newFailingTestHandler wires a router backed by failingRepository,
@@ -82,8 +82,8 @@ func (dbErrorRepository) FindByTitle(context.Context, task.Title) (*task.Task, e
 	return nil, task.NewDBError(errors.New("dbErrorRepository: find by title always fails"))
 }
 
-func (dbErrorRepository) FindAll(context.Context) ([]*task.Task, error) {
-	return nil, task.NewDBError(errors.New("dbErrorRepository: find all always fails"))
+func (dbErrorRepository) ListPage(context.Context, task.Page) ([]*task.Task, int, error) {
+	return nil, 0, task.NewDBError(errors.New("dbErrorRepository: list page always fails"))
 }
 
 // newDBErrorTestHandler wires a router backed by dbErrorRepository.
@@ -351,6 +351,15 @@ func TestStartThenCompleteTask_Success(t *testing.T) {
 	}
 }
 
+// taskListResponseBody mirrors route.taskListResponse (SPEC-008's
+// envelope) for decoding in tests.
+type taskListResponseBody struct {
+	Items  []taskResponseBody `json:"items"`
+	Total  int                `json:"total"`
+	Limit  int                `json:"limit"`
+	Offset int                `json:"offset"`
+}
+
 func TestListTasks(t *testing.T) {
 	h := newTestHandler()
 
@@ -362,20 +371,148 @@ func TestListTasks(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var got []taskResponseBody
+	var got taskListResponseBody
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response body: %v", err)
 	}
-	if len(got) != 2 {
-		t.Errorf("len(got) = %d, want 2", len(got))
+	if len(got.Items) != 2 {
+		t.Errorf("len(got.Items) = %d, want 2", len(got.Items))
+	}
+	// R1/R2: an unspecified limit/offset default to 20/0, echoed in
+	// the envelope, and total reflects the store's full count.
+	if got.Total != 2 {
+		t.Errorf("Total = %d, want 2", got.Total)
+	}
+	if got.Limit != 20 {
+		t.Errorf("Limit = %d, want 20", got.Limit)
+	}
+	if got.Offset != 0 {
+		t.Errorf("Offset = %d, want 0", got.Offset)
 	}
 
 	// R4: every item in the list response carries a non-empty
 	// snake_case priority field.
-	for _, item := range got {
+	for _, item := range got.Items {
 		if item.Priority == "" {
 			t.Errorf("item %q: Priority is empty, want set", item.Title)
 		}
+	}
+}
+
+// TestListTasks_InvalidQueryParams covers R3's validation path: a
+// non-integer limit/offset, or a limit/offset that fails task.Page's
+// domain validation (limit < 1, negative offset), must be rejected
+// with 400 and the existing error envelope {error}, never reaching a
+// 200 response.
+func TestListTasks_InvalidQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "non-integer limit", query: "?limit=abc"},
+		{name: "non-integer offset", query: "?offset=xyz"},
+		{name: "limit is zero (below the domain's minimum of 1)", query: "?limit=0"},
+		{name: "limit is negative", query: "?limit=-1"},
+		{name: "offset is negative", query: "?offset=-1"},
+		{name: "limit is a float, not an integer", query: "?limit=1.5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestHandler()
+
+			rec := doRequest(t, h, http.MethodGet, "/tasks"+tt.query, nil)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			if body := decodeError(t, rec); body.Error == "" {
+				t.Error("error response body is empty, want a message")
+			}
+		})
+	}
+}
+
+// TestListTasks_LimitClampedAboveMax covers R3: a limit above
+// task.MaxLimit (100) is clamped rather than rejected -- the request
+// still succeeds (200), and the envelope's echoed limit reflects the
+// clamp (100), not the raw requested value (1000).
+func TestListTasks_LimitClampedAboveMax(t *testing.T) {
+	h := newTestHandler()
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"})
+
+	rec := doRequest(t, h, http.MethodGet, "/tasks?limit=1000", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got taskListResponseBody
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if got.Limit != 100 {
+		t.Errorf("Limit = %d, want 100 (clamped)", got.Limit)
+	}
+	if got.Offset != 0 {
+		t.Errorf("Offset = %d, want 0", got.Offset)
+	}
+}
+
+// TestListTasks_ExplicitLimitOffsetWindow covers R1/R2: an explicit
+// limit/offset pair within range is applied to the returned window
+// (not just echoed), and total still reflects the store's full count
+// regardless of the window.
+func TestListTasks_ExplicitLimitOffsetWindow(t *testing.T) {
+	h := newTestHandler()
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task a"})
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task b"})
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task c"})
+
+	rec := doRequest(t, h, http.MethodGet, "/tasks?limit=1&offset=1", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got taskListResponseBody
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("len(Items) = %d, want 1 (limit=1 must cap the window)", len(got.Items))
+	}
+	if got.Total != 3 {
+		t.Errorf("Total = %d, want 3 (total is independent of the limit/offset window)", got.Total)
+	}
+	if got.Limit != 1 {
+		t.Errorf("Limit = %d, want 1", got.Limit)
+	}
+	if got.Offset != 1 {
+		t.Errorf("Offset = %d, want 1", got.Offset)
+	}
+}
+
+// TestListTasks_OffsetBeyondTotal covers the documented boundary
+// (SPEC-008 plan §"検証/クランプ仕様"): an offset at or beyond the
+// store's total yields an empty items slice with 200, not an error,
+// and total still reports the store's full count.
+func TestListTasks_OffsetBeyondTotal(t *testing.T) {
+	h := newTestHandler()
+	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task a"})
+
+	rec := doRequest(t, h, http.MethodGet, "/tasks?offset=50", nil)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got taskListResponseBody
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response body: %v", err)
+	}
+	if len(got.Items) != 0 {
+		t.Errorf("len(Items) = %d, want 0", len(got.Items))
+	}
+	if got.Total != 1 {
+		t.Errorf("Total = %d, want 1", got.Total)
 	}
 }
 
@@ -480,7 +617,7 @@ func TestDBErrorCategory_MapsTo500(t *testing.T) {
 			},
 		},
 		{
-			name: "GET /tasks (FindAll failure)",
+			name: "GET /tasks (ListPage failure)",
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodGet, "/tasks", nil)
 			},
@@ -786,9 +923,16 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 	}
 }
 
-// TestWireContract_ListResponseFields pins GET /tasks's shape: a JSON
-// array whose every item is a taskResponse (the same exact field set
-// and casing pinned above for the single-object endpoints).
+// wireListEnvelopeFields is the exact field set of
+// route.taskListResponse (SPEC-008's envelope), excluding "items"
+// itself (its element shape is pinned separately via wireTaskFields).
+var wireListEnvelopeFields = []string{"items", "total", "limit", "offset"}
+
+// TestWireContract_ListResponseFields pins GET /tasks's shape
+// (SPEC-008): a JSON envelope object {items,total,limit,offset}
+// whose every items[] element is a taskResponse (the same exact
+// field set and casing pinned above for the single-object
+// endpoints).
 func TestWireContract_ListResponseFields(t *testing.T) {
 	h := newTestHandler()
 	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire list task 1", "priority": "low"})
@@ -799,14 +943,30 @@ func TestWireContract_ListResponseFields(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 
-	var got []map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body as array: %v (body=%q)", err, rec.Body.String())
+	envelope := decodeMap(t, rec)
+	gotFields := make([]string, 0, len(envelope))
+	for k := range envelope {
+		gotFields = append(gotFields, k)
 	}
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2", len(got))
+	slices.Sort(gotFields)
+	wantFields := slices.Clone(wireListEnvelopeFields)
+	slices.Sort(wantFields)
+	if !slices.Equal(gotFields, wantFields) {
+		t.Fatalf("envelope field set = %v, want exactly %v", gotFields, wantFields)
 	}
-	for _, item := range got {
-		assertWireShape(t, item, wireTaskFields)
+
+	items, ok := envelope["items"].([]any)
+	if !ok {
+		t.Fatalf("items = %T(%v), want a JSON array", envelope["items"], envelope["items"])
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("item = %T(%v), want a JSON object", item, item)
+		}
+		assertWireShape(t, itemMap, wireTaskFields)
 	}
 }

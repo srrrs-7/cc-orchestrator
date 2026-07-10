@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
@@ -171,20 +172,206 @@ func TestTaskRepository_ErrorCategories_ISSUE018(t *testing.T) {
 			t.Fatalf("setup: close db: %v", err)
 		}
 
-		_, err := repo.FindAll(context.Background())
+		// SPEC-008 replaced task.Repository.FindAll with ListPage (items
+		// + total); a closed connection must still surface as a
+		// *task.DBError, whichever of the two queries (CountTasks,
+		// ListTasksPage) the driver failure is observed on first.
+		_, _, err := repo.ListPage(context.Background(), mustPage(t, nil, nil))
 		if err == nil {
-			t.Fatal("FindAll() on a closed connection succeeded, want an error")
+			t.Fatal("ListPage() on a closed connection succeeded, want an error")
 		}
 
 		var dbErr *task.DBError
 		if !errors.As(err, &dbErr) {
-			t.Fatalf("FindAll() error = %v, want errors.As(&task.DBError{}) = true", err)
+			t.Fatalf("ListPage() error = %v, want errors.As(&task.DBError{}) = true", err)
 		}
 		var ve *task.ValidationError
 		if errors.As(err, &ve) {
-			t.Errorf("FindAll() error = %v, want errors.As(&task.ValidationError{}) = false", err)
+			t.Errorf("ListPage() error = %v, want errors.As(&task.ValidationError{}) = false", err)
 		}
 	})
+}
+
+// mustPage builds a task.Page via task.NewPage, failing the test on
+// any validation error. Mirrors infra/repotest.mustPage /
+// infra/memory's mustTestPage, duplicated here (rather than exported
+// from repotest) since it is a one-line, test-only convenience and
+// this file must not grow repotest's exported surface.
+func mustPage(t *testing.T, limit, offset *int) task.Page {
+	t.Helper()
+	page, err := task.NewPage(limit, offset)
+	if err != nil {
+		t.Fatalf("NewPage() unexpected error: %v", err)
+	}
+	return page
+}
+
+// intPtr returns a pointer to i, for building *int limit/offset
+// arguments to task.NewPage in table-driven tests below.
+func intPtr(i int) *int {
+	return &i
+}
+
+// newIntegrationTaskAt builds a Task with an explicit id and
+// createdAt (via task.Reconstruct) instead of task.New's
+// time.Now(), so ordering/windowing tests can control the
+// (created_at, id) sort key deterministically -- including forcing a
+// created_at tie broken only by id -- against a real Postgres
+// instance, mirroring infra/memory's own ListPage ordering tests.
+func newIntegrationTaskAt(t *testing.T, id, title string, createdAt time.Time) *task.Task {
+	t.Helper()
+	parsedID, err := task.ParseID(id)
+	if err != nil {
+		t.Fatalf("ParseID(%q) unexpected error: %v", id, err)
+	}
+	tt, err := task.NewTitle(title)
+	if err != nil {
+		t.Fatalf("NewTitle(%q) unexpected error: %v", title, err)
+	}
+	return task.Reconstruct(parsedID, tt, task.StatusTodo, task.PriorityMedium, createdAt, createdAt)
+}
+
+// TestTaskRepository_ListPage_Boundaries covers SPEC-008 R1/R2/R5
+// against a real Postgres instance: the LIMIT/OFFSET window (`db/
+// queries/tasks.sql`'s ListTasksPage), CountTasks's total independent
+// of that window, an offset at or beyond total yielding empty items
+// (not an error), and the `ORDER BY created_at, id` stable ordering
+// (ties on created_at broken by id) -- the same guarantees
+// infra/memory provides, proving R5 ("infra/postgres の振る舞いは
+// infra/memory と同じ") for the paginated read path specifically.
+func TestTaskRepository_ListPage_Boundaries(t *testing.T) {
+	t.Run("offset beyond total yields empty items and the store's full total", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		repo := postgres.NewTaskRepository(db)
+		ctx := context.Background()
+
+		tk1 := task.New(mustIntegrationTitle(t, "buy milk"), task.PriorityMedium)
+		tk2 := task.New(mustIntegrationTitle(t, "walk dog"), task.PriorityMedium)
+		if err := repo.Save(ctx, tk1); err != nil {
+			t.Fatalf("Save(tk1) unexpected error: %v", err)
+		}
+		if err := repo.Save(ctx, tk2); err != nil {
+			t.Fatalf("Save(tk2) unexpected error: %v", err)
+		}
+
+		items, total, err := repo.ListPage(ctx, mustPage(t, nil, intPtr(5)))
+		if err != nil {
+			t.Fatalf("ListPage() unexpected error: %v", err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("ListPage() with offset beyond total = %d items, want 0", len(items))
+		}
+		if total != 2 {
+			t.Fatalf("ListPage() total = %d, want 2 (total must reflect the store regardless of offset)", total)
+		}
+	})
+
+	t.Run("orders by created_at then id ascending, ties broken by id", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		repo := postgres.NewTaskRepository(db)
+		ctx := context.Background()
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		tk1 := newIntegrationTaskAt(t, "id-1", "first, strictly earlier", base)
+		// tk2 and tk3 share the same created_at; only id breaks the tie.
+		tk3 := newIntegrationTaskAt(t, "id-3", "tie, higher id", base.Add(time.Second))
+		tk2 := newIntegrationTaskAt(t, "id-2", "tie, lower id", base.Add(time.Second))
+
+		// Save out of sort order to prove ListPage's ORDER BY sorts
+		// explicitly rather than happening to preserve insertion order.
+		for _, tk := range []*task.Task{tk3, tk1, tk2} {
+			if err := repo.Save(ctx, tk); err != nil {
+				t.Fatalf("Save(%v) unexpected error: %v", tk.ID(), err)
+			}
+		}
+
+		items, total, err := repo.ListPage(ctx, mustPage(t, nil, nil))
+		if err != nil {
+			t.Fatalf("ListPage() unexpected error: %v", err)
+		}
+		if total != 3 {
+			t.Fatalf("ListPage() total = %d, want 3", total)
+		}
+
+		wantOrder := []string{"id-1", "id-2", "id-3"}
+		if len(items) != len(wantOrder) {
+			t.Fatalf("ListPage() = %d items, want %d", len(items), len(wantOrder))
+		}
+		gotOrder := make([]string, len(items))
+		for i, tk := range items {
+			gotOrder[i] = tk.ID().String()
+		}
+		for i := range wantOrder {
+			if gotOrder[i] != wantOrder[i] {
+				t.Errorf("ListPage() order = %v, want %v (created_at, id ascending)", gotOrder, wantOrder)
+			}
+		}
+	})
+
+	t.Run("limit slices the requested window across successive pages", func(t *testing.T) {
+		db := openTestDB(t)
+		truncateTasks(t, db)
+		repo := postgres.NewTaskRepository(db)
+		ctx := context.Background()
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		ids := []string{"id-1", "id-2", "id-3", "id-4", "id-5"}
+		for i, id := range ids {
+			tk := newIntegrationTaskAt(t, id, id, base.Add(time.Duration(i)*time.Second))
+			if err := repo.Save(ctx, tk); err != nil {
+				t.Fatalf("Save(%s) unexpected error: %v", id, err)
+			}
+		}
+
+		tests := []struct {
+			name    string
+			limit   int
+			offset  int
+			wantIDs []string
+		}{
+			{name: "first page", limit: 2, offset: 0, wantIDs: []string{"id-1", "id-2"}},
+			{name: "second page", limit: 2, offset: 2, wantIDs: []string{"id-3", "id-4"}},
+			{name: "final partial page (fewer rows than limit remain)", limit: 2, offset: 4, wantIDs: []string{"id-5"}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				items, total, err := repo.ListPage(ctx, mustPage(t, intPtr(tt.limit), intPtr(tt.offset)))
+				if err != nil {
+					t.Fatalf("ListPage() unexpected error: %v", err)
+				}
+				if total != len(ids) {
+					t.Fatalf("ListPage() total = %d, want %d", total, len(ids))
+				}
+
+				gotIDs := make([]string, len(items))
+				for i, tk := range items {
+					gotIDs[i] = tk.ID().String()
+				}
+				if len(gotIDs) != len(tt.wantIDs) {
+					t.Fatalf("ListPage() = %v, want %v", gotIDs, tt.wantIDs)
+				}
+				for i := range tt.wantIDs {
+					if gotIDs[i] != tt.wantIDs[i] {
+						t.Errorf("ListPage() = %v, want %v", gotIDs, tt.wantIDs)
+					}
+				}
+			})
+		}
+	})
+}
+
+// mustIntegrationTitle builds a task.Title, failing the test on any
+// validation error.
+func mustIntegrationTitle(t *testing.T, s string) task.Title {
+	t.Helper()
+	title, err := task.NewTitle(s)
+	if err != nil {
+		t.Fatalf("NewTitle(%q) unexpected error: %v", s, err)
+	}
+	return title
 }
 
 // openTestDB opens a *sql.DB against the Postgres instance described

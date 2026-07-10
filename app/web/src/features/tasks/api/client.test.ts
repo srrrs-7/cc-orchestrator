@@ -20,22 +20,36 @@ const validDto: TaskDto = {
 };
 
 // Minor-1: a 200 response that doesn't match the generated Zod schema
-// (`zGetTasksResponse`/`zRouteTaskResponse`) must surface as an `ApiError`,
-// not a raw `ZodError`, so the wire error boundary is uniform regardless of
-// whether the failure came from HTTP or from response-shape validation.
+// (`zGetTasksResponse`/`zRouteTaskListResponse`) must surface as an
+// `ApiError`, not a raw `ZodError`, so the wire error boundary is
+// uniform regardless of whether the failure came from HTTP or from
+// response-shape validation.
+//
+// SPEC-008: `GET /tasks` now returns the envelope
+// `{items,total,limit,offset}`, not a bare array; every mock response
+// below is wrapped accordingly.
 describe("fetchTasks", () => {
-  it("returns an empty list without throwing when the server responds with zero tasks (boundary)", async () => {
-    server.use(http.get("/api/tasks", () => HttpResponse.json([])));
+  it("returns an empty page without throwing when the server responds with zero tasks (boundary)", async () => {
+    server.use(
+      http.get("/api/tasks", () =>
+        HttpResponse.json({ items: [], total: 0, limit: 20, offset: 0 }),
+      ),
+    );
 
-    const tasks = await fetchTasks();
+    const page = await fetchTasks();
 
-    expect(tasks).toEqual([]);
+    expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
   });
 
   it("throws an ApiError, not a raw ZodError, when a 200 response item is missing a required field (abnormal)", async () => {
     const { title, ...withoutTitle } = validDto;
     void title;
-    server.use(http.get("/api/tasks", () => HttpResponse.json([withoutTitle])));
+    server.use(
+      http.get("/api/tasks", () =>
+        HttpResponse.json({ items: [withoutTitle], total: 1, limit: 20, offset: 0 }),
+      ),
+    );
 
     let caught: unknown;
     try {
@@ -52,7 +66,12 @@ describe("fetchTasks", () => {
   it("throws an ApiError when one item in an otherwise-valid list has an out-of-enum status (abnormal: partially invalid list)", async () => {
     server.use(
       http.get("/api/tasks", () =>
-        HttpResponse.json([validDto, { ...validDto, id: "2", status: "archived" }]),
+        HttpResponse.json({
+          items: [validDto, { ...validDto, id: "2", status: "archived" }],
+          total: 2,
+          limit: 20,
+          offset: 0,
+        }),
       ),
     );
 

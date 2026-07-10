@@ -70,18 +70,33 @@ func (s *TaskService) Get(ctx context.Context, id string) (TaskDTO, error) {
 	return newTaskDTO(t), nil
 }
 
-// List retrieves all Tasks.
-func (s *TaskService) List(ctx context.Context) ([]TaskDTO, error) {
-	tasks, err := s.repo.FindAll(ctx)
+// List retrieves a page of Tasks (SPEC-008). A nil limit/offset
+// defaults to task.DefaultLimit/0 respectively, and a limit above
+// task.MaxLimit is clamped (see task.NewPage); an invalid limit
+// (< 1) or negative offset is rejected with a *task.ValidationError.
+// The returned TaskListDTO's Limit/Offset echo the values actually
+// applied.
+func (s *TaskService) List(ctx context.Context, limit, offset *int) (TaskListDTO, error) {
+	page, err := task.NewPage(limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("service: list tasks: %w", err)
+		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
+	}
+
+	tasks, total, err := s.repo.ListPage(ctx, page)
+	if err != nil {
+		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
 	}
 
 	dtos := make([]TaskDTO, 0, len(tasks))
 	for _, t := range tasks {
 		dtos = append(dtos, newTaskDTO(t))
 	}
-	return dtos, nil
+	return TaskListDTO{
+		Items:  dtos,
+		Total:  total,
+		Limit:  page.Limit(),
+		Offset: page.Offset(),
+	}, nil
 }
 
 // Start transitions the Task identified by id from todo to doing.

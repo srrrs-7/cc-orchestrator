@@ -1,6 +1,7 @@
 import { HttpResponse, http } from "msw";
 import { z } from "zod";
 import type { TaskDto } from "../features/tasks/api/schema";
+import { DEFAULT_LIMIT, MAX_LIMIT } from "../features/tasks/domain/pagination";
 import { TASK_PRIORITIES } from "../features/tasks/domain/task";
 
 // Request bodies are external data too (they arrive as JSON over the
@@ -13,6 +14,48 @@ const createTaskRequestSchema = z.object({
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/**
+ * A `limit`/`offset` query param, parsed and validated the same way
+ * app/api does (SPEC-008, app/api/domain/task/page.go,
+ * app/api/route/task_handler.go): a missing value falls back to
+ * `fallback`. A present-but-non-integer value, or one outside the
+ * lower bound, is rejected outright (this is where the mock
+ * previously diverged from the real API by silently clamping
+ * instead). Only the upper bound (`limit > MAX_LIMIT`) is clamped
+ * rather than rejected.
+ */
+type PagingParamResult =
+  | { readonly ok: true; readonly value: number }
+  | { readonly ok: false; readonly error: string };
+
+function parsePagingParam(
+  raw: string | null,
+  paramName: "limit" | "offset",
+  fallback: number,
+  min: number,
+  max: number,
+): PagingParamResult {
+  if (raw === null) {
+    return { ok: true, value: fallback };
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) {
+    return { ok: false, error: `${paramName} must be an integer` };
+  }
+  if (parsed < min) {
+    return { ok: false, error: `${paramName} must be at least ${min}` };
+  }
+  return { ok: true, value: Math.min(parsed, max) };
+}
+
+/** Stable `created_at, id` ascending order, matching app/api's ORDER BY. */
+function sortedTasks(): TaskDto[] {
+  return [...tasks].sort((a, b) => {
+    const createdDiff = a.created_at.localeCompare(b.created_at);
+    return createdDiff !== 0 ? createdDiff : a.id.localeCompare(b.id);
+  });
 }
 
 function canTransition(from: TaskDto["status"], to: TaskDto["status"]): boolean {
@@ -85,8 +128,34 @@ let tasks: TaskDto[] = [
 let nextId = tasks.length + 1;
 
 export const handlers = [
-  http.get("/api/tasks", () => {
-    return HttpResponse.json(tasks);
+  http.get("/api/tasks", ({ request }) => {
+    const url = new URL(request.url);
+    const limitResult = parsePagingParam(
+      url.searchParams.get("limit"),
+      "limit",
+      DEFAULT_LIMIT,
+      1,
+      MAX_LIMIT,
+    );
+    if (!limitResult.ok) {
+      return HttpResponse.json({ error: limitResult.error }, { status: 400 });
+    }
+    const offsetResult = parsePagingParam(
+      url.searchParams.get("offset"),
+      "offset",
+      0,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    );
+    if (!offsetResult.ok) {
+      return HttpResponse.json({ error: offsetResult.error }, { status: 400 });
+    }
+
+    const limit = limitResult.value;
+    const offset = offsetResult.value;
+    const all = sortedTasks();
+    const items = all.slice(offset, offset + limit);
+    return HttpResponse.json({ items, total: all.length, limit, offset });
   }),
 
   http.get("/api/tasks/:id", ({ params }) => {

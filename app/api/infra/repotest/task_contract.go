@@ -37,9 +37,9 @@ import (
 type NewTaskRepository func(t *testing.T) task.Repository
 
 // RunTaskRepositoryContract runs the behavioral contract shared by
-// every task.Repository implementation (SPEC-005 R1: infra/postgres
-// must behave identically to infra/memory for Save / FindByID /
-// FindByTitle / FindAll).
+// every task.Repository implementation (SPEC-005 R1 / SPEC-008 R5:
+// infra/postgres must behave identically to infra/memory for Save /
+// FindByID / FindByTitle / ListPage).
 //
 // Deliberately NOT covered here (see docs/plans/SPEC-005-plan.md
 // §6.1 R-a): UNIQUE(title) enforcement. infra/memory silently allows
@@ -93,12 +93,15 @@ func RunTaskRepositoryContract(t *testing.T, newRepo NewTaskRepository) {
 			t.Errorf("Priority() = %v, want %v (second Save() must update in place)", got.Priority(), task.PriorityHigh)
 		}
 
-		all, err := repo.FindAll(ctx)
+		items, total, err := repo.ListPage(ctx, mustPage(t, nil, nil))
 		if err != nil {
-			t.Fatalf("FindAll() unexpected error: %v", err)
+			t.Fatalf("ListPage() unexpected error: %v", err)
 		}
-		if len(all) != 1 {
-			t.Fatalf("FindAll() = %d items, want 1 (second Save() with the same id must not create a duplicate row)", len(all))
+		if total != 1 {
+			t.Fatalf("ListPage() total = %d, want 1 (second Save() with the same id must not create a duplicate row)", total)
+		}
+		if len(items) != 1 {
+			t.Fatalf("ListPage() = %d items, want 1 (second Save() with the same id must not create a duplicate row)", len(items))
 		}
 
 		if _, err := repo.FindByTitle(ctx, originalTitle); !errors.Is(err, task.ErrNotFound) {
@@ -139,18 +142,21 @@ func RunTaskRepositoryContract(t *testing.T, newRepo NewTaskRepository) {
 		}
 	})
 
-	t.Run("FindAll on an empty repository returns zero items without error", func(t *testing.T) {
+	t.Run("ListPage on an empty repository returns zero items and zero total without error", func(t *testing.T) {
 		repo := newRepo(t)
-		all, err := repo.FindAll(context.Background())
+		items, total, err := repo.ListPage(context.Background(), mustPage(t, nil, nil))
 		if err != nil {
-			t.Fatalf("FindAll() unexpected error: %v", err)
+			t.Fatalf("ListPage() unexpected error: %v", err)
 		}
-		if len(all) != 0 {
-			t.Fatalf("FindAll() = %d items, want 0", len(all))
+		if len(items) != 0 {
+			t.Fatalf("ListPage() = %d items, want 0", len(items))
+		}
+		if total != 0 {
+			t.Fatalf("ListPage() total = %d, want 0", total)
 		}
 	})
 
-	t.Run("FindAll returns exactly every saved task", func(t *testing.T) {
+	t.Run("ListPage returns exactly every saved task and total when the page covers all of them", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()
 		tk1 := task.New(mustTitle(t, "buy milk"), task.PriorityLow)
@@ -162,20 +168,23 @@ func RunTaskRepositoryContract(t *testing.T, newRepo NewTaskRepository) {
 			t.Fatalf("Save(tk2) unexpected error: %v", err)
 		}
 
-		all, err := repo.FindAll(ctx)
+		items, total, err := repo.ListPage(ctx, mustPage(t, nil, nil))
 		if err != nil {
-			t.Fatalf("FindAll() unexpected error: %v", err)
+			t.Fatalf("ListPage() unexpected error: %v", err)
 		}
-		if len(all) != 2 {
-			t.Fatalf("FindAll() = %d items, want 2", len(all))
+		if total != 2 {
+			t.Fatalf("ListPage() total = %d, want 2", total)
+		}
+		if len(items) != 2 {
+			t.Fatalf("ListPage() = %d items, want 2", len(items))
 		}
 
-		gotIDs := make(map[task.ID]bool, len(all))
-		for _, tk := range all {
+		gotIDs := make(map[task.ID]bool, len(items))
+		for _, tk := range items {
 			gotIDs[tk.ID()] = true
 		}
 		if !gotIDs[tk1.ID()] || !gotIDs[tk2.ID()] {
-			t.Errorf("FindAll() ids = %v, want to contain both %v and %v", gotIDs, tk1.ID(), tk2.ID())
+			t.Errorf("ListPage() ids = %v, want to contain both %v and %v", gotIDs, tk1.ID(), tk2.ID())
 		}
 	})
 
@@ -205,6 +214,21 @@ func mustTitle(t *testing.T, s string) task.Title {
 		t.Fatalf("NewTitle(%q) unexpected error: %v", s, err)
 	}
 	return title
+}
+
+// mustPage builds a task.Page via task.NewPage, failing the test on
+// any validation error. A nil limit/offset default to
+// task.DefaultLimit/0 (task.NewPage), which comfortably covers every
+// fixture this contract saves (well under task.DefaultLimit), letting
+// subtests exercise ListPage without needing to reason about paging
+// math themselves.
+func mustPage(t *testing.T, limit, offset *int) task.Page {
+	t.Helper()
+	page, err := task.NewPage(limit, offset)
+	if err != nil {
+		t.Fatalf("NewPage() unexpected error: %v", err)
+	}
+	return page
 }
 
 // longRuneString returns a string of exactly n runes, used to probe

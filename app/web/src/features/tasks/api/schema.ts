@@ -1,16 +1,19 @@
 import { z } from "zod";
+import type { PageInfo } from "../domain/pagination";
 import type { Task, TaskPriority } from "../domain/task";
 import { TASK_PRIORITIES } from "../domain/task";
 import type {
   RouteChangePriorityRequest,
   RouteCreateTaskRequest,
   RouteErrorResponse,
+  RouteTaskListResponse,
   RouteTaskResponse,
 } from "./generated";
 import {
   zRouteChangePriorityRequest,
   zRouteCreateTaskRequest,
   zRouteErrorResponse,
+  zRouteTaskListResponse,
   zRouteTaskResponse,
 } from "./generated/zod.gen";
 
@@ -21,12 +24,14 @@ export type {
   RouteChangePriorityRequest,
   RouteCreateTaskRequest,
   RouteErrorResponse,
+  RouteTaskListResponse,
   RouteTaskResponse,
 };
 export {
   zRouteChangePriorityRequest,
   zRouteCreateTaskRequest,
   zRouteErrorResponse,
+  zRouteTaskListResponse,
   zRouteTaskResponse,
 };
 
@@ -47,7 +52,26 @@ export const taskSchema = zRouteTaskResponse;
 
 export type TaskDto = z.infer<typeof taskSchema>;
 
-export const taskListSchema = z.array(taskSchema);
+/**
+ * Wire format for `GET /tasks` (SPEC-008): a paging envelope, not a
+ * bare array. `route.taskListResponse` (openapi.yaml) marks every
+ * property `required`, so the generated schema is re-exported as-is,
+ * the same way `taskSchema` re-exports `zRouteTaskResponse` above.
+ */
+export const taskListSchema = zRouteTaskListResponse;
+
+export type TaskListDto = z.infer<typeof taskListSchema>;
+
+/**
+ * Domain-facing shape for a page of tasks: the wire envelope's items
+ * mapped to domain `Task`s, plus the pagination metadata the server
+ * actually applied (`PageInfo`, domain/pagination.ts). `limit`/`offset`
+ * here are the *echoed* values (e.g. after server-side clamping), not
+ * necessarily what was requested.
+ */
+export type TaskPage = PageInfo & {
+  readonly items: readonly Task[];
+};
 
 /** DTO (snake_case, wire format) -> domain Task. */
 export function toDomain(dto: TaskDto): Task {
@@ -58,6 +82,16 @@ export function toDomain(dto: TaskDto): Task {
     priority: dto.priority,
     createdAt: dto.created_at,
     updatedAt: dto.updated_at,
+  };
+}
+
+/** Envelope DTO (wire format) -> domain TaskPage. */
+export function toDomainPage(dto: RouteTaskListResponse): TaskPage {
+  return {
+    items: dto.items.map(toDomain),
+    total: dto.total,
+    limit: dto.limit,
+    offset: dto.offset,
   };
 }
 

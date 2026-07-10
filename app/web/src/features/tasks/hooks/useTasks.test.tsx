@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { server } from "../../../test/msw-server";
 import { createTestQueryClient } from "../../../test/renderWithQueryClient";
 import type { TaskStatus } from "../domain/task";
-import { useCompleteTask, useStartTask, useTaskQuery } from "./useTasks";
+import { useCompleteTask, useStartTask, useTaskQuery, useTasksQuery } from "./useTasks";
 
 /**
  * Builds a wrapper that puts every hook rendered with it on the same
@@ -19,6 +19,81 @@ function wrapperFor(queryClient: ReturnType<typeof createTestQueryClient>) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
 }
+
+// SPEC-008: the query key includes the requested limit/offset so each
+// page is cached independently, and changing the page issues a new
+// request rather than reusing a stale cached page.
+describe("useTasksQuery", () => {
+  it("returns the envelope's items and pagination metadata (normal)", async () => {
+    const queryClient = createTestQueryClient();
+    const { result } = renderHook(() => useTasksQuery({ limit: 20, offset: 0 }), {
+      wrapper: wrapperFor(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.total).toBe(4);
+    expect(result.current.data?.limit).toBe(20);
+    expect(result.current.data?.offset).toBe(0);
+    expect(result.current.data?.items).toHaveLength(4);
+  });
+
+  it("defaults limit/offset when neither is passed (normal)", async () => {
+    const queryClient = createTestQueryClient();
+    const { result } = renderHook(() => useTasksQuery(), { wrapper: wrapperFor(queryClient) });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.limit).toBe(20);
+    expect(result.current.data?.offset).toBe(0);
+  });
+
+  it("caches each limit/offset combination under its own query key, issuing a fresh fetch per page (integration)", async () => {
+    let requestCount = 0;
+    server.use(
+      http.get("/api/tasks", ({ request }) => {
+        requestCount += 1;
+        const url = new URL(request.url);
+        const offset = Number(url.searchParams.get("offset") ?? "0");
+        const limit = Number(url.searchParams.get("limit") ?? "20");
+        const allTitles = ["a", "b", "c", "d", "e"];
+        const items = allTitles.slice(offset, offset + limit).map((title, index) => ({
+          id: String(offset + index + 1),
+          title,
+          status: "todo",
+          priority: "medium",
+          created_at: "2026-01-01T00:00:00.000Z",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        }));
+        return HttpResponse.json({ items, total: allTitles.length, limit, offset });
+      }),
+    );
+
+    const queryClient = createTestQueryClient();
+    const wrapper = wrapperFor(queryClient);
+
+    const firstPage = renderHook(() => useTasksQuery({ limit: 2, offset: 0 }), { wrapper });
+    await waitFor(() => expect(firstPage.result.current.isSuccess).toBe(true));
+    expect(firstPage.result.current.data?.items.map((task) => task.title)).toEqual(["a", "b"]);
+    expect(requestCount).toBe(1);
+
+    const secondPage = renderHook(() => useTasksQuery({ limit: 2, offset: 2 }), { wrapper });
+    await waitFor(() => expect(secondPage.result.current.isSuccess).toBe(true));
+    expect(secondPage.result.current.data?.items.map((task) => task.title)).toEqual(["c", "d"]);
+
+    // A distinct request was made for the second page (not served from
+    // the first page's cache entry): the query key differs by offset.
+    expect(requestCount).toBe(2);
+
+    // Both pages coexist as separate entries in the cache, keyed by
+    // their limit/offset -- confirming the query key itself carries the
+    // page, not just an observed side effect of the request count.
+    const cachedKeys = queryClient
+      .getQueryCache()
+      .getAll()
+      .map((query) => query.queryKey);
+    expect(cachedKeys).toContainEqual(["tasks", "list", { limit: 2, offset: 0 }]);
+    expect(cachedKeys).toContainEqual(["tasks", "list", { limit: 2, offset: 2 }]);
+  });
+});
 
 describe("useTaskQuery", () => {
   it("returns the task on success (normal)", async () => {

@@ -32,10 +32,26 @@ SELECT id, title, status, priority, created_at, updated_at
 FROM tasks
 WHERE title = $1;
 
--- name: ListTasks :many
--- Backs task.Repository.FindAll. Ordered by created_at for stable,
--- deterministic output (infra/memory has no inherent order since it
--- ranges over a map).
+-- name: ListTasksPage :many
+-- Backs task.Repository.ListPage (SPEC-008 R1/R2/R5): a single page of
+-- tasks ordered by created_at, id for stable, deterministic output
+-- (ties on created_at are broken by id so page boundaries never
+-- duplicate or skip a row; infra/memory.TaskRepository.ListPage sorts
+-- the same way). $1 = limit (task.Page.Limit(), already clamped to
+-- task.MaxLimit by domain/task.NewPage), $2 = offset
+-- (task.Page.Offset()). An offset at or beyond the table's row count
+-- simply yields zero rows -- not an error. Both are cast to ::bigint
+-- so sqlc generates int64 params (ListTasksPageParams.Limit/Offset):
+-- Go's int -> int64 is a widening conversion on every platform this
+-- runs on, so infra/postgres/task_repository.go never narrows
+-- task.Page.Limit()/Offset() into a smaller type (gosec G115).
 SELECT id, title, status, priority, created_at, updated_at
 FROM tasks
-ORDER BY created_at, id;
+ORDER BY created_at, id
+LIMIT sqlc.arg('limit')::bigint OFFSET sqlc.arg('offset')::bigint;
+
+-- name: CountTasks :one
+-- Backs task.Repository.ListPage's total (SPEC-008 R2): the total
+-- number of tasks regardless of limit/offset, so callers can compute
+-- page count / whether further pages exist.
+SELECT COUNT(*) FROM tasks;

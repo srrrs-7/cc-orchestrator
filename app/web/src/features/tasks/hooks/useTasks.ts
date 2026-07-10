@@ -1,16 +1,36 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ApiError } from "../../../shared/api/errors";
 import { completeTask, createTask, fetchTaskById, fetchTasks, startTask } from "../api/client";
-import type { CreateTaskInput } from "../api/schema";
+import type { CreateTaskInput, TaskPage } from "../api/schema";
+import { DEFAULT_LIMIT } from "../domain/pagination";
 import type { Task } from "../domain/task";
 
 const tasksQueryKey = ["tasks"] as const;
 
-/** Server state: the full task list. Never duplicated into local state. */
-export function useTasksQuery() {
-  return useQuery<Task[], ApiError>({
-    queryKey: tasksQueryKey,
-    queryFn: fetchTasks,
+export type TasksListParams = {
+  readonly limit?: number;
+  readonly offset?: number;
+};
+
+/**
+ * Server state: a page of tasks (SPEC-008). Never duplicated into local
+ * state. The query key includes `limit`/`offset` so each page is
+ * cached independently; mutations below invalidate the `["tasks"]`
+ * prefix, which covers every page key as well as `useTaskQuery`'s
+ * `["tasks", id]` keys.
+ *
+ * `placeholderData: keepPreviousData` keeps the previously rendered
+ * page's data on screen while the next/previous page's query key
+ * fetches in the background, instead of dropping to a loading state
+ * on every page change.
+ */
+export function useTasksQuery(params: TasksListParams = {}) {
+  const limit = params.limit ?? DEFAULT_LIMIT;
+  const offset = params.offset ?? 0;
+  return useQuery<TaskPage, ApiError>({
+    queryKey: [...tasksQueryKey, "list", { limit, offset }] as const,
+    queryFn: () => fetchTasks({ limit, offset }),
+    placeholderData: keepPreviousData,
   });
 }
 

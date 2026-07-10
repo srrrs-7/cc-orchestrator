@@ -6,6 +6,8 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
@@ -86,22 +88,44 @@ func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*ta
 	return nil, fmt.Errorf("memory: find task by title: %w", task.NewNotFoundError())
 }
 
-// FindAll returns every Task currently stored.
-func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
+// ListPage returns a stable-ordered (created_at, id ascending) page
+// of Tasks per page's limit/offset, along with total: the number of
+// Tasks currently stored, independent of the page window (SPEC-008).
+// An offset at or beyond total yields an empty items slice, not an
+// error. The map that backs TaskRepository has no inherent order, so
+// every call sorts a full snapshot before slicing the requested
+// window -- this mirrors infra/postgres's `ORDER BY created_at, id`
+// and keeps page boundaries free of duplicates/gaps.
+func (r *TaskRepository) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("memory: find all tasks: %w", task.NewDBError(ctx.Err()))
+		return nil, 0, fmt.Errorf("memory: list tasks: %w", task.NewDBError(ctx.Err()))
 	default:
 	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	result := make([]*task.Task, 0, len(r.tasks))
+	all := make([]*task.Task, 0, len(r.tasks))
 	for _, t := range r.tasks {
+		all = append(all, t)
+	}
+	slices.SortFunc(all, func(a, b *task.Task) int {
+		if c := a.CreatedAt().Compare(b.CreatedAt()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.ID().String(), b.ID().String())
+	})
+
+	total := len(all)
+	start := min(page.Offset(), total)
+	end := min(start+page.Limit(), total)
+
+	result := make([]*task.Task, 0, end-start)
+	for _, t := range all[start:end] {
 		result = append(result, clone(t))
 	}
-	return result, nil
+	return result, total, nil
 }
 
 // clone returns a new *task.Task built from t's state via

@@ -3,6 +3,7 @@ package route
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
 )
@@ -54,6 +55,50 @@ func newTaskResponse(dto service.TaskDTO) taskResponse {
 // timeLayout is the timestamp format used in JSON responses.
 const timeLayout = "2006-01-02T15:04:05Z07:00"
 
+// taskListResponse is the JSON response body for GET /tasks
+// (SPEC-008): an envelope carrying a page of tasks plus the paging
+// metadata the server actually applied. Total is the store's total
+// task count (independent of the page window); Limit/Offset echo the
+// applied (post default/clamp) values, not necessarily the raw query
+// parameters the caller sent.
+type taskListResponse struct {
+	Items  []taskResponse `json:"items"  validate:"required"`
+	Total  int            `json:"total"  validate:"required"`
+	Limit  int            `json:"limit"  validate:"required"`
+	Offset int            `json:"offset" validate:"required"`
+}
+
+func newTaskListResponse(dto service.TaskListDTO) taskListResponse {
+	items := make([]taskResponse, 0, len(dto.Items))
+	for _, item := range dto.Items {
+		items = append(items, newTaskResponse(item))
+	}
+	return taskListResponse{
+		Items:  items,
+		Total:  dto.Total,
+		Limit:  dto.Limit,
+		Offset: dto.Offset,
+	}
+}
+
+// parseQueryInt parses the named query parameter as an int. It
+// returns a nil *int (meaning "unspecified") when the parameter is
+// absent or empty, so that service.TaskService.List can apply
+// task.Page's defaults (task.NewPage). A present-but-non-integer
+// value is reported via the returned error, which the caller (list)
+// translates into a 400 response.
+func parseQueryInt(r *http.Request, name string) (*int, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
 // create handles POST /tasks.
 //
 // @Summary      Create a task
@@ -85,25 +130,34 @@ func (h *taskHandler) create(w http.ResponseWriter, r *http.Request) {
 // list handles GET /tasks.
 //
 // @Summary      List tasks
-// @Description  Returns every task.
+// @Description  Returns a page of tasks ordered by creation time (created_at, id ascending). limit defaults to 20 and is clamped to a maximum of 100; offset defaults to 0.
 // @Tags         tasks
 // @Produce      json
-// @Success      200  {array}   taskResponse
+// @Param        limit   query     int  false  "Maximum number of tasks to return (default 20, max 100; values above 100 are clamped)"
+// @Param        offset  query     int  false  "Number of tasks to skip (default 0)"
+// @Success      200  {object}  taskListResponse
+// @Failure      400  {object}  errorResponse  "limit or offset is not an integer, limit is less than 1, or offset is negative"
 // @Failure      500  {object}  errorResponse
 // @Router       /tasks [get]
 func (h *taskHandler) list(w http.ResponseWriter, r *http.Request) {
-	dtos, err := h.svc.List(r.Context())
+	limit, err := parseQueryInt(r, "limit")
+	if err != nil {
+		writeBadRequest(w, "limit must be an integer")
+		return
+	}
+	offset, err := parseQueryInt(r, "offset")
+	if err != nil {
+		writeBadRequest(w, "offset must be an integer")
+		return
+	}
+
+	dto, err := h.svc.List(r.Context(), limit, offset)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	resp := make([]taskResponse, 0, len(dtos))
-	for _, dto := range dtos {
-		resp = append(resp, newTaskResponse(dto))
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, newTaskListResponse(dto))
 }
 
 // get handles GET /tasks/{id}.

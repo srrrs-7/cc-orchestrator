@@ -35,6 +35,12 @@ var (
 	// ErrInvalidPriority is returned when a Priority cannot be parsed
 	// from a string.
 	ErrInvalidPriority = errors.New("task: invalid priority")
+
+	// ErrInvalidLimit is returned when a Page's limit is less than 1.
+	ErrInvalidLimit = errors.New("task: invalid limit")
+
+	// ErrInvalidOffset is returned when a Page's offset is negative.
+	ErrInvalidOffset = errors.New("task: invalid offset")
 )
 
 // TransitionError indicates an attempt to move a Task from one Status

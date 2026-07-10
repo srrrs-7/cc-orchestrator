@@ -112,23 +112,41 @@ func (r *TaskRepository) FindByTitle(ctx context.Context, title task.Title) (*ta
 	return t, nil
 }
 
-// FindAll returns every Task currently stored, ordered by created_at
-// (see db/queries/tasks.sql: ListTasks).
-func (r *TaskRepository) FindAll(ctx context.Context) ([]*task.Task, error) {
-	rows, err := r.q.ListTasks(ctx)
+// ListPage returns the Tasks in page -- ordered by created_at, id
+// ascending, at most page.Limit() rows starting at page.Offset() (see
+// db/queries/tasks.sql: ListTasksPage) -- alongside the total number
+// of Tasks in the table regardless of limit/offset (CountTasks). An
+// offset at or beyond the total simply yields an empty items slice,
+// not an error (SPEC-008 R2/R5).
+//
+// CountTasks and ListTasksPage are two separate statements rather than
+// a single windowed query, so under concurrent writes the returned
+// total and items can drift by a small amount relative to each other;
+// this is accepted at this sample's scale (SPEC-008 plan risk R-6).
+// Any database error from either query is wrapped as a *task.DBError.
+func (r *TaskRepository) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
+	total, err := r.q.CountTasks(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("postgres: find all tasks: %w", task.NewDBError(err))
+		return nil, 0, fmt.Errorf("postgres: list tasks page: count: %w", task.NewDBError(err))
+	}
+
+	rows, err := r.q.ListTasksPage(ctx, sqlcgen.ListTasksPageParams{
+		Limit:  int64(page.Limit()),
+		Offset: int64(page.Offset()),
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("postgres: list tasks page: %w", task.NewDBError(err))
 	}
 
 	result := make([]*task.Task, 0, len(rows))
 	for _, row := range rows {
 		t, err := taskFromRow(row)
 		if err != nil {
-			return nil, fmt.Errorf("postgres: find all tasks: %w", err)
+			return nil, 0, fmt.Errorf("postgres: list tasks page: %w", err)
 		}
 		result = append(result, t)
 	}
-	return result, nil
+	return result, int(total), nil
 }
 
 // taskFromRow reconstructs a domain *task.Task from a generated

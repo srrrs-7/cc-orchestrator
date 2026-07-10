@@ -9,6 +9,10 @@ import (
 )
 
 type Querier interface {
+	// Backs task.Repository.ListPage's total (SPEC-008 R2): the total
+	// number of tasks regardless of limit/offset, so callers can compute
+	// page count / whether further pages exist.
+	CountTasks(ctx context.Context) (int64, error)
 	// Backs task.Repository.FindByID. Returns sql.ErrNoRows when absent;
 	// infra/postgres/task_repository.go maps that to task.ErrNotFound.
 	GetTaskByID(ctx context.Context, id string) (Task, error)
@@ -16,10 +20,19 @@ type Querier interface {
 	// absent; infra/postgres/task_repository.go maps that to
 	// task.ErrNotFound.
 	GetTaskByTitle(ctx context.Context, title string) (Task, error)
-	// Backs task.Repository.FindAll. Ordered by created_at for stable,
-	// deterministic output (infra/memory has no inherent order since it
-	// ranges over a map).
-	ListTasks(ctx context.Context) ([]Task, error)
+	// Backs task.Repository.ListPage (SPEC-008 R1/R2/R5): a single page of
+	// tasks ordered by created_at, id for stable, deterministic output
+	// (ties on created_at are broken by id so page boundaries never
+	// duplicate or skip a row; infra/memory.TaskRepository.ListPage sorts
+	// the same way). $1 = limit (task.Page.Limit(), already clamped to
+	// task.MaxLimit by domain/task.NewPage), $2 = offset
+	// (task.Page.Offset()). An offset at or beyond the table's row count
+	// simply yields zero rows -- not an error. Both are cast to ::bigint
+	// so sqlc generates int64 params (ListTasksPageParams.Limit/Offset):
+	// Go's int -> int64 is a widening conversion on every platform this
+	// runs on, so infra/postgres/task_repository.go never narrows
+	// task.Page.Limit()/Offset() into a smaller type (gosec G115).
+	ListTasksPage(ctx context.Context, arg ListTasksPageParams) ([]Task, error)
 	// SPEC-005 R1/R4: sqlc input for the tasks table (db/migrations/000001_create_tasks.sql).
 	// `make sqlc` regenerates infra/postgres/sqlcgen from this file; keep
 	// both in the same commit (no drift).

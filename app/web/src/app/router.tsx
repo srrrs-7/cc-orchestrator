@@ -5,16 +5,24 @@ import { TaskFilters } from "../features/tasks/components/TaskFilters";
 import { TaskItem } from "../features/tasks/components/TaskItem";
 import { TaskList } from "../features/tasks/components/TaskList";
 import { TaskSummary } from "../features/tasks/components/TaskSummary";
+import { DEFAULT_LIMIT, MAX_LIMIT } from "../features/tasks/domain/pagination";
 import { TASK_STATUSES } from "../features/tasks/domain/task";
 import { useTaskQuery } from "../features/tasks/hooks/useTasks";
 import { App } from "./App";
 
-// The `status` search param on `/` is external data (comes from the
-// URL), so it is validated with zod before being typed. `.catch`
-// falls back to "all" instead of throwing on an unrecognized value,
-// since a malformed URL shouldn't crash the route.
+// The `status`/`limit`/`offset` search params on `/` are external data
+// (come from the URL), so they are validated with zod before being
+// typed. `.catch` falls back to a sensible default instead of throwing
+// on a malformed/missing value, since a malformed URL shouldn't crash
+// the route. `limit`/`offset` (SPEC-008) mirror the defaults/bounds the
+// server applies (domain/pagination.ts) so an out-of-range value in the
+// URL still produces a request the server accepts, but the server's
+// echoed response (not this schema) is the source of truth once data
+// has loaded.
 const taskListSearchSchema = z.object({
   status: z.enum(["all", ...TASK_STATUSES]).catch("all"),
+  limit: z.coerce.number().int().min(1).max(MAX_LIMIT).catch(DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).catch(0),
 });
 
 type TaskListSearch = z.infer<typeof taskListSearchSchema>;

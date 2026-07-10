@@ -6,8 +6,11 @@ export { CreateTaskForm } from "./components/CreateTaskForm";
 export { TaskFilters } from "./components/TaskFilters";
 export { TaskItem } from "./components/TaskItem";
 export { TaskList } from "./components/TaskList";
+export { TaskPager } from "./components/TaskPager";
 export { TaskSummary } from "./components/TaskSummary";
 export { InvalidTransitionError } from "./domain/errors";
+export { DEFAULT_LIMIT, MAX_LIMIT } from "./domain/pagination";
+export type { PageInfo } from "./domain/pagination";
 export type { Task, TaskPriority, TaskStatus, TaskStatusSummary } from "./domain/task";
 export {
   canComplete,

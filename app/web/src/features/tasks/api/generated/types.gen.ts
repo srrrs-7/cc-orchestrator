@@ -21,6 +21,13 @@ export type RouteErrorResponse = {
   error: string;
 };
 
+export type RouteTaskListResponse = {
+  items: Array<RouteTaskResponse>;
+  limit: number;
+  offset: number;
+  total: number;
+};
+
 export type RouteTaskResponse = {
   created_at: string;
   id: string;
@@ -33,11 +40,24 @@ export type RouteTaskResponse = {
 export type GetTasksData = {
   body?: never;
   path?: never;
-  query?: never;
+  query?: {
+    /**
+     * Maximum number of tasks to return (default 20, max 100; values above 100 are clamped)
+     */
+    limit?: number;
+    /**
+     * Number of tasks to skip (default 0)
+     */
+    offset?: number;
+  };
   url: '/tasks';
 };
 
 export type GetTasksErrors = {
+  /**
+   * limit or offset is not an integer, limit is less than 1, or offset is negative
+   */
+  400: RouteErrorResponse;
   /**
    * Internal Server Error
    */
@@ -50,7 +70,7 @@ export type GetTasksResponses = {
   /**
    * OK
    */
-  200: Array<RouteTaskResponse>;
+  200: RouteTaskListResponse;
 };
 
 export type GetTasksResponse = GetTasksResponses[keyof GetTasksResponses];
