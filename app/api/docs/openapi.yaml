@@ -1,0 +1,334 @@
+components:
+  schemas:
+    route.changePriorityRequest:
+      properties:
+        priority:
+          enum:
+          - low
+          - medium
+          - high
+          type: string
+      required:
+      - priority
+      type: object
+    route.createTaskRequest:
+      properties:
+        priority:
+          description: |-
+            Priority is optional; an empty value defaults to medium
+            (applied by service.TaskService.Create).
+          enum:
+          - low
+          - medium
+          - high
+          type: string
+        title:
+          type: string
+      required:
+      - title
+      type: object
+    route.errorResponse:
+      properties:
+        error:
+          type: string
+      required:
+      - error
+      type: object
+    route.taskListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/route.taskResponse'
+          type: array
+          uniqueItems: false
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+      required:
+      - items
+      - limit
+      - offset
+      - total
+      type: object
+    route.taskResponse:
+      properties:
+        created_at:
+          type: string
+        id:
+          type: string
+        priority:
+          enum:
+          - low
+          - medium
+          - high
+          type: string
+        status:
+          enum:
+          - todo
+          - doing
+          - done
+          type: string
+        title:
+          type: string
+        updated_at:
+          type: string
+      required:
+      - created_at
+      - id
+      - priority
+      - status
+      - title
+      - updated_at
+      type: object
+externalDocs:
+  description: ""
+  url: ""
+info:
+  description: |-
+    Task management sample API (Go, DDD-layered). This spec is generated from swag
+    annotations on the route package and is the contract of record for app/web codegen.
+  title: Task Management API
+  version: "1.0"
+openapi: 3.1.0
+paths:
+  /tasks:
+    get:
+      description: Returns a page of tasks ordered by creation time (created_at, id
+        ascending). limit defaults to 20 and is clamped to a maximum of 100; offset
+        defaults to 0.
+      parameters:
+      - description: Maximum number of tasks to return (default 20, max 100; values
+          above 100 are clamped)
+        in: query
+        name: limit
+        schema:
+          type: integer
+      - description: Number of tasks to skip (default 0)
+        in: query
+        name: offset
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: limit or offset is not an integer, limit is less than 1, or
+            offset is negative
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: List tasks
+      tags:
+      - tasks
+    post:
+      description: Creates a new task with the given title and an optional priority.
+        An omitted or empty priority defaults to medium.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/route.createTaskRequest'
+              description: Task to create
+              summary: request
+        description: Task to create
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: invalid body, empty title, title too long, or invalid priority
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: a task with the same title already exists
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: Create a task
+      tags:
+      - tasks
+  /tasks/{id}:
+    get:
+      description: Returns a single task by id.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task does not exist
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: Get a task
+      tags:
+      - tasks
+  /tasks/{id}/complete:
+    post:
+      description: Transitions a task from doing to done.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task does not exist
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task is not in a state that can transition to done
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: Complete a task
+      tags:
+      - tasks
+  /tasks/{id}/priority:
+    post:
+      description: Updates a task's priority (low, medium, or high) without altering
+        its status.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/route.changePriorityRequest'
+              description: New priority
+              summary: request
+        description: New priority
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: invalid body or invalid priority
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task does not exist
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: Change a task's priority
+      tags:
+      - tasks
+  /tasks/{id}/start:
+    post:
+      description: Transitions a task from todo to doing.
+      parameters:
+      - description: Task ID
+        in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.taskResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task does not exist
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: task is not in a state that can transition to doing
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: Internal Server Error
+      summary: Start a task
+      tags:
+      - tasks
+servers:
+- url: /

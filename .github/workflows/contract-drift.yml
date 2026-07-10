@@ -1,0 +1,126 @@
+# OpenAPI contract drift check for SPEC-003 (Go <-> TypeScript type sharing).
+#
+# This is the ONLY job in the repo that needs BOTH the Go and Bun toolchains
+# in the same job: it regenerates app/api's OpenAPI contract from the Go
+# swag v2 annotations, then regenerates app/web's generated types / Zod
+# schemas / TanStack Query client from that contract, and fails if either
+# regenerated artifact differs from what's committed (i.e. "Go's DTOs
+# changed but the generated contract/TS wasn't re-committed").
+#
+# Kept as a dedicated workflow file (not folded into .github/workflows/cicd.yml)
+# per docs/plans/SPEC-003-plan.md ("唯一 Go+Bun 双方を要する跨り stack ジョブ
+# として隔離" — the NFR "avoid cross-stack tooling per job" is intentionally
+# broken only here, isolated into its own file/job with this comment as the
+# rationale). The commands run here are exactly the contract defined in
+# .claude/rules/api.md (`make openapi`) and .claude/rules/web.md
+# (`bun run generate`) — do not invent commands here.
+name: OpenAPI Contract Drift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/api/**"
+      - "app/web/**"
+      - ".github/workflows/contract-drift.yml"
+  pull_request:
+    paths:
+      - "app/api/**"
+      - "app/web/**"
+      - ".github/workflows/contract-drift.yml"
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref (e.g. new push to a PR branch).
+# Group name is scoped to this workflow's name so it never collides with
+# cicd.yml's own concurrency group.
+concurrency:
+  group: contract-drift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Must match app/api/go.mod's `go 1.24` directive.
+  GO_VERSION: "1.24"
+  # app/web is on the Bun 1.3 series (see app/web/Dockerfile: `FROM oven/bun:1`).
+  # NOTE: this intentionally differs from cicd.yml's BUN_VERSION (1.2.21);
+  # see this workflow's report for a note on reconciling the two pins.
+  BUN_VERSION: "1.3.14"
+
+jobs:
+  contract-drift:
+    name: Contract drift (api openapi.yaml <-> web generated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
+          # runtime dependency (previously stdlib-only, no go.sum); cache
+          # the module download layer keyed off go.sum. This job never
+          # touches Postgres itself (`make openapi` only parses swag
+          # annotations), but the module graph resolution below still
+          # benefits from the cache.
+          cache: true
+          cache-dependency-path: app/api/go.sum
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # Regenerates app/api/docs/openapi.yaml from the swag v2 annotations
+      # (`make openapi` = go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5,
+      # pinned in app/api/Makefile). Contract: .claude/rules/api.md.
+      - name: Regenerate OpenAPI contract (app/api)
+        working-directory: app/api
+        run: make openapi
+
+      # --frozen-lockfile installs exactly what bun.lock pins; the
+      # bunfig.toml minimumReleaseAge gate only affects resolving new
+      # versions, so already-locked deps (incl. @hey-api/openapi-ts) pass.
+      - name: Install web dependencies
+        working-directory: app/web
+        run: bun install --frozen-lockfile
+
+      # Regenerates types + Zod + TanStack Query client from the OpenAPI
+      # contract produced above (openapi-ts.config.ts input =
+      # ../api/docs/openapi.yaml). Contract: .claude/rules/web.md.
+      - name: Regenerate types/Zod/query client (app/web)
+        working-directory: app/web
+        run: bun run generate
+
+      # SPEC-003 R6: fail if regenerating either artifact produced a diff,
+      # i.e. someone changed the Go DTOs/annotations or the OpenAPI contract
+      # without re-running `make openapi` / `bun run generate` and
+      # committing the result. This must also catch the case where
+      # regeneration produces a brand-new file that was never committed
+      # (e.g. a future @hey-api/openapi-ts version/plugin change emitting an
+      # additional generated file) — plain `git diff --exit-code` is blind
+      # to untracked paths, so it would silently pass that case.
+      - name: Fail on contract drift
+        run: |
+          # `git add -N` (--intent-to-add) registers any currently
+          # untracked paths under the watched locations in the index
+          # (without staging their content), so `git diff` below reports
+          # them as additions instead of ignoring them. Already-tracked,
+          # unmodified files are unaffected.
+          git add -N -- \
+            app/api/docs/openapi.yaml \
+            app/web/src/features/tasks/api/generated
+
+          if ! git diff --exit-code -- \
+            app/api/docs/openapi.yaml \
+            app/web/src/features/tasks/api/generated; then
+            echo
+            echo "::error::Contract drift detected — the diff above (new/changed files marked '+') was produced by regenerating app/api/docs/openapi.yaml and app/web's generated client from source. Run 'make openapi' in app/api and 'bun run generate' in app/web locally, then commit the result."
+            echo
+            echo "----- git status (watched paths) -----"
+            git status -- \
+              app/api/docs/openapi.yaml \
+              app/web/src/features/tasks/api/generated
+            exit 1
+          fi

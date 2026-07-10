@@ -21,12 +21,22 @@ func NewTaskService(repo task.Repository, dupChk *task.DuplicateChecker) *TaskSe
 	return &TaskService{repo: repo, dupChk: dupChk}
 }
 
-// Create builds a new Task from the given title, rejecting duplicate
-// titles, and persists it.
-func (s *TaskService) Create(ctx context.Context, title string) (TaskDTO, error) {
+// Create builds a new Task from the given title and priority,
+// rejecting duplicate titles, and persists it. An empty priority
+// defaults to task.PriorityMedium; a non-empty priority is validated
+// via task.ParsePriority and rejected (ErrInvalidPriority) if unknown.
+func (s *TaskService) Create(ctx context.Context, title, priority string) (TaskDTO, error) {
 	t, err := task.NewTitle(title)
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
+	}
+
+	p := task.PriorityMedium
+	if priority != "" {
+		p, err = task.ParsePriority(priority)
+		if err != nil {
+			return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
+		}
 	}
 
 	duplicated, err := s.dupChk.IsDuplicated(ctx, t)
@@ -34,10 +44,10 @@ func (s *TaskService) Create(ctx context.Context, title string) (TaskDTO, error)
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
 	}
 	if duplicated {
-		return TaskDTO{}, fmt.Errorf("service: create task: %w", task.ErrDuplicateTitle)
+		return TaskDTO{}, fmt.Errorf("service: create task: %w", task.NewDuplicateTitleError())
 	}
 
-	newTask := task.New(t)
+	newTask := task.New(t, p)
 	if err := s.repo.Save(ctx, newTask); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: create task: %w", err)
 	}
@@ -60,18 +70,33 @@ func (s *TaskService) Get(ctx context.Context, id string) (TaskDTO, error) {
 	return newTaskDTO(t), nil
 }
 
-// List retrieves all Tasks.
-func (s *TaskService) List(ctx context.Context) ([]TaskDTO, error) {
-	tasks, err := s.repo.FindAll(ctx)
+// List retrieves a page of Tasks (SPEC-008). A nil limit/offset
+// defaults to task.DefaultLimit/0 respectively, and a limit above
+// task.MaxLimit is clamped (see task.NewPage); an invalid limit
+// (< 1) or negative offset is rejected with a *task.ValidationError.
+// The returned TaskListDTO's Limit/Offset echo the values actually
+// applied.
+func (s *TaskService) List(ctx context.Context, limit, offset *int) (TaskListDTO, error) {
+	page, err := task.NewPage(limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("service: list tasks: %w", err)
+		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
+	}
+
+	tasks, total, err := s.repo.ListPage(ctx, page)
+	if err != nil {
+		return TaskListDTO{}, fmt.Errorf("service: list tasks: %w", err)
 	}
 
 	dtos := make([]TaskDTO, 0, len(tasks))
 	for _, t := range tasks {
 		dtos = append(dtos, newTaskDTO(t))
 	}
-	return dtos, nil
+	return TaskListDTO{
+		Items:  dtos,
+		Total:  total,
+		Limit:  page.Limit(),
+		Offset: page.Offset(),
+	}, nil
 }
 
 // Start transitions the Task identified by id from todo to doing.
@@ -92,6 +117,34 @@ func (s *TaskService) Start(ctx context.Context, id string) (TaskDTO, error) {
 
 	if err := s.repo.Save(ctx, t); err != nil {
 		return TaskDTO{}, fmt.Errorf("service: start task: %w", err)
+	}
+
+	return newTaskDTO(t), nil
+}
+
+// ChangePriority updates the priority of the Task identified by id.
+// It never touches status: priority changes are orthogonal to the
+// todo/doing/done state machine.
+func (s *TaskService) ChangePriority(ctx context.Context, id, priority string) (TaskDTO, error) {
+	taskID, err := task.ParseID(id)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	p, err := task.ParsePriority(priority)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	t, err := s.repo.FindByID(ctx, taskID)
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
+	}
+
+	t.ChangePriority(p)
+
+	if err := s.repo.Save(ctx, t); err != nil {
+		return TaskDTO{}, fmt.Errorf("service: change priority: %w", err)
 	}
 
 	return newTaskDTO(t), nil

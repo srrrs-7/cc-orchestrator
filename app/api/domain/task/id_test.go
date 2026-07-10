@@ -51,6 +51,16 @@ func TestParseID(t *testing.T) {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("ParseID(%q) error = %v, want wrapping %v", tt.input, err, tt.wantErr)
 				}
+				// ISSUE-018: ParseID must produce a *task.ValidationError
+				// (HTTP 400 category) so route can branch on the category
+				// type instead of enumerating ErrInvalidID individually.
+				var ve *task.ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("ParseID(%q) error = %v, want errors.As(&task.ValidationError{}) = true", tt.input, err)
+				}
+				if ve.Msg != "invalid task id" {
+					t.Errorf("ParseID(%q) ValidationError.Msg = %q, want %q", tt.input, ve.Msg, "invalid task id")
+				}
 				return
 			}
 			if err != nil {

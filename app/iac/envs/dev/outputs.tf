@@ -1,16 +1,41 @@
 output "cloudfront_domain_name" {
-  description = "CloudFront distribution's default domain name; the public entry point of the API (R1)."
+  description = "CloudFront distribution's default domain name; the public entry point of web/api/auth (R1-R3)."
   value       = module.cdn.cloudfront_domain_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "CloudFront distribution ID; used by build-push tooling to invalidate the cache after a web deploy."
+  value       = module.cdn.cloudfront_distribution_id
+}
+
+output "web_url" {
+  description = "Public HTTPS URL of the web SPA (CloudFront default domain)."
+  value       = "https://${module.cdn.cloudfront_domain_name}"
+}
+
+output "web_bucket_name" {
+  description = "Name of the S3 bucket to sync the web SPA's built assets to (`aws s3 sync dist s3://<this> --delete`)."
+  value       = module.cdn.web_bucket_name
 }
 
 output "alb_dns_name" {
   description = "ALB DNS name (CloudFront origin; not intended for direct client access, see modules/network README)."
-  value       = module.app.alb_dns_name
+  value       = module.platform.alb_dns_name
 }
 
-output "ecr_repository_url" {
-  description = "ECR repository URL to push the app/api container image to."
-  value       = module.app.ecr_repository_url
+output "api_ecr_repository_url" {
+  description = "ECR repository URL to push the app/api container image to (linux/arm64, see modules/service README)."
+  value       = module.service_api.ecr_repository_url
+}
+
+output "auth_ecr_repository_url" {
+  description = "ECR repository URL to push the app/auth container image to (linux/arm64, see modules/service README)."
+  value       = module.service_auth.ecr_repository_url
+}
+
+output "migrator_ecr_repository_url" {
+  description = "ECR repository URL to push the shared app/migrator image to (linux/arm64; both api's and auth's migration init containers pull this same image, distinguished by -target, see envs/dev/migrator.tf)."
+  value       = aws_ecr_repository.migrator.repository_url
 }
 
 output "rds_endpoint" {
@@ -18,14 +43,19 @@ output "rds_endpoint" {
   value       = module.db.db_endpoint
 }
 
-output "ecs_cluster_name" {
-  description = "Name of the ECS cluster."
-  value       = module.app.ecs_cluster_name
+output "ecs_cluster_id" {
+  description = "ID (ARN) of the shared ECS cluster running both the api and auth services."
+  value       = module.platform.ecs_cluster_id
 }
 
-output "ecs_service_name" {
-  description = "Name of the ECS service."
-  value       = module.app.ecs_service_name
+output "api_ecs_service_name" {
+  description = "Name of the api ECS service."
+  value       = module.service_api.ecs_service_name
+}
+
+output "auth_ecs_service_name" {
+  description = "Name of the auth ECS service."
+  value       = module.service_auth.ecs_service_name
 }
 
 output "web_acl_arn" {

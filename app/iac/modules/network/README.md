@@ -78,7 +78,11 @@ ALB SG の ingress は `com.amazonaws.global.cloudfront.origin-facing` マネー
 リストのみを許可し、CloudFront 以外からの直接アクセスを IP レベルで遮断する。ただし
 プレフィックスリストは「CloudFront のオリジンサーバー向け送信元 IP 帯」であり、
 別の CloudFront ディストリビューション経由のなりすましは防げない。これを補うため、
-`app` / `cdn` モジュールでカスタムヘッダによる二重検証を行う(詳細は各モジュールの README)。
+`service` / `cdn` モジュールでカスタムヘッダによる二重検証を行う(詳細は各モジュールの README)。
+
+auth 用の ECS タスクも api と **同じ `ecs_sg`**(ALB SG からの ingress のみ許可、egress は
+CIDR ベース)を共用する。auth は RDS を使わないため `rds_sg` への到達性は不要で、新しい SG は
+追加していない(SPEC-004。api/auth の SG 要件に差分がないため本モジュールへの変更は不要)。
 
 ## 既知の制約
 

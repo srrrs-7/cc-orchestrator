@@ -1,0 +1,158 @@
+# sqlc codegen drift check for SPEC-005 (Postgres persistence: goose + sqlc).
+#
+# Same idea as contract-drift.yml (SPEC-003) applied to app/api's and
+# app/auth's sqlc-generated Go code: regenerate infra/postgres/sqlcgen from
+# db/queries + db/migrations via `make sqlc`, then fail if the regenerated
+# output differs from what's committed (i.e. "db/queries or db/migrations
+# changed but `make sqlc` wasn't re-run and committed").
+#
+# Unlike contract-drift.yml, this is Go-only per stack (no Bun involved), so
+# api and auth are independent jobs gated by a path-filter `changes` job —
+# the same pattern cicd.yml uses — rather than one workflow-wide job. The
+# commands run here are exactly the contract defined in .claude/rules/db.md
+# and each stack's own Makefile (`make sqlc`, the single source of truth for
+# the pinned sqlc version) — do not invent commands here.
+name: sqlc Drift
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref (matches cicd.yml / contract-drift.yml).
+concurrency:
+  group: sqlc-drift-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Must match app/api's and app/auth's go.mod `go 1.24` directive
+  # (cicd.yml's GO_VERSION).
+  GO_VERSION: "1.24"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Detect which stack's sqlc inputs changed, mirroring cicd.yml's `changes`
+  # job so api/auth stay independent (a queries/migrations change in one
+  # stack does not trigger the other stack's drift check).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect changed stacks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      auth: ${{ steps.filter.outputs.auth }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Paths mirror .claude/rules/db.md's frontmatter `paths` (the
+          # locations that make this rule file, and therefore sqlc
+          # generation, apply).
+          filters: |
+            api:
+              - 'app/api/db/**'
+              - 'app/api/infra/postgres/**'
+              - 'app/api/sqlc.yaml'
+              - '.github/workflows/sqlc-drift.yml'
+            auth:
+              - 'app/auth/db/**'
+              - 'app/auth/infra/postgres/**'
+              - 'app/auth/sqlc.yaml'
+              - '.github/workflows/sqlc-drift.yml'
+
+  # ---------------------------------------------------------------------------
+  # api — regenerate infra/postgres/sqlcgen from db/queries + db/migrations.
+  # ---------------------------------------------------------------------------
+  api:
+    name: api sqlc drift (db/queries -> infra/postgres/sqlcgen)
+    needs: changes
+    if: ${{ needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
+          # runtime dependency (previously stdlib-only, no go.sum); cache
+          # the module download layer keyed off go.sum. `make sqlc` itself
+          # runs sqlc as `go run pkg@pinned` (not a go.sum entry, see
+          # app/api/Makefile) but shares the same module cache, so repeat
+          # runs also benefit from this.
+          cache: true
+          cache-dependency-path: app/api/go.sum
+
+      # Regenerates infra/postgres/sqlcgen from db/queries/*.sql +
+      # db/migrations/*.sql (sqlc version pinned in app/api/Makefile, the
+      # single source of truth per docs/plans/SPEC-005-plan.md §0).
+      # Contract: .claude/rules/db.md.
+      - name: Regenerate sqlc output (app/api)
+        run: make sqlc
+
+      # Fail if regenerating produced a diff, i.e. someone changed
+      # db/queries or db/migrations without re-running `make sqlc` and
+      # committing the result. `git add -N` (--intent-to-add) also catches
+      # a brand-new generated file that was never committed (plain `git
+      # diff --exit-code` is blind to untracked paths).
+      - name: Fail on sqlc drift
+        run: |
+          git add -N -- infra/postgres/sqlcgen
+
+          if ! git diff --exit-code -- infra/postgres/sqlcgen; then
+            echo
+            echo "::error::sqlc drift detected in app/api — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/api/db/queries and app/api/db/migrations. Run 'make sqlc' in app/api locally, then commit the result."
+            echo
+            echo "----- git status (watched path) -----"
+            git status -- infra/postgres/sqlcgen
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # auth — identical shape to the api job above, own stack/db/schema.
+  # ---------------------------------------------------------------------------
+  auth:
+    name: auth sqlc drift (db/queries -> infra/postgres/sqlcgen)
+    needs: changes
+    if: ${{ needs.changes.outputs.auth == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/auth
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: app/auth/go.sum
+
+      - name: Regenerate sqlc output (app/auth)
+        run: make sqlc
+
+      - name: Fail on sqlc drift
+        run: |
+          git add -N -- infra/postgres/sqlcgen
+
+          if ! git diff --exit-code -- infra/postgres/sqlcgen; then
+            echo
+            echo "::error::sqlc drift detected in app/auth — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/auth/db/queries and app/auth/db/migrations. Run 'make sqlc' in app/auth locally, then commit the result."
+            echo
+            echo "----- git status (watched path) -----"
+            git status -- infra/postgres/sqlcgen
+            exit 1
+          fi

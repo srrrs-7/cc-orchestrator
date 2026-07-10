@@ -17,13 +17,14 @@ func TestNewTitle(t *testing.T) {
 		input   string
 		want    string
 		wantErr error
+		wantMsg string
 	}{
 		{name: "normal title", input: "buy milk", want: "buy milk"},
 		{name: "trims surrounding whitespace", input: "  buy milk  ", want: "buy milk"},
-		{name: "empty string is rejected", input: "", wantErr: task.ErrEmptyTitle},
-		{name: "whitespace only is rejected", input: "   \t\n ", wantErr: task.ErrEmptyTitle},
+		{name: "empty string is rejected", input: "", wantErr: task.ErrEmptyTitle, wantMsg: "title must not be empty"},
+		{name: "whitespace only is rejected", input: "   \t\n ", wantErr: task.ErrEmptyTitle, wantMsg: "title must not be empty"},
 		{name: "exactly 100 runes is ok (boundary)", input: exactly100, want: exactly100},
-		{name: "101 runes is too long (boundary)", input: over100, wantErr: task.ErrTitleTooLong},
+		{name: "101 runes is too long (boundary)", input: over100, wantErr: task.ErrTitleTooLong, wantMsg: "title is too long"},
 	}
 
 	for _, tt := range tests {
@@ -33,6 +34,16 @@ func TestNewTitle(t *testing.T) {
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("NewTitle(%q) error = %v, want wrapping %v", tt.input, err, tt.wantErr)
+				}
+				// ISSUE-018: NewTitle must produce a *task.ValidationError
+				// (HTTP 400 category), not just a bare sentinel-wrapping
+				// error, so route can branch on the category type.
+				var ve *task.ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("NewTitle(%q) error = %v, want errors.As(&task.ValidationError{}) = true", tt.input, err)
+				}
+				if ve.Msg != tt.wantMsg {
+					t.Errorf("NewTitle(%q) ValidationError.Msg = %q, want %q", tt.input, ve.Msg, tt.wantMsg)
 				}
 				return
 			}

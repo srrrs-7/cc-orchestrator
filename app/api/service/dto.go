@@ -17,6 +17,7 @@ type TaskDTO struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	Status    string    `json:"status"`
+	Priority  string    `json:"priority"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -27,7 +28,20 @@ func newTaskDTO(t *task.Task) TaskDTO {
 		ID:        t.ID().String(),
 		Title:     t.Title().String(),
 		Status:    t.Status().String(),
+		Priority:  t.Priority().String(),
 		CreatedAt: t.CreatedAt(),
 		UpdatedAt: t.UpdatedAt(),
 	}
+}
+
+// TaskListDTO is the application layer's output model for a page of
+// Tasks (GET /tasks, SPEC-008). Total is the total number of Tasks in
+// the store (independent of the page window); Limit/Offset echo the
+// values the server actually applied (post default/clamp via
+// task.NewPage), not necessarily what the caller requested.
+type TaskListDTO struct {
+	Items  []TaskDTO
+	Total  int
+	Limit  int
+	Offset int
 }

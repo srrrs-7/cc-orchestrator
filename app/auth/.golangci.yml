@@ -1,0 +1,62 @@
+# golangci-lint config (v2 schema -- ISSUE-024 follow-up: CI pin is
+# being moved from 1.64.8 to 2.12.2 by impl-ci, see
+# .github/workflows/cicd.yml env.GOLANGCI_LINT_VERSION; this file
+# targets that version's v2 config schema. The developer machine this
+# was verified on already runs golangci-lint 2.12.2 (homebrew), which
+# understands this schema).
+#
+# ISSUE-024: enables gosec (security-focused static analysis, bundled
+# into golangci-lint -- no separate binary needed) on top of the
+# default ("standard") linter set, plus nolintlint to make sure every
+# //nolint suppression (gosec's included) carries an explanation.
+#
+# ISSUE-024 follow-up (2026-07-10): golangci-lint 1.64.8's bundled
+# gosec predates the G704 (SSRF)/G710 (open redirect) taint-analysis
+# rules; 2.12.2's bundled gosec has them, and re-detects the two
+# pre-existing findings this v1->v2 migration was commissioned to
+# check for: cmd/healthcheck/main.go's client.Get(url) (ISSUE-021) and
+# route/response.go's http.Redirect(...) in the /authorize error path
+# (ISSUE-004). See those two files for how each is addressed
+# (suppressed with a `//nolint:gosec` + rationale, or fixed).
+#
+# This file must be kept identical in content/intent to
+# app/api/.golangci.yml and app/migrator/.golangci.yml (docs/plans/
+# ISSUE-024-plan.md §1.2): per-stack config is required because no
+# single impl agent owns a repository-root config file, but the three
+# files should not drift from each other. It was produced by running
+# `golangci-lint migrate` on the previous v1 file and then restoring
+# these comments (the migrate command does not carry comments over).
+version: "2"
+
+linters:
+  enable:
+    - gosec
+    - nolintlint
+  settings:
+    nolintlint:
+      # Every //nolint directive must name the linter(s) it suppresses
+      # and carry a `// <reason>` explanation (ISSUE-021/ISSUE-024
+      # re-triggered-suppression policy: suppressions are reviewed, not
+      # rubber-stamped).
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

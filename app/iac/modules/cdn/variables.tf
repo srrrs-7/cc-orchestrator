@@ -5,18 +5,30 @@ variable "name_prefix" {
 
 variable "alb_dns_name" {
   type        = string
-  description = "ALB DNS name used as the CloudFront custom origin (from the app module)."
+  description = "ALB DNS name (from the platform module), used as the CloudFront custom origin for both the alb-api and alb-auth origins."
 }
 
 variable "origin_verify_header_name" {
   type        = string
-  description = "HTTP header name injected as a CloudFront custom origin header; must match the ALB listener rule's expected header name in the app module (R3)."
+  description = "HTTP header name injected as a CloudFront custom origin header on both ALB origins; must match the ALB listener rules' expected header name in the service module instances (R3)."
 }
 
 variable "origin_verify_header_value" {
   type        = string
-  description = "Expected value of the origin-verify header. Generated once in envs/dev via random_password and shared with the app module; never written to tfvars in plain text."
+  description = "Expected value of the origin-verify header. Generated once in envs/dev via random_password and shared with every service module instance; never written to tfvars in plain text."
   sensitive   = true
+}
+
+variable "auth_route_header_name" {
+  type        = string
+  description = "HTTP header name injected as a CloudFront custom origin header on the alb-auth origin only (in addition to origin_verify_header_name), so the ALB listener rule can route to the auth target group instead of api's. Must match the auth service instance's route_conditions header name."
+  default     = "X-Target-Service"
+}
+
+variable "auth_route_header_value" {
+  type        = string
+  description = "Expected value of auth_route_header_name. Not a secret (routing discriminator only, not a security boundary -- see modules/service/README.md); origin_verify_header_value is what actually gates ALB access."
+  default     = "auth"
 }
 
 variable "waf_rate_limit" {

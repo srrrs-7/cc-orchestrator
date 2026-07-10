@@ -17,6 +17,7 @@ paths:
 | type check 相当 | `make vet` && `make build` |
 | test | `make test`(race 検査は `make test-race`) |
 | 上記すべて | `make check` |
+| OpenAPI 契約生成 | `make openapi`(swag v2 注釈から `docs/openapi.yaml` を生成。SPEC-003。生成であり検査ではないため `make check` には含めない) |
 
 ## レイアウト
 

@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-ssr
+.git
+.gitignore
+*.md
+coverage
+.vscode
+*.local
+.env
+.env.*
+!.env.example

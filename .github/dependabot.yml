@@ -1,0 +1,96 @@
+# Dependabot configuration for the cc-orchestrator monorepo.
+# One update stream per stack (web / api / auth / iac) plus GitHub Actions.
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+
+updates:
+  # --- GitHub Actions (workflow action refs) -------------------------------
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # --- web (app/web, npm registry consumed via Bun) ------------------------
+  # Supply-chain: mirror app/web/bunfig.toml `minimumReleaseAge` = 21 days.
+  # Dependabot's `cooldown` holds an update until the release is old enough,
+  # matching the Bun install gate. (Requires Dependabot cooldown support.)
+  - package-ecosystem: npm
+    directory: /app/web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: deps
+      prefix-development: deps-dev
+    cooldown:
+      default-days: 21
+    groups:
+      web-production:
+        dependency-type: production
+      web-development:
+        dependency-type: development
+
+  # --- api (app/api, Go modules) -------------------------------------------
+  - package-ecosystem: gomod
+    directory: /app/api
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      api-go-modules:
+        patterns:
+          - "*"
+
+  # --- auth (app/auth, Go modules) -----------------------------------------
+  - package-ecosystem: gomod
+    directory: /app/auth
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      auth-go-modules:
+        patterns:
+          - "*"
+
+  # --- migrator (app/migrator, Go modules) ---------------------------------
+  # Standalone module (own go.mod) with real runtime deps (goose, pgx);
+  # tracked independently from api/auth so its supply chain is monitored.
+  - package-ecosystem: gomod
+    directory: /app/migrator
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      migrator-go-modules:
+        patterns:
+          - "*"
+
+  # --- iac (app/iac, Terraform providers & modules) ------------------------
+  # `directories` glob covers every env root and reusable module so provider
+  # and module version constraints are all tracked.
+  - package-ecosystem: terraform
+    directories:
+      - "/app/iac/envs/*"
+      - "/app/iac/modules/*"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      terraform:
+        patterns:
+          - "*"

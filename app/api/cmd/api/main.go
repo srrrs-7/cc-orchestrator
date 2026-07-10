@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,15 +16,33 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/memory"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/api/route"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
 )
 
 const (
-	defaultPort     = "8080"
 	shutdownTimeout = 10 * time.Second
+
+	// HTTP server timeouts (ISSUE-010 / ISSUE-024 G112). In particular,
+	// ReadHeaderTimeout bounds how long a client may take to send
+	// request headers, which mitigates Slowloris-style attacks (many
+	// connections trickling in headers to exhaust server resources).
+	// Since this server does not stream request/response bodies,
+	// ReadTimeout and WriteTimeout can safely bound the whole
+	// request/response. Values are kept identical to app/auth's
+	// cmd/authz/main.go so the two services behave symmetrically.
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
+	writeTimeout      = 10 * time.Second
+	idleTimeout       = 60 * time.Second
 )
 
+// @title        Task Management API
+// @version      1.0
+// @description  Task management sample API (Go, DDD-layered). This spec is generated from swag
+// @description  annotations on the route package and is the contract of record for app/web codegen.
+// @BasePath     /
 func main() {
 	if err := run(); err != nil {
 		slog.Error("api: fatal error", "error", err)
@@ -35,21 +54,33 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Wiring: infra -> domain service -> application service -> presentation.
-	repo := memory.NewTaskRepository()
+	// Persistence wiring (SPEC-005): choose infra/memory or
+	// infra/postgres based on the DB_HOST/APP_ENV fail-closed contract
+	// implemented by postgres.SelectMode (infra/postgres/db.go). This
+	// is the only part of main.go's wiring that SPEC-005 touches; the
+	// rest (domain service -> application service -> presentation) is
+	// unchanged.
+	e := NewEnv()
+	mode, err := e.validate()
+	if err != nil {
+		return err
+	}
+
+	repo, closeRepo, err := newTaskRepository(ctx, mode, e.dbConfig())
+	if err != nil {
+		return fmt.Errorf("api: wire persistence (mode=%s): %w", mode, err)
+	}
+	defer func() {
+		if err := closeRepo(); err != nil {
+			slog.Error("api: close persistence", "error", err)
+		}
+	}()
+
 	dupChk := task.NewDuplicateChecker(repo)
 	svc := service.NewTaskService(repo, dupChk)
 	handler := route.NewRouter(svc)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
-	}
-
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: handler,
-	}
+	srv := newServer(":"+e.Port, handler)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -81,4 +112,43 @@ func run() error {
 	}
 
 	return nil
+}
+
+// newServer builds the *http.Server this process listens with, setting
+// the package's four timeout constants (readHeaderTimeout/readTimeout/
+// writeTimeout/idleTimeout) so the server is never left with Go's
+// zero-value (unbounded) defaults. Extracted from run so it can be
+// unit-tested without starting a real listener.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
+// newTaskRepository builds the task.Repository selected by mode
+// (postgres.SelectMode's result) and a close function the caller must
+// defer to release the underlying resources (a no-op for
+// infra/memory; db.Close() -- releasing the connection pool -- for
+// infra/postgres). ctx bounds the initial Postgres connectivity check
+// (postgres.Open's Ping); it is the server's long-lived shutdown
+// context, not a separate per-call timeout, since this only runs once
+// at startup.
+func newTaskRepository(ctx context.Context, mode postgres.Mode, cfg postgres.Config) (task.Repository, func() error, error) {
+	switch mode {
+	case postgres.ModePostgres:
+		db, err := postgres.Open(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		slog.Info("api: persistence selected", "mode", mode, "database", cfg.Name)
+		return postgres.NewTaskRepository(db), db.Close, nil
+	default:
+		slog.Info("api: persistence selected", "mode", postgres.ModeMemory)
+		return memory.NewTaskRepository(), func() error { return nil }, nil
+	}
 }

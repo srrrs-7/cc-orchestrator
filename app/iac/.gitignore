@@ -1,0 +1,24 @@
+# Terraform local working directory / provider plugin cache
+**/.terraform/
+
+# Terraform state files (this repo uses a remote backend; local state must
+# never be committed)
+*.tfstate
+*.tfstate.*
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Local override files (never checked in; used for local-only overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# NOTE: *.tfvars is intentionally NOT ignored — this repo tracks
+# terraform.tfvars per env and secrets are referenced via Secrets Manager /
+# SSM, not written in plaintext. Double-check before adding secrets here.
+
+# NOTE: .terraform.lock.hcl is intentionally NOT ignored — provider version
+# locks are committed per Terraform best practice.

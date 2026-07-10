@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+
+# ---- Build stage -----------------------------------------------------------
+FROM oven/bun:1 AS build
+WORKDIR /app
+
+# Install dependencies first (cache layer): only files that affect resolution.
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+
+# Now copy the rest of the source and build.
+COPY . .
+RUN bun run build
+
+# ---- Runtime stage ----------------------------------------------------------
+FROM nginx:alpine AS runtime
+
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+    CMD ["wget", "-q", "-O", "-", "http://localhost:80/"]
+
+CMD ["nginx", "-g", "daemon off;"]

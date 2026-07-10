@@ -1,0 +1,89 @@
+# golangci-lint config (v2 schema -- ISSUE-024 follow-up: CI pin is
+# being moved from 1.64.8 to 2.12.2 by impl-ci, see
+# .github/workflows/cicd.yml env.GOLANGCI_LINT_VERSION; this file
+# targets that version's v2 config schema. The developer machine this
+# was verified on already runs golangci-lint 2.12.2 (homebrew), which
+# understands this schema).
+#
+# ISSUE-024: enables gosec (security-focused static analysis, bundled
+# into golangci-lint -- no separate binary needed) on top of the
+# default ("standard") linter set, plus nolintlint to make sure every
+# //nolint suppression (gosec's included) carries an explanation.
+#
+# ISSUE-024 follow-up (2026-07-10): re-verified against golangci-lint
+# 2.12.2's bundled gosec (newer than 1.64.8's; adds G704/G710
+# taint-analysis rules -- see app/api/.golangci.yml and
+# app/auth/.golangci.yml for the two pre-existing findings that
+# re-detects in those stacks). app/migrator has no HTTP client or
+# redirect code, so neither rule applies here. The string-built SQL
+# statements this module issues -- infra/postgres/database.go's
+# `"CREATE DATABASE " + name.Quoted()`, and (added for ISSUE-016 R-c)
+# infra/postgres/role.go's CREATE ROLE/ALTER ROLE .. PASSWORD/REVOKE
+# CONNECT/GRANT CONNECT/GRANT .. ON ALL TABLES/ALTER DEFAULT PRIVILEGES
+# statements -- were checked against gosec's G201/G202 (SQL string
+# formatting/concatenation) keyword regex
+# (SELECT|DELETE|INSERT|UPDATE|INTO|FROM|WHERE; confirmed against the
+# gosec source and empirically against this exact golangci-lint binary
+# with a throwaway repro). CREATE ROLE/REVOKE/GRANT/ALTER ROLE/ALTER
+# DEFAULT PRIVILEGES do not match that regex either, so none of them
+# are gosec's blind spot from an exclusion masking a real finding: this
+# is genuinely outside what gosec's keyword heuristic looks for, and
+# every one of these call sites is additionally identifier-allowlisted
+# + quoted (domain/migration.DatabaseName.Quoted() / AppRole.Quoted(),
+# see db.md "セキュリティ") so no suppression is warranted for any of
+# them. The one exception is role.go's ALTER ROLE .. PASSWORD
+# statement (role.go:178's `//nolint:gosec` on the `stmt := ...` line):
+# unlike the identifier-only statements above, this one also splices in
+# a password via quoteLiteral (an SQL-literal, not identifier,
+# escape -- ALTER ROLE .. PASSWORD's grammar requires a literal there,
+# not a bind parameter), which *does* match gosec G202's concatenation
+# heuristic (it flags the `+` against a string built from a variable),
+# so that one suppression is gosec correctly firing on real
+# string-built SQL, not a false positive -- kept and explained inline
+# rather than silenced or removed. Baseline `golangci-lint run ./...`
+# under this config is 0 issues, confirmed both with and without the
+# exclusions.presets below (they exclude nothing in this module today;
+# kept for parity with the other two stacks, not because anything here
+# currently relies on them).
+#
+# This file must be kept identical in content/intent to
+# app/api/.golangci.yml and app/auth/.golangci.yml (docs/plans/
+# ISSUE-024-plan.md §1.2): per-stack config is required because no
+# single impl agent owns a repository-root config file, but the three
+# files should not drift from each other. It was produced by running
+# `golangci-lint migrate` on the previous v1 file and then restoring
+# these comments (the migrate command does not carry comments over).
+version: "2"
+
+linters:
+  enable:
+    - gosec
+    - nolintlint
+  settings:
+    nolintlint:
+      # Every //nolint directive must name the linter(s) it suppresses
+      # and carry a `// <reason>` explanation (ISSUE-021/ISSUE-024
+      # re-triggered-suppression policy: suppressions are reviewed, not
+      # rubber-stamped).
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,7 +1,6 @@
 package task
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -21,10 +20,10 @@ type Title struct {
 func NewTitle(s string) (Title, error) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
-		return Title{}, fmt.Errorf("task: new title: %w", ErrEmptyTitle)
+		return Title{}, &ValidationError{Msg: "title must not be empty", Err: ErrEmptyTitle}
 	}
 	if len([]rune(trimmed)) > maxTitleRunes {
-		return Title{}, fmt.Errorf("task: new title: %w", ErrTitleTooLong)
+		return Title{}, &ValidationError{Msg: "title is too long", Err: ErrTitleTooLong}
 	}
 	return Title{value: trimmed}, nil
 }
