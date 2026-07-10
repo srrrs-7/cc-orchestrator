@@ -9,6 +9,22 @@ COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compos
 # source filename ("Makefile:build: ## ...") once more than one file is in
 # that list, which breaks this awk's ":.*?## "-based field split (the
 # target-name column would print the filename instead of the target).
+# ---------------------------------------------------------------------------
+# Git hooks — pre-commit runs CI-equivalent checks for staged changes only
+# (see .githooks/README.md). Integration jobs are excluded (Postgres required).
+# On the host, hook-check re-enters the toolchain container; inside
+# devcontainer (IN_TOOLBOX=1) it runs directly.
+# ---------------------------------------------------------------------------
+
+.PHONY: setup-hooks
+setup-hooks: ## git hooks を有効化する (core.hooksPath=.githooks)
+	git config core.hooksPath .githooks
+	@echo "Git hooks enabled (core.hooksPath=.githooks). Run 'make hook-check' to test manually."
+
+.PHONY: hook-check
+hook-check: ## pre-commit と同じ CI 検証を手動実行する (ステージ済み変更対象)
+	@bash ./.githooks/lib/run-checks.sh
+
 .PHONY: help
 help: ## ターゲット一覧を表示する (起動後: web http://localhost:8080 / api http://localhost:8081 / auth http://localhost:8082)
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
