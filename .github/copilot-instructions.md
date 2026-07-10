@@ -21,6 +21,14 @@ Do not change code outside the stack you are working in.
 - **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`. Postgres persistence (SPEC-005, not part of `make check`): `make sqlc` (generate `infra/postgres/sqlcgen` from `db/queries`; commit the output), `make migrate-up` / `migrate-down` / `migrate-status` / `migrate-create name=<slug>` (goose, `db/migrations`), `make test-integration` (build tag `integration`, requires a migrated Postgres reachable via `DB_*` env vars).
 - **iac** (`app/iac`): `make check ENV=dev` (= `fmt-check` + `validate` + `lint` + `security`). Never run `terraform apply`.
 
+## Git hooks (pre-commit)
+
+Optional local gate before commit (`.githooks/`). Run once per clone: `make setup-hooks`. Manual run: `make hook-check`. Skip: `git commit --no-verify`.
+
+Runs CI-equivalent checks for **staged files only** (same path filters as `cicd.yml` / `contract-drift.yml` / `sqlc-drift.yml`): per-stack `make check` plus contract/sqlc drift when relevant. Does **not** run `*-integration` jobs.
+
+Execution: on the **host**, the hook re-enters the SPEC-009 toolchain container via `docker compose run tools`; inside **devcontainer** (`IN_TOOLBOX=1`), checks run directly without nested Docker.
+
 ## Go (`app/api`, `app/auth`)
 
 - DDD layered architecture with a one-way dependency `route → service → domain`. `domain` depends on nothing and is framework-free and unit-testable.

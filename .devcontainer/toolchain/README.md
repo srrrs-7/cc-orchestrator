@@ -146,6 +146,16 @@ with it whenever a version is bumped there.)
   purpose. A residual, known cost of the "single polyglot image"
   design (SPEC-009's own accepted trade-off vs. per-stack images).
 
+## Git hooks
+
+Pre-commit hooks (`.githooks/`, enabled via root `make setup-hooks`) run the same
+stack checks as CI for staged files only, always inside this toolchain image:
+
+- **Host**: the hook script re-execs via `docker compose -f .devcontainer/compose.tools.yml run tools`.
+- **Devcontainer session**: `IN_TOOLBOX=1` is already set — checks run in-process with no nested Docker.
+
+Manual run: `make hook-check`. Details: `.githooks/README.md`.
+
 ## 検証 (verification performed for this Phase A implementation)
 
 ```sh
