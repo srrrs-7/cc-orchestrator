@@ -100,8 +100,8 @@ jobs:
       iac: ${{ steps.filter.outputs.iac }}
       migrator: ${{ steps.filter.outputs.migrator }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -177,7 +177,7 @@ jobs:
       run:
         working-directory: app/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       # bin/bun (SPEC-009 Phase B, unchanged here) is a POSIX-sh shim that
@@ -241,7 +241,7 @@ jobs:
       run:
         working-directory: app/migrator
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Warm Go module cache (network-enabled toolbox)
@@ -318,7 +318,7 @@ jobs:
       APP_DB_USER: api_app
       APP_DB_PASSWORD: api_app_password
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Start Postgres (root make db-up)
@@ -371,7 +371,7 @@ jobs:
       run:
         working-directory: app/api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Warm Go module cache (network-enabled toolbox)
@@ -414,7 +414,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Start Postgres (root make db-up)
@@ -457,7 +457,7 @@ jobs:
       run:
         working-directory: app/auth
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Warm Go module cache (network-enabled toolbox)
@@ -484,7 +484,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Start Postgres (root make db-up)
@@ -530,7 +530,7 @@ jobs:
       run:
         working-directory: app/iac
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Check (fmt-check + validate + lint + security)
