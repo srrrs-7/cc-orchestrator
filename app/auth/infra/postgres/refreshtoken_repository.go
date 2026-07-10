@@ -30,11 +30,27 @@ type RefreshTokenRepository struct {
 
 // var _ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
 // verifies at compile time that RefreshTokenRepository satisfies the
-// domain's Repository interface.
-var _ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
+// domain's Repository interface. The narrower var _
+// refreshtoken.Reader / var _ refreshtoken.Writer assertions below
+// additionally pin that RefreshTokenRepository satisfies each half of
+// SPEC-010's Reader/Writer split on its own -- it stays a single
+// struct (unlike task's TaskReader/TaskWriter split) because this
+// Spec's fixed wiring decision constructs it with the writer pool
+// only, for both reads and writes (see cmd/authz/main.go and
+// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
+// 配置").
+var (
+	_ refreshtoken.Repository = (*RefreshTokenRepository)(nil)
+	_ refreshtoken.Reader     = (*RefreshTokenRepository)(nil)
+	_ refreshtoken.Writer     = (*RefreshTokenRepository)(nil)
+)
 
 // NewRefreshTokenRepository builds a RefreshTokenRepository backed by
-// db.
+// db. SPEC-010 does not change this constructor's shape: the
+// composition root is responsible for always passing it the writer
+// pool (never the reader pool), since refresh-token reuse detection
+// is correctness-critical (see the Reader var _ assertion's doc
+// comment above).
 func NewRefreshTokenRepository(db *sql.DB) *RefreshTokenRepository {
 	return &RefreshTokenRepository{q: sqlcgen.New(db), db: db}
 }

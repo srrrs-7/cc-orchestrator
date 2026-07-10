@@ -32,6 +32,58 @@ func (f *fakeRepository) ListPage(ctx context.Context, page task.Page) ([]*task.
 
 var errRepoBoom = errors.New("boom")
 
+// readerOnlyFake implements only task.Reader's three methods (FindByID,
+// FindByTitle, ListPage) and deliberately has no Save method at all.
+// Assigning it to a task.Reader-typed variable, and passing it directly
+// to task.NewDuplicateChecker below, is a compile-time proof (SPEC-010
+// R1) that DuplicateChecker depends on the narrow Reader port -- not
+// the full Repository (which also requires Save) -- since a type
+// lacking Save can never satisfy an interface that requires it.
+type readerOnlyFake struct {
+	findByTitleFunc func(ctx context.Context, title task.Title) (*task.Task, error)
+}
+
+func (f readerOnlyFake) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
+	return nil, task.ErrNotFound
+}
+
+func (f readerOnlyFake) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
+	return f.findByTitleFunc(ctx, title)
+}
+
+func (f readerOnlyFake) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
+	return nil, 0, nil
+}
+
+var _ task.Reader = readerOnlyFake{}
+
+// TestDuplicateChecker_AcceptsReaderOnly is the compile-time-and-
+// behavior proof for SPEC-010 R1: NewDuplicateChecker must accept
+// anything satisfying task.Reader alone (readerOnlyFake has no Save
+// method whatsoever), and IsDuplicated's behavior through that narrow
+// dependency must match the full-Repository-backed case exercised by
+// TestDuplicateChecker_IsDuplicated above.
+func TestDuplicateChecker_AcceptsReaderOnly(t *testing.T) {
+	title, err := task.NewTitle("buy milk")
+	if err != nil {
+		t.Fatalf("NewTitle() unexpected error: %v", err)
+	}
+
+	checker := task.NewDuplicateChecker(readerOnlyFake{
+		findByTitleFunc: func(ctx context.Context, title task.Title) (*task.Task, error) {
+			return task.New(title, task.PriorityMedium), nil
+		},
+	})
+
+	dup, err := checker.IsDuplicated(context.Background(), title)
+	if err != nil {
+		t.Fatalf("IsDuplicated() unexpected error: %v", err)
+	}
+	if !dup {
+		t.Error("IsDuplicated() = false, want true (a Reader-only dependency must still detect a match)")
+	}
+}
+
 func TestDuplicateChecker_IsDuplicated(t *testing.T) {
 	title, err := task.NewTitle("buy milk")
 	if err != nil {

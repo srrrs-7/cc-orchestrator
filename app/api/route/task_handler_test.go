@@ -22,7 +22,11 @@ import (
 func newTestHandler() http.Handler {
 	repo := memory.NewTaskRepository()
 	dupChk := task.NewDuplicateChecker(repo)
-	svc := service.NewTaskService(repo, dupChk)
+	// SPEC-010: NewTaskService now takes reader and writer separately
+	// (task.Reader / task.Writer). memory.TaskRepository is a single
+	// struct implementing both (R5), so the same repo value is passed
+	// for each role here.
+	svc := service.NewTaskService(repo, repo, dupChk)
 	return route.NewRouter(svc)
 }
 
@@ -55,7 +59,7 @@ func (failingRepository) ListPage(context.Context, task.Page) ([]*task.Task, int
 func newFailingTestHandler() http.Handler {
 	repo := failingRepository{}
 	dupChk := task.NewDuplicateChecker(repo)
-	svc := service.NewTaskService(repo, dupChk)
+	svc := service.NewTaskService(repo, repo, dupChk)
 	return route.NewRouter(svc)
 }
 
@@ -90,7 +94,7 @@ func (dbErrorRepository) ListPage(context.Context, task.Page) ([]*task.Task, int
 func newDBErrorTestHandler() http.Handler {
 	repo := dbErrorRepository{}
 	dupChk := task.NewDuplicateChecker(repo)
-	svc := service.NewTaskService(repo, dupChk)
+	svc := service.NewTaskService(repo, repo, dupChk)
 	return route.NewRouter(svc)
 }
 

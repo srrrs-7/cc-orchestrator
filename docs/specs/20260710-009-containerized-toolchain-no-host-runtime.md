@@ -4,7 +4,7 @@ title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
 updated: 2026-07-10
-issues: []       # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-026]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -104,3 +104,10 @@ supersedes: null # 置き換える旧Spec ID
 - 採用設計は §4 のとおり。compose `run` のツールチェーンを実行の正典にし、devcontainer は同一イメージの任意上乗せ。コマンド契約(`.claude/rules` のコマンド表・CLAUDE.md 早見表・agent 呼び出し)は不変にして Makefile ラッパーで透過化する方針を確定。
 - 残留リスクとして Docker デーモンのホスト権限(コンテナエスケープ)を明記。privileged 不使用・docker socket 非マウントで緩和し、将来 rootless/Podman を検討候補とする。lockfile + 整合性 + `minimumReleaseAge` を第一線、コンテナ隔離を多層防御と位置づける。
 - 関連: SPEC-005(app/migrator の `go run`)/ SPEC-007(bun/TS7)/ ISSUE-020(レジストリ設定コミット)と整合を取る。実装は planner に委ねる。
+- **実装(Phase A–C)完了**: Phase A(`versions.env` + `docker/toolchain` イメージ + `compose.tools.yml` の tools/tools-offline + devcontainer、commit `999eed0`)/ Phase B(全 Makefile + `bin/bun` の透過ラッパー、root の db-up/migrate compose 整合、`.env` 追跡除外、impl-ci charter を repo-root/横断ツーリングへ拡張、commit `f627d39`)/ Phase C(CI 3 workflow を toolchain イメージ実行へ + deploy.yml の build/creds ジョブ分離 + dependabot base-image 追跡 + provider lock の Linux hash + CLAUDE.md 注記、commit `ab1f677`)。
+- **Phase D 検証**: ホストから go/bun/golangci-lint/terraform/tflint/trivy/node を PATH 除外した状態で全スタック(api/auth/migrator/iac/web)の check がコンテナ経由 green、`tools-offline` の network 遮断(fetch 失敗)を実証。**ローカル「ホスト runtime 不要」= 達成(前提は Docker のみ)**。
+- **Phase E レビュー**: review-security = Blocker 0・隔離設計は実効的と評価。Major-1(deploy.yml が AWS 資格情報と同一ジョブで `bun install`)を **build-web ジョブ分離(id-token 権限なし=構造的に creds 取得不可)** で解消。Major-2(iac の net+creds+provider fetch 同時性)を **lock file の Linux hash 追加**で緩和 + 本残留リスクを §4 に記載すべき事項として記録。review-spec = R2/R3/R4/R5 充足、R1/R6/R7 は deploy.yml 修正により充足へ。
+- **ユーザー報告バグの修正(portability)**: 一部の `docker compose` 実装(nerdctl/Rancher 系, v5.3.1)がトップレベル `--env-file` を拒否し(`unknown flag: --env-file`)`make lint` 等が失敗していた。全 wrapper(root + api/auth/migrator/iac Makefile + `bin/bun`)で `--env-file` を廃し、`include` 済み `versions.env` の版変数を `export` してプロセス環境から compose の `${VAR}` 展開に渡す方式へ変更(commit `ab1f677`)。sandbox 検証が standalone `docker-compose` を使い実機の plugin と乖離していたことが見逃しの原因(教訓: compose 実装差の検証)。
+- **残留リスク(§4 補足)**: (a) iac の `plan`/`apply` は net 有効コンテナに AWS 資格情報を透過し provider を fetch する(lock file hash で緩和)。(b) named cache volume は単一テナント前提の 0777。(c) monorepo 全体を単一 bind-mount(単一 install 侵害の blast-radius は repo 全体、ただしホスト秘密は非漏洩)。(d) bun/golangci-lint は curl|sh の TOFU インストール。(e) devcontainer は UID 自動注入なしで固定 uid 1000。いずれも主目的(install 時のホスト秘密窃取の防止)は満たしつつ受容。
+- **残タスク(follow-up)**: (1) 実 PR での CI green 確認(GHA build cache / container job の実機初回実行。ローカル未確認のため status は in-progress を維持)。(2) `.github/copilot-instructions.md` のコンテナ実行注記・`.claude/rules/*` の各コマンド表への注記(CLAUDE.md 中央注記は反映済み)。(3) SPEC-009-plan の「CI 配布方式」節を実決定(各 job build + gha cache)に更新。将来ハードニング: rootless/Podman、action の SHA pin、cache volume の権限厳格化。
+- **ISSUE-026 起票(本 SPEC 由来の混入バグ)**: SPEC-010 の tester 作業中に、`app/auth/Makefile` の `test-integration` が `docker compose run` の引数順違反(`DB_ONLINE` に `tools` を内包した上で後ろに `-e ...` を追記 → `-e` が in-container コマンドに回る)で `exec: "-e": executable file not found in $PATH` になる既存バグを発見。api 側(正常)と非対称で、SPEC-009 Phase B(Makefile の toolbox ラッパー化)で混入したと推定。CI の `auth-integration` ジョブも同じ `make test-integration` を呼ぶため fail の可能性が高い(要確認)。ISSUE-026 として起票(修正は impl-auth、本 SPEC 側は相互リンクのみ)。

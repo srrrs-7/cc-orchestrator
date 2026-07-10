@@ -20,6 +20,15 @@ import (
 var envVars = []string{
 	"PORT", "APP_ENV",
 	"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE",
+	"DB_READER_HOST", "DB_READER_PORT", "DB_READER_NAME", "DB_READER_USER", "DB_READER_PASSWORD", "DB_READER_SSLMODE",
+}
+
+// readerFallbackVars lists just the DB_READER_* variables SPEC-010
+// adds (a subset of envVars above), for tests that only need to reset/
+// set the reader side.
+var readerFallbackVars = []string{
+	"DB_READER_HOST", "DB_READER_PORT", "DB_READER_NAME",
+	"DB_READER_USER", "DB_READER_PASSWORD", "DB_READER_SSLMODE",
 }
 
 // TestNewEnv_Defaults confirms PORT/DB_PORT/DB_SSLMODE fall back to
@@ -56,6 +65,29 @@ func TestNewEnv_Defaults(t *testing.T) {
 	} {
 		if tc.got != "" {
 			t.Errorf("Env.%s = %q, want empty (no default)", tc.name, tc.got)
+		}
+	}
+
+	// SPEC-010 R3/R4: with every DB_READER_* also unset, Env.DBReader
+	// must fall back to the writer's own (already-defaulted) values
+	// field-for-field -- including the writer's own defaults (DBPort's
+	// "5432", DBSSLMode's fail-closed "require"), not just its unset
+	// ("") fields.
+	readerCases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"DBReader.Host", e.DBReader.Host, e.DBHost},
+		{"DBReader.Port", e.DBReader.Port, e.DBPort},
+		{"DBReader.Name", e.DBReader.Name, e.DBName},
+		{"DBReader.User", e.DBReader.User, e.DBUser},
+		{"DBReader.Password", e.DBReader.Password, e.DBPassword},
+		{"DBReader.SSLMode", e.DBReader.SSLMode, e.DBSSLMode},
+	}
+	for _, tc := range readerCases {
+		if tc.got != tc.want {
+			t.Errorf("Env.%s = %q, want it to fall back to %q (the writer's own value)", tc.name, tc.got, tc.want)
 		}
 	}
 }
@@ -178,6 +210,19 @@ func TestValidate_FailClosed(t *testing.T) {
 // fully-populated Postgres Env resolves to ModePostgres with no error.
 func TestValidate_PostgresMode_AllFieldsPresent(t *testing.T) {
 	e := Env{DBHost: "db.internal", DBName: "appdb", DBUser: "appuser", DBPassword: "pw"}
+	// SPEC-010: validate() also validates the reader Config in Postgres
+	// mode. A hand-built Env literal (unlike one NewEnv returns) does
+	// not get DB_READER_* fallback for free -- that fallback happens
+	// inside NewEnv itself -- so DBReader is populated here to mirror
+	// what NewEnv's fallback would produce when every DB_READER_* is
+	// unset (reader == writer), keeping this test's original intent
+	// (a fully-populated Postgres Env succeeds) isolated from the
+	// separate fallback behavior TestNewEnv_ReaderFallback_* below
+	// exercises directly.
+	e.DBReader.Host = e.DBHost
+	e.DBReader.Name = e.DBName
+	e.DBReader.User = e.DBUser
+	e.DBReader.Password = e.DBPassword
 
 	mode, err := e.validate()
 	if err != nil {
@@ -185,5 +230,254 @@ func TestValidate_PostgresMode_AllFieldsPresent(t *testing.T) {
 	}
 	if mode != postgres.ModePostgres {
 		t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
+	}
+}
+
+// --- SPEC-010: DB_READER_* fallback (R3/R4) ---------------------------
+//
+// cmd/api/env.go additionally reads DB_READER_HOST/PORT/NAME/USER/
+// PASSWORD/SSLMODE into Env.DBReader (docs/plans/SPEC-010-plan.md's
+// "変更ファイル" table for cmd/api/env.go), falling each unset item
+// back to the corresponding writer DB_* value inside NewEnv itself --
+// so by the time NewEnv returns, Env.DBReader already holds the
+// *effective* reader values, not the raw (possibly empty) DB_READER_*
+// strings. (Env).writerConfig() / (Env).readerConfig() project Env's
+// writer fields / Env.DBReader into a postgres.Config each, replacing
+// the pre-SPEC-010 (Env).dbConfig() (which only ever needed to build
+// one Config).
+//
+// These two method names and the Env.DBReader field are the exact
+// symbols docs/plans/SPEC-010-plan.md's implementation table names for
+// cmd/api/env.go; impl-api must implement them under these names for
+// this file to compile (see this Spec's tester report for the full
+// list of symbols pinned across cmd/api and cmd/authz).
+
+// TestNewEnv_ReaderFallback_AllUnset covers R3/R4's core fallback case:
+// with every DB_READER_* variable unset, Env.DBReader must equal the
+// writer's own DB_* values field-for-field, and (Env).readerConfig()
+// must equal (Env).writerConfig() -- the equality postgres.OpenPair
+// relies on to share a single pool instead of opening a second one
+// (non-functional requirement: 二重に開かない).
+func TestNewEnv_ReaderFallback_AllUnset(t *testing.T) {
+	for _, key := range readerFallbackVars {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DB_HOST", "writer.internal")
+	t.Setenv("DB_PORT", "6543")
+	t.Setenv("DB_NAME", "appdb")
+	t.Setenv("DB_USER", "appuser")
+	t.Setenv("DB_PASSWORD", "s3cret-pw")
+	t.Setenv("DB_SSLMODE", "require")
+
+	e := NewEnv()
+
+	cases := []struct {
+		name       string
+		gotReader  string
+		wantWriter string
+	}{
+		{"Host", e.DBReader.Host, e.DBHost},
+		{"Port", e.DBReader.Port, e.DBPort},
+		{"Name", e.DBReader.Name, e.DBName},
+		{"User", e.DBReader.User, e.DBUser},
+		{"Password", e.DBReader.Password, e.DBPassword},
+		{"SSLMode", e.DBReader.SSLMode, e.DBSSLMode},
+	}
+	for _, tc := range cases {
+		if tc.gotReader != tc.wantWriter {
+			t.Errorf("Env.DBReader.%s = %q, want it to fall back to writer value %q", tc.name, tc.gotReader, tc.wantWriter)
+		}
+	}
+
+	if e.readerConfig() != e.writerConfig() {
+		t.Errorf("readerConfig() = %+v, want it to equal writerConfig() = %+v when every DB_READER_* is unset", e.readerConfig(), e.writerConfig())
+	}
+}
+
+// TestNewEnv_ReaderFallback_HostOnly covers R4's per-item fallback with
+// exactly one override: DB_READER_HOST diverges from the writer while
+// every other DB_READER_* stays unset and therefore still falls back.
+func TestNewEnv_ReaderFallback_HostOnly(t *testing.T) {
+	for _, key := range readerFallbackVars {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DB_HOST", "writer.internal")
+	t.Setenv("DB_PORT", "6543")
+	t.Setenv("DB_NAME", "appdb")
+	t.Setenv("DB_USER", "appuser")
+	t.Setenv("DB_PASSWORD", "s3cret-pw")
+	t.Setenv("DB_SSLMODE", "require")
+	t.Setenv("DB_READER_HOST", "replica.internal")
+
+	e := NewEnv()
+
+	if e.DBReader.Host != "replica.internal" {
+		t.Errorf("Env.DBReader.Host = %q, want %q (explicit override)", e.DBReader.Host, "replica.internal")
+	}
+	cases := []struct {
+		name       string
+		gotReader  string
+		wantWriter string
+	}{
+		{"Port", e.DBReader.Port, e.DBPort},
+		{"Name", e.DBReader.Name, e.DBName},
+		{"User", e.DBReader.User, e.DBUser},
+		{"Password", e.DBReader.Password, e.DBPassword},
+		{"SSLMode", e.DBReader.SSLMode, e.DBSSLMode},
+	}
+	for _, tc := range cases {
+		if tc.gotReader != tc.wantWriter {
+			t.Errorf("Env.DBReader.%s = %q, want it to still fall back to writer value %q", tc.name, tc.gotReader, tc.wantWriter)
+		}
+	}
+
+	if got, want := e.readerConfig().Host, "replica.internal"; got != want {
+		t.Errorf("readerConfig().Host = %q, want %q", got, want)
+	}
+	if e.readerConfig() == e.writerConfig() {
+		t.Error("readerConfig() == writerConfig(), want them to differ once DB_READER_HOST diverges (OpenPair must open a second pool)")
+	}
+}
+
+// TestNewEnv_ReaderFallback_PerField covers R4's remaining per-item
+// overrides (Port/Name/User/Password/SSLMode): setting exactly one
+// DB_READER_X must change only that field on Env.DBReader, leaving
+// every other field to fall back to its writer counterpart.
+func TestNewEnv_ReaderFallback_PerField(t *testing.T) {
+	writer := map[string]string{
+		"DB_HOST":     "writer.internal",
+		"DB_PORT":     "6543",
+		"DB_NAME":     "appdb",
+		"DB_USER":     "appuser",
+		"DB_PASSWORD": "s3cret-pw",
+		"DB_SSLMODE":  "require",
+	}
+
+	tests := []struct {
+		readerVar string
+		override  string
+		fieldName string
+		get       func(Env) string
+	}{
+		{"DB_READER_PORT", "6544", "Port", func(e Env) string { return e.DBReader.Port }},
+		{"DB_READER_NAME", "replicadb", "Name", func(e Env) string { return e.DBReader.Name }},
+		{"DB_READER_USER", "replicauser", "User", func(e Env) string { return e.DBReader.User }},
+		{"DB_READER_PASSWORD", "replica-pw", "Password", func(e Env) string { return e.DBReader.Password }},
+		{"DB_READER_SSLMODE", "disable", "SSLMode", func(e Env) string { return e.DBReader.SSLMode }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.fieldName, func(t *testing.T) {
+			for _, key := range readerFallbackVars {
+				t.Setenv(key, "")
+			}
+			for k, v := range writer {
+				t.Setenv(k, v)
+			}
+			t.Setenv(tt.readerVar, tt.override)
+
+			e := NewEnv()
+
+			if got := tt.get(e); got != tt.override {
+				t.Errorf("Env.DBReader.%s = %q, want override %q", tt.fieldName, got, tt.override)
+			}
+
+			all := []struct {
+				name       string
+				gotReader  string
+				wantWriter string
+			}{
+				{"Host", e.DBReader.Host, e.DBHost},
+				{"Port", e.DBReader.Port, e.DBPort},
+				{"Name", e.DBReader.Name, e.DBName},
+				{"User", e.DBReader.User, e.DBUser},
+				{"Password", e.DBReader.Password, e.DBPassword},
+				{"SSLMode", e.DBReader.SSLMode, e.DBSSLMode},
+			}
+			for _, tc := range all {
+				if tc.name == tt.fieldName {
+					continue // this is the field under test, already asserted above
+				}
+				if tc.gotReader != tc.wantWriter {
+					t.Errorf("Env.DBReader.%s = %q, want it to fall back to writer value %q", tc.name, tc.gotReader, tc.wantWriter)
+				}
+			}
+		})
+	}
+}
+
+// TestValidate_SelectMode_IndependentOfDBReader covers R3/R4's
+// non-interference guarantee: DB_READER_* variables (surfaced via
+// Env.DBReader) must never influence which persistence mode
+// (Env).validate() selects -- that decision is solely a function of
+// the writer's own DB_HOST/APP_ENV (postgres.SelectMode's existing
+// contract), unchanged by SPEC-010.
+func TestValidate_SelectMode_IndependentOfDBReader(t *testing.T) {
+	t.Run("DB_READER_HOST alone does not select postgres (writer DB_HOST unset)", func(t *testing.T) {
+		for _, key := range readerFallbackVars {
+			t.Setenv(key, "")
+		}
+		t.Setenv("DB_HOST", "")
+		t.Setenv("APP_ENV", "local")
+		t.Setenv("DB_READER_HOST", "replica.internal")
+
+		e := NewEnv()
+		mode, err := e.validate()
+		if err != nil {
+			t.Fatalf("validate() unexpected error: %v", err)
+		}
+		if mode != postgres.ModeMemory {
+			t.Errorf("validate() mode = %q, want %q (DB_READER_HOST must not influence SelectMode)", mode, postgres.ModeMemory)
+		}
+	})
+
+	t.Run("writer DB_HOST set selects postgres regardless of DB_READER_* presence", func(t *testing.T) {
+		for _, key := range readerFallbackVars {
+			t.Setenv(key, "")
+		}
+		t.Setenv("DB_HOST", "db.internal")
+		t.Setenv("DB_NAME", "appdb")
+		t.Setenv("DB_USER", "appuser")
+		t.Setenv("DB_PASSWORD", "pw")
+		// DB_READER_* left entirely unset.
+
+		e := NewEnv()
+		mode, err := e.validate()
+		if err != nil {
+			t.Fatalf("validate() unexpected error: %v", err)
+		}
+		if mode != postgres.ModePostgres {
+			t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
+		}
+	})
+}
+
+// TestValidate_PostgresMode_WithReaderOverride_StaysValid exercises the
+// full NewEnv -> validate() path with the writer fully valid and only
+// DB_READER_HOST overridden: validate() must still resolve
+// ModePostgres with no error, since every other DB_READER_* field
+// falls back to the (already valid) writer value (docs/plans/
+// SPEC-010-plan.md: "validate() は Postgres モード時に writer/reader
+// 双方の Config.Validate()(reader は fallback 済で writer 妥当なら妥当)").
+func TestValidate_PostgresMode_WithReaderOverride_StaysValid(t *testing.T) {
+	for _, key := range readerFallbackVars {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DB_HOST", "db.internal")
+	t.Setenv("DB_NAME", "appdb")
+	t.Setenv("DB_USER", "appuser")
+	t.Setenv("DB_PASSWORD", "pw")
+	t.Setenv("DB_READER_HOST", "replica.internal")
+
+	e := NewEnv()
+	mode, err := e.validate()
+	if err != nil {
+		t.Fatalf("validate() unexpected error: %v", err)
+	}
+	if mode != postgres.ModePostgres {
+		t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
+	}
+	if e.readerConfig().Host != "replica.internal" {
+		t.Errorf("readerConfig().Host = %q, want %q", e.readerConfig().Host, "replica.internal")
 	}
 }

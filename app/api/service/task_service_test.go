@@ -80,7 +80,12 @@ func intPtr(i int) *int {
 func newTestService() (*service.TaskService, *fakeRepository) {
 	repo := newFakeRepository()
 	dupChk := task.NewDuplicateChecker(repo)
-	return service.NewTaskService(repo, dupChk), repo
+	// SPEC-010: NewTaskService takes reader and writer separately
+	// (task.Reader / task.Writer). fakeRepository implements every
+	// method of both (a single in-memory-style store, mirroring
+	// infra/memory's R5 requirement), so the same value satisfies
+	// both roles here.
+	return service.NewTaskService(repo, repo, dupChk), repo
 }
 
 // stubListPageRepository wraps a *fakeRepository (inheriting its
@@ -111,7 +116,68 @@ func (s *stubListPageRepository) ListPage(ctx context.Context, page task.Page) (
 func newStubListPageService(items []*task.Task, total int) (*service.TaskService, *stubListPageRepository) {
 	stub := &stubListPageRepository{fakeRepository: newFakeRepository(), items: items, total: total}
 	dupChk := task.NewDuplicateChecker(stub)
-	return service.NewTaskService(stub, dupChk), stub
+	return service.NewTaskService(stub, stub, dupChk), stub
+}
+
+// readerSpy implements only task.Reader's three methods
+// (FindByID/FindByTitle/ListPage), delegating to a shared
+// *fakeRepository and counting each call. It deliberately has no Save
+// method, so passing it as TaskService's reader argument below is a
+// compile-time proof (SPEC-010 R1) that the reader parameter's type
+// requires nothing beyond task.Reader.
+type readerSpy struct {
+	repo *fakeRepository
+
+	findByIDCalls    int
+	findByTitleCalls int
+	listPageCalls    int
+}
+
+func (r *readerSpy) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
+	r.findByIDCalls++
+	return r.repo.FindByID(ctx, id)
+}
+
+func (r *readerSpy) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
+	r.findByTitleCalls++
+	return r.repo.FindByTitle(ctx, title)
+}
+
+func (r *readerSpy) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
+	r.listPageCalls++
+	return r.repo.ListPage(ctx, page)
+}
+
+// writerSpy implements only task.Writer's single method (Save),
+// delegating to the same shared *fakeRepository readerSpy wraps, and
+// counting calls. It deliberately has no Find*/ListPage method, so
+// passing it as TaskService's writer argument is a compile-time proof
+// that the writer parameter's type requires nothing beyond
+// task.Writer.
+type writerSpy struct {
+	repo *fakeRepository
+
+	saveCalls int
+}
+
+func (w *writerSpy) Save(ctx context.Context, t *task.Task) error {
+	w.saveCalls++
+	return w.repo.Save(ctx, t)
+}
+
+// newSpiedService builds a TaskService whose reader and writer
+// dependencies are two distinct, narrowly-typed spies sharing one
+// underlying store (so a Task saved via the writer is visible to the
+// reader, exactly like a single physical database observed through two
+// separate connection pools -- SPEC-010's writer/reader pool split).
+// This lets TestTaskService_RoutesReaderAndWriter observe, per
+// TaskService method, exactly which side (reader or writer) is called.
+func newSpiedService() (*service.TaskService, *readerSpy, *writerSpy) {
+	shared := newFakeRepository()
+	r := &readerSpy{repo: shared}
+	w := &writerSpy{repo: shared}
+	dupChk := task.NewDuplicateChecker(r)
+	return service.NewTaskService(r, w, dupChk), r, w
 }
 
 func TestTaskService_Create_Success(t *testing.T) {
@@ -555,4 +621,85 @@ func TestTaskService_ChangePriority(t *testing.T) {
 			t.Fatalf("ChangePriority() error = %v, want wrapping %v", err, task.ErrNotFound)
 		}
 	})
+}
+
+// TestTaskService_RoutesReaderAndWriter is SPEC-010 R2's service-level
+// proof: every read-only operation (Get, List, and the FindByID lookup
+// inside Start/Complete/ChangePriority, plus DuplicateChecker's
+// FindByTitle pre-check inside Create) must go through the reader
+// dependency, and every state-changing operation (Create's Save, and
+// the Save inside Start/Complete/ChangePriority) must go through the
+// writer dependency -- never the other way around. readerSpy/writerSpy
+// cannot silently substitute for one another (neither type has the
+// other's methods), so this also compile-time-proves TaskService's
+// reader/writer parameters are the narrow task.Reader/task.Writer
+// ports, not the full task.Repository.
+func TestTaskService_RoutesReaderAndWriter(t *testing.T) {
+	svc, r, w := newSpiedService()
+	ctx := context.Background()
+
+	created, err := svc.Create(ctx, "buy milk", "")
+	if err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+	if w.saveCalls != 1 {
+		t.Errorf("after Create(): writer.saveCalls = %d, want 1", w.saveCalls)
+	}
+	if r.findByTitleCalls != 1 {
+		t.Errorf("after Create(): reader.findByTitleCalls = %d, want 1 (DuplicateChecker's pre-check must use the reader)", r.findByTitleCalls)
+	}
+
+	if _, err := svc.Get(ctx, created.ID); err != nil {
+		t.Fatalf("Get() unexpected error: %v", err)
+	}
+	if r.findByIDCalls != 1 {
+		t.Errorf("after Get(): reader.findByIDCalls = %d, want 1", r.findByIDCalls)
+	}
+	if w.saveCalls != 1 {
+		t.Errorf("Get() must never call the writer; writer.saveCalls = %d, want unchanged 1", w.saveCalls)
+	}
+
+	if _, err := svc.List(ctx, nil, nil); err != nil {
+		t.Fatalf("List() unexpected error: %v", err)
+	}
+	if r.listPageCalls != 1 {
+		t.Errorf("after List(): reader.listPageCalls = %d, want 1", r.listPageCalls)
+	}
+
+	if _, err := svc.Start(ctx, created.ID); err != nil {
+		t.Fatalf("Start() unexpected error: %v", err)
+	}
+	if r.findByIDCalls != 2 {
+		t.Errorf("after Start(): reader.findByIDCalls = %d, want 2 (Start must look the Task up via the reader)", r.findByIDCalls)
+	}
+	if w.saveCalls != 2 {
+		t.Errorf("after Start(): writer.saveCalls = %d, want 2 (Start must persist the transition via the writer)", w.saveCalls)
+	}
+
+	if _, err := svc.ChangePriority(ctx, created.ID, "high"); err != nil {
+		t.Fatalf("ChangePriority() unexpected error: %v", err)
+	}
+	if r.findByIDCalls != 3 {
+		t.Errorf("after ChangePriority(): reader.findByIDCalls = %d, want 3", r.findByIDCalls)
+	}
+	if w.saveCalls != 3 {
+		t.Errorf("after ChangePriority(): writer.saveCalls = %d, want 3", w.saveCalls)
+	}
+
+	if _, err := svc.Complete(ctx, created.ID); err != nil {
+		t.Fatalf("Complete() unexpected error: %v", err)
+	}
+	if r.findByIDCalls != 4 {
+		t.Errorf("after Complete(): reader.findByIDCalls = %d, want 4", r.findByIDCalls)
+	}
+	if w.saveCalls != 4 {
+		t.Errorf("after Complete(): writer.saveCalls = %d, want 4", w.saveCalls)
+	}
+
+	// Across the whole scenario, FindByTitle must only ever have been
+	// called once (Create's duplicate check) -- List/Get/Start/
+	// Complete/ChangePriority never touch it.
+	if r.findByTitleCalls != 1 {
+		t.Errorf("final reader.findByTitleCalls = %d, want 1", r.findByTitleCalls)
+	}
 }

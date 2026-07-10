@@ -21,10 +21,16 @@ type AuthCodeRepository struct {
 	codes map[authcode.Code]*authcode.AuthorizationCode
 }
 
-// var _ authcode.Repository = (*AuthCodeRepository)(nil) verifies at
-// compile time that AuthCodeRepository satisfies the domain's
-// Repository interface.
-var _ authcode.Repository = (*AuthCodeRepository)(nil)
+// The following var _ declarations verify at compile time that
+// AuthCodeRepository satisfies the domain's Repository interface, and
+// -- SPEC-010 R5/R1 -- both of its additive halves (Reader/Writer)
+// individually, via this single struct/store (in-memory persistence
+// is not physically split into separate reader/writer pools).
+var (
+	_ authcode.Repository = (*AuthCodeRepository)(nil)
+	_ authcode.Reader     = (*AuthCodeRepository)(nil)
+	_ authcode.Writer     = (*AuthCodeRepository)(nil)
+)
 
 // NewAuthCodeRepository builds an empty AuthCodeRepository.
 func NewAuthCodeRepository() *AuthCodeRepository {

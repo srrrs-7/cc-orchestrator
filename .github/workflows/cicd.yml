@@ -18,6 +18,46 @@
 # do not need to know about it. migrator-integration additionally exercises
 # app/migrator's own least-privilege runtime role provisioning (ISSUE-016
 # R-c) against a real Postgres instance.
+#
+# SPEC-009 Phase C (2026-07-10): every job below now runs its commands
+# inside the single pinned toolchain image (docker/toolchain/Dockerfile,
+# built by ./.github/actions/build-toolchain-image with a GitHub Actions
+# cache; see that action's own header for why no job here uses a
+# `container:`/GHCR-hosted image — that was a deliberate user decision, not
+# an oversight) instead of a runner-installed go/bun/golangci-lint/
+# terraform/tflint/trivy. Concretely: `setup-go` / `setup-bun` /
+# golangci-lint's curl installer / `setup-terraform` / `setup-tflint` /
+# `setup-trivy` are gone from every job; each job instead runs the exact
+# same `make <target>` / `bun run <script>` a developer runs locally, which
+# (per each stack's own Makefile / bin/bun, all already SPEC-009-Phase-B
+# transparent-toolbox wrappers — nothing in *those* files changes here)
+# themselves delegate into that same image via `docker compose ... -f
+# compose.tools.yml run --rm tools[-offline] ...`. This is what makes local
+# and CI genuinely the same execution environment (SPEC-009 R6), not just
+# the same version numbers.
+#
+# Tool/runtime versions are no longer pinned a second time in this file's
+# own `env:` block (pre-SPEC-009, this file was itself the pin source for
+# GO_VERSION/BUN_VERSION/GOLANGCI_LINT_VERSION/TERRAFORM_VERSION/
+# TFLINT_VERSION/TRIVY_VERSION, later found to have drifted from
+# contract-drift.yml's own separate BUN_VERSION pin — see versions.env's own
+# header comment on that history). versions.env (repo root) is now the only
+# place any of these are written; ./.github/actions/build-toolchain-image
+# loads it directly. This also removes the drift risk this task set out to
+# fix for TRIVY_VERSION specifically (previously pinned here as v0.58.1,
+# whose upstream release was deleted — see versions.env's own TRIVY_VERSION
+# comment for the verified detail): rather than re-pinning a second
+# `TRIVY_VERSION: v0.69.2` copy in this file that could drift again, trivy
+# now only has the one pin, in versions.env, and this file has nothing left
+# to keep in sync.
+#
+# POSTGRES_VERSION is the one exception still worth a comment: none of this
+# file's jobs start a GitHub Actions-native `services:` Postgres container
+# anymore (see api-integration/auth-integration/migrator-integration below)
+# — Postgres now comes from the repo's own compose.yml (root `make db-up`),
+# which is what keeps its version pinned in sync with versions.env
+# (compose.yml's own header documents that it is a fixed, non-secret
+# local/CI-only Postgres). Nothing in this file duplicates that pin either.
 name: CI
 
 on:
@@ -34,27 +74,19 @@ concurrency:
 permissions:
   contents: read
 
-# Pinned tool / runtime versions (single source of truth for the whole file).
-# Action refs are pinned inline and kept fresh by Dependabot (github-actions);
-# the tool binary versions below are managed here manually.
-env:
-  GO_VERSION: "1.24"
-  BUN_VERSION: "1.2.21"
-  TERRAFORM_VERSION: "1.10.5"
-  GOLANGCI_LINT_VERSION: "2.12.2"
-  TFLINT_VERSION: "v0.55.1"
-  TRIVY_VERSION: "v0.58.1"
-  # SPEC-005 Postgres service container image for the api-integration /
-  # auth-integration jobs below. Pinned (not `postgres:17` / `latest`) and
-  # kept in sync with compose.yml's local-dev postgres service (impl-db) so
-  # CI and local `make up`/`make migrate` exercise the same server version.
-  POSTGRES_VERSION: "17.5-alpine"
-
 jobs:
   # ---------------------------------------------------------------------------
   # Detect which stacks changed so each stack job can be skipped when untouched.
   # The workflow file itself is added to every filter so CI changes re-run all.
-  # ---------------------------------------------------------------------------
+  # SPEC-009 Phase C: the toolchain foundation (versions.env, docker/toolchain,
+  # compose.tools.yml, the build-toolchain-image composite action) is now
+  # every job's actual execution environment, so a change to any of those
+  # also has to re-run every stack's job, not just "the CI workflow file" —
+  # added to every category below alongside the pre-existing
+  # `.github/workflows/cicd.yml` entry. compose.yml and the root Makefile are
+  # added only to the stacks whose jobs actually start Postgres through them
+  # (api/auth/migrator — see api-integration/auth-integration/
+  # migrator-integration below); web/iac never touch either.
   changes:
     name: Detect changed stacks
     runs-on: ubuntu-latest
@@ -73,25 +105,67 @@ jobs:
         id: filter
         with:
           filters: |
+            # NOTE: this `filters:` value is a literal block-scalar STRING
+            # (the whole indented blob below), parsed as its own separate
+            # YAML document *by the dorny/paths-filter action itself*, not
+            # by the outer workflow YAML parser — so a YAML anchor/alias
+            # defined in here would only be resolved by that action's own
+            # parser, and (per YAML semantics) `- *anchor` where the
+            # anchored node is itself a sequence inserts a NESTED list as
+            # one array element rather than flattening its items in place.
+            # That is not what a flat glob-pattern list needs, so the
+            # toolchain-common paths below are deliberately repeated in
+            # full under every category instead of aliased.
             web:
               - 'app/web/**'
               - '.github/workflows/cicd.yml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
             api:
               - 'app/api/**'
+              - 'compose.yml'
+              - 'Makefile'
               - '.github/workflows/cicd.yml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
             auth:
               - 'app/auth/**'
+              - 'compose.yml'
+              - 'Makefile'
               - '.github/workflows/cicd.yml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
             iac:
               - 'app/iac/**'
               - '.github/workflows/cicd.yml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
             migrator:
               - 'app/migrator/**'
+              - 'compose.yml'
+              - 'Makefile'
               - '.github/workflows/cicd.yml'
+              - 'versions.env'
+              - 'docker/toolchain/**'
+              - 'compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
 
   # ---------------------------------------------------------------------------
   # web (TypeScript / React) — Bun runtime/pm, Biome, tsc, Vitest, Vite.
   # Contract: .claude/rules/web.md (package.json scripts).
+  #
+  # SPEC-009 Phase C: `oven-sh/setup-bun` is gone; `bin/bun` (Phase B's
+  # transparent host shim, unchanged by this task) resolves every `bun ...`
+  # call below into the toolchain image's real bun instead, once this repo's
+  # bin/ directory is put on PATH.
   # ---------------------------------------------------------------------------
   web:
     name: web (TypeScript / React)
@@ -104,12 +178,22 @@ jobs:
         working-directory: app/web
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      - uses: ./.github/actions/build-toolchain-image
+
+      # bin/bun (SPEC-009 Phase B, unchanged here) is a POSIX-sh shim that
+      # dispatches `bun ...` into the toolchain image; putting it at the
+      # FRONT of PATH is this job's only toolchain-specific setup (the exact
+      # same one-time step CLAUDE.md documents for local development).
+      - name: Add repo bin/ (bun shim) to PATH
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
       # --frozen-lockfile installs exactly what bun.lock pins; the
       # bunfig.toml minimumReleaseAge gate only affects resolving new versions,
-      # so locked deps are unaffected in CI.
+      # so locked deps are unaffected in CI. `install` is one of bin/bun's
+      # network-needing subcommands, so this runs through the toolbox's
+      # network-enabled `tools` service; every step below is offline
+      # (`tools-offline`, network_mode: none).
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Format check
@@ -128,8 +212,23 @@ jobs:
   # refactor, plan §RF.2.1/§RF.3 RC2). Independent module (its own go.mod),
   # so it gets its own `make check` lane rather than piggybacking on api/auth.
   # `make check` = fmt-check + lint + vet + build + test (app/migrator/Makefile,
-  # same target shape as api/auth). golangci-lint is not preinstalled on the
-  # runner, so CI installs it (pinned) before invoking `make check`.
+  # same target shape as api/auth).
+  #
+  # SPEC-009 Phase C: `actions/setup-go` and the golangci-lint curl installer
+  # are gone (both are baked into the toolchain image); `make check` itself
+  # is Phase B's already-existing transparent wrapper into
+  # `tools-offline` (network_mode: none). The one step this job still needs
+  # of its own is the "Warm Go module cache" one below — `tools-offline`'s
+  # named gomodcache volume is empty on a brand-new CI runner (unlike a
+  # developer's persistent local volume), and `check`'s fmt-check/lint/vet/
+  # build/test-native recipes all run under GOPROXY=off, so this module's
+  # own go.sum-declared runtime deps (goose, pgx — see .claude/rules/db.md
+  # "goose の閉じ込め") need one prior network-enabled pass to land in that
+  # same named volume before the offline `make check` can see them (see
+  # docker/toolchain/Dockerfile's own comment on this two-phase need, which
+  # this step exists to satisfy — sqlc/goose(-as-a-CLI)/swag/goimports'
+  # OWN module graphs are pre-warmed at image-build time, but this is a
+  # different module graph: app/migrator's own go.sum).
   # Contract: .claude/rules/db.md (RF-h: app/migrator is impl-db's).
   # ---------------------------------------------------------------------------
   migrator:
@@ -143,49 +242,64 @@ jobs:
         working-directory: app/migrator
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # Unlike app/api and app/auth (pgx-only, `go run pkg@version` CLI
-          # tools), this module's go.mod requires goose as a library
-          # dependency (plan §RF.1.2 "goose の閉じ込め"), hence its own
-          # go.sum / cache key.
-          cache: true
-          cache-dependency-path: app/migrator/go.sum
-      - name: Install golangci-lint
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
-            | sh -s -- -b "$(go env GOPATH)/bin" "v${GOLANGCI_LINT_VERSION}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/migrator tools go mod download
+
       - name: Check (fmt-check + lint + vet + build + test)
         run: make check
 
   # ---------------------------------------------------------------------------
   # migrator (Go) — Postgres permission-boundary integration tests (ISSUE-016
-  # R-c, review-security Major-1). Spins up its own pinned postgres service
-  # container (same image/health check as api-integration/auth-integration
-  # below), then runs this module's own binary against it with
-  # APP_DB_USER/APP_DB_PASSWORD set so the "up" migration also provisions the
-  # least-privilege runtime role (infra/postgres.RoleEnsurer, plan
-  # ISSUE-016-plan.md §1.1's api_app/auth_app convention) -- the precondition
-  # the "integration"-tagged permission-boundary test suite (app/migrator,
-  # impl-db) asserts against: the scoped role can do DML on its own database,
-  # cannot do DDL, and cannot CONNECT to another database.
+  # R-c, review-security Major-1). Provisions the least-privilege runtime
+  # role (infra/postgres.RoleEnsurer, plan ISSUE-016-plan.md §1.1's
+  # api_app/auth_app convention) via app/migrator's own "up" migration, then
+  # runs the `integration`-tagged permission-boundary test suite
+  # (app/migrator, impl-db) against it: the scoped role can do DML on its
+  # own database, cannot do DDL, and cannot CONNECT to another database.
   #
   # Deliberately separate from api-integration/auth-integration below (rather
   # than folding a step into one of them): those two jobs exercise app/api's
   # and app/auth's own infra/postgres against a migrated database; this job
   # is about migrator's *own* role-provisioning behavior, which is this
   # module's test suite (`app/migrator/...`, not app/api's or app/auth's), so
-  # it gets its own throwaway postgres service container and does not touch
-  # the two existing jobs. It reuses the "api" target/database purely as a
-  # fixture to get a real migrated database to provision a role against; it
-  # is not testing app/api's persistence layer.
+  # it gets its own throwaway Postgres and does not touch the two existing
+  # jobs. It reuses the "api" target/database purely as a fixture to get a
+  # real migrated database to provision a role against; it is not testing
+  # app/api's persistence layer.
+  #
+  # SPEC-009 Phase C: Postgres is now the repo's own compose.yml `postgres`
+  # service (root `make db-up`), started in the SAME docker compose project
+  # as the toolchain containers below, rather than a GitHub Actions-native
+  # `services:` container — the latter publishes its port only to the
+  # runner's own 127.0.0.1, which a *separate* toolbox container (a sibling
+  # container, not the job's own process) cannot reach without extra network
+  # plumbing (host.docker.internal / --network host), whereas layering
+  # `-f compose.yml -f compose.tools.yml` (exactly what app/migrator's own
+  # `make run`/`make test-integration` already do locally, per that
+  # Makefile's own ONLINE_DB/DB_COMPOSE comments) lets these containers
+  # resolve `postgres` by its compose service name, giving CI the identical
+  # network shape a developer's own `make db-up && make -C app/migrator
+  # run ...` has locally (SPEC-009 R6 "ローカル = CI").
+  #
+  # This job invokes `docker compose run` directly (rather than through
+  # app/migrator/Makefile's `run`/`test-integration` targets) because it
+  # needs to forward two extra environment variables — APP_DB_USER /
+  # APP_DB_PASSWORD — that those targets' own DB_ONLINE_ENV does not expose
+  # (by design: that fixed set covers only the master-credential connection
+  # every OTHER caller of those targets needs). This is additive plumbing
+  # only: the actual command run inside the container on each step below
+  # (`go run ./cmd/migrator ...` / `go test -tags=integration ./...`) is
+  # exactly app/migrator's own CLI contract (.claude/rules/db.md) — nothing
+  # here invents a different command.
   #
   # Contract: .claude/rules/db.md (ISSUE-016 R-c) + app/migrator's CLI
   # (`-target`/`-command`/`-migrations-dir`, see app/migrator/cmd/migrator/
-  # main.go) + env.go's APP_DB_USER/APP_DB_PASSWORD contract -- nothing here
-  # invents a different command or environment variable.
+  # main.go) + env.go's APP_DB_USER/APP_DB_PASSWORD contract.
   # ---------------------------------------------------------------------------
   migrator-integration:
     name: migrator (Postgres permission boundary integration)
@@ -193,77 +307,59 @@ jobs:
     if: ${{ needs.changes.outputs.migrator == 'true' || needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: app/migrator
-    services:
-      postgres:
-        # `services.<id>.image` cannot reference the `env` context (see
-        # api-integration below for the same note) -- keep this literal in
-        # sync with env.POSTGRES_VERSION above.
-        image: postgres:17.5-alpine
-        env:
-          POSTGRES_DB: app
-          POSTGRES_USER: app
-          # Disposable credential for this job's ephemeral, throwaway
-          # service container only -- see api-integration below for the
-          # same rationale (never leaves this CI run, unrelated to any
-          # real environment/secret).
-          POSTGRES_PASSWORD: app
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      # Master connection settings, matching api-integration's own DB_*
-      # values below (this job reuses the "api" target as a fixture, see
-      # this job's header comment). DB_MAINTENANCE_NAME is left unset so
-      # app/migrator falls back to its own default ("postgres"), same as
-      # api-integration/auth-integration.
-      DB_HOST: 127.0.0.1
-      DB_PORT: "5432"
-      DB_NAME: api
-      DB_USER: app
-      DB_PASSWORD: app
-      DB_SSLMODE: disable
       # Names the least-privilege runtime role (ISSUE-016 R-c naming
       # convention, app/iac/modules/db/variables.tf's api_app_role_name
       # default) this job's "up" migration provisions via
-      # infra/postgres.RoleEnsurer -- the role the permission-boundary
+      # infra/postgres.RoleEnsurer — the role the permission-boundary
       # test suite below connects as. Disposable, job-scoped value only
-      # (see POSTGRES_PASSWORD above), not a real secret.
+      # (same rationale as compose.yml's own local-only Postgres
+      # credentials), not a real secret.
       APP_DB_USER: api_app
       APP_DB_PASSWORD: api_app_password
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: app/migrator/go.sum
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Start Postgres (root make db-up)
+        run: make db-up
 
       # Creates the "api" database, applies app/api/db/migrations, and --
-      # because APP_DB_USER/APP_DB_PASSWORD are set above -- provisions the
-      # api_app role with least privilege (CONNECT to "api" only, DML but
-      # never DDL on schema public). This is the precondition the
-      # "integration"-tagged suite below asserts against.
+      # because APP_DB_USER/APP_DB_PASSWORD are set above and forwarded
+      # below (`-e APP_DB_USER` / `-e APP_DB_PASSWORD` with no `=value`
+      # forwards each from this step's own process environment, i.e. this
+      # job's `env:` block above — the same bare-name passthrough `docker
+      # run`/`docker compose run` both document) -- provisions the api_app
+      # role with least privilege (CONNECT to "api" only, DML but never DDL
+      # on schema public). This is the precondition the "integration"-tagged
+      # suite below asserts against.
       - name: Create database + migrate up + provision app role (app/migrator)
-        working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run ./cmd/migrator \
-            -target api -command up \
-            -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" \
+            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/migrator \
+            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
+            -e APP_DB_USER -e APP_DB_PASSWORD \
+            tools go run ./cmd/migrator -target api -command up -migrations-dir /workspace/app/api/db/migrations
 
       - name: Permission boundary integration tests (build tag "integration")
-        run: go test -tags=integration ./...
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" \
+            -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/migrator \
+            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
+            -e APP_DB_USER -e APP_DB_PASSWORD \
+            tools go test -tags=integration ./...
 
   # ---------------------------------------------------------------------------
   # api (Go) — `make check` = fmt-check + lint + vet + build + test.
-  # golangci-lint is not preinstalled on the runner, so CI installs it (pinned)
-  # before invoking `make check`. Contract: .claude/rules/api.md (Makefile).
+  # Contract: .claude/rules/api.md (Makefile).
+  #
+  # SPEC-009 Phase C: same shape as the `migrator` job above (toolchain image
+  # + one Go-module warm pass before the offline `make check`) — see that
+  # job's own comment for why the warm step is needed at all.
   # ---------------------------------------------------------------------------
   api:
     name: api (Go)
@@ -276,36 +372,40 @@ jobs:
         working-directory: app/api
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
-          # runtime dependency (previously stdlib-only, no go.sum); cache
-          # the module download layer keyed off go.sum.
-          cache: true
-          cache-dependency-path: app/api/go.sum
-      - name: Install golangci-lint
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
-            | sh -s -- -b "$(go env GOPATH)/bin" "v${GOLANGCI_LINT_VERSION}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/api tools go mod download
+
       - name: Check (fmt-check + lint + vet + build + test)
         run: make check
 
   # ---------------------------------------------------------------------------
   # api (Go) — Postgres integration tests (SPEC-005, 2026-07-09 refactor plan
-  # §RF.3 RC2). Spins up a pinned postgres service container, then delegates
-  # both "create the api database if missing" and "apply app/api/db/migrations"
-  # to app/migrator (plan §RF.1.2 — this replaced the old "create schema via
-  # psql, then `make migrate-up`" split; there is no separate schema-bootstrap
-  # step anymore because api/auth are now separated by dedicated database, not
-  # schema/search_path). Runs an up->down->up health check via migrator's
-  # `-command`, then the `integration`-tagged suite via app/api's own
-  # Makefile. Contract: .claude/rules/db.md + app/migrator's CLI (`-target` /
-  # `-command` / `-migrations-dir`, see app/migrator/main.go) + app/api's
-  # Makefile (`make test-integration`) — nothing here invents a different
-  # command. Re-runs when app/migrator changes too, since this job is exactly
-  # where that binary gets exercised against a real Postgres.
+  # §RF.3 RC2). Delegates both "create the api database if missing" and
+  # "apply app/api/db/migrations" to app/migrator, then runs an
+  # up->down->up health check, then the `integration`-tagged suite via
+  # app/api's own Makefile. Contract: .claude/rules/db.md + app/migrator's
+  # CLI (`-target`/`-command`/`-migrations-dir`) + app/api's Makefile
+  # (`make test-integration`) — nothing here invents a different command.
+  # Re-runs when app/migrator changes too, since this job is exactly where
+  # that binary gets exercised against a real Postgres.
+  #
+  # SPEC-009 Phase C: Postgres is the repo's own compose.yml `postgres`
+  # service (root `make db-up`), not a GitHub Actions-native `services:`
+  # container — see migrator-integration above for why (network reachability
+  # from the separate toolbox containers this job also uses). No Go-module
+  # "warm" step is needed here (contrast with the plain `api` job above):
+  # every command this job runs — `make -C app/migrator run` and `make
+  # test-integration` — is already routed through app/migrator's/app/api's
+  # own network-enabled `tools` service (their Makefiles' ONLINE_DB, not
+  # OFFLINE/tools-offline), since both need real Postgres reachability
+  # anyway, so an on-the-fly `go mod download` during the build/test run
+  # itself is not blocked by GOPROXY=off the way it would be under
+  # tools-offline.
   # ---------------------------------------------------------------------------
   api-integration:
     name: api (Postgres integration)
@@ -313,86 +413,21 @@ jobs:
     if: ${{ needs.changes.outputs.api == 'true' || needs.changes.outputs.migrator == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: app/api
-    services:
-      postgres:
-        # `services.<id>.image` cannot reference the `env` context (only
-        # github/inputs/matrix/needs/strategy/vars are available here) —
-        # unlike the `run:` steps below, which do use env.POSTGRES_VERSION.
-        # Keep this literal in sync with env.POSTGRES_VERSION above.
-        image: postgres:17.5-alpine
-        env:
-          # POSTGRES_DB only sets this container's own default/maintenance
-          # database; it does not need to match app/migrator's
-          # DB_MAINTENANCE_NAME below because the postgres image always
-          # additionally creates a "postgres" database regardless of this
-          # value (see compose.yml, which documents the same fact).
-          POSTGRES_DB: app
-          POSTGRES_USER: app
-          # Disposable credential for this job's ephemeral, throwaway
-          # service container only — it never leaves this CI run and has
-          # no relation to any real environment. Production DB credentials
-          # come from Secrets Manager (see .claude/rules/db.md "セキュリ
-          # ティ"); no secret is written here.
-          POSTGRES_PASSWORD: app
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      # Discrete DB_* settings (SPEC-005 R6), matching app/api/Makefile's own
-      # local-dev defaults and this job's postgres service above — not a
-      # coincidence, both are meant to describe the same disposable local
-      # Postgres. DB_NAME is this stack's own dedicated database (plan
-      # §RF.1.1: api/auth are separated by database, not by schema/
-      # search_path — there is no DB_SCHEMA anymore). app/migrator and
-      # `make test-integration` both read these via the environment
-      # (app/api/Makefile's `?=` only applies when the variable is unset).
-      # DB_MAINTENANCE_NAME is left unset so app/migrator falls back to its
-      # own default ("postgres"), which the service container above always
-      # provides.
-      DB_HOST: 127.0.0.1
-      DB_PORT: "5432"
-      DB_NAME: api
-      DB_USER: app
-      DB_PASSWORD: app
-      DB_SSLMODE: disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          # app/migrator (invoked below via `go -C app/migrator run
-          # ./cmd/migrator`) is an independent module with its own go.sum
-          # (goose is a library dependency there, unlike app/api's pgx-only
-          # go.mod), so both go.sum files are included to key/restore the
-          # module cache for everything this job downloads.
-          cache-dependency-path: |
-            app/api/go.sum
-            app/migrator/go.sum
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Start Postgres (root make db-up)
+        run: make db-up
 
       # Delegates "create the api database if missing" + "apply
-      # app/api/db/migrations" to app/migrator (plan §RF.1.2), the same
-      # binary the root Makefile's `migrate` target and the prod init
-      # container use — so CI, local, and prod all create/migrate through
-      # one code path. app/migrator has its own go.mod (RF.1.3: kept out of
-      # app/api's go.mod/go.sum), so it is invoked with `go -C` from this
-      # step's own working-directory override (this job's default
-      # `working-directory: app/api` would otherwise apply) rather than a
-      # `make` target — mirrors the root Makefile's `migrate` target
-      # exactly (see Makefile's "ローカル Postgres" section).
+      # app/api/db/migrations" to app/migrator's own `make run` target
+      # (tools + compose.yml, DB_HOST=postgres — see app/migrator/Makefile's
+      # ONLINE_DB) — the same binary the root Makefile's `migrate` target
+      # and the prod init container use, so CI, local, and prod all
+      # create/migrate through one code path.
       - name: Create database + migrate up (app/migrator)
-        working-directory: ${{ github.workspace }}
-        run: |
-          go -C app/migrator run ./cmd/migrator \
-            -target api -command up \
-            -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
+        run: make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/db/migrations"
 
       # Migration health check (R8): prove the down migration is also
       # sound, not just up. Only one migration file exists today
@@ -401,16 +436,12 @@ jobs:
       # exists at this point (created by the step above), so app/migrator's
       # "create if missing" step here is a no-op.
       - name: Migration health check (up -> down -> up)
-        working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run ./cmd/migrator \
-            -target api -command down \
-            -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
-          go -C app/migrator run ./cmd/migrator \
-            -target api -command up \
-            -migrations-dir "${{ github.workspace }}/app/api/db/migrations"
+          make -C app/migrator run ARGS="-target api -command down -migrations-dir /workspace/app/api/db/migrations"
+          make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/db/migrations"
 
       - name: Integration tests (build tag "integration")
+        working-directory: app/api
         run: make test-integration
 
   # ---------------------------------------------------------------------------
@@ -427,30 +458,24 @@ jobs:
         working-directory: app/auth
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
-          # runtime dependency (previously stdlib-only, no go.sum); cache
-          # the module download layer keyed off go.sum.
-          cache: true
-          cache-dependency-path: app/auth/go.sum
-      - name: Install golangci-lint
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Warm Go module cache (network-enabled toolbox)
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/golangci/golangci-lint/v${GOLANGCI_LINT_VERSION}/install.sh" \
-            | sh -s -- -b "$(go env GOPATH)/bin" "v${GOLANGCI_LINT_VERSION}"
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/auth tools go mod download
+
       - name: Check (fmt-check + lint + vet + build + test)
         run: make check
 
   # ---------------------------------------------------------------------------
-  # auth (Go) — Postgres integration tests (SPEC-005, 2026-07-09 refactor plan
-  # §RF.3 RC2). Same shape as api-integration above (delegates database
-  # creation + migration to app/migrator), own dedicated database ("auth")
-  # and own postgres service container (each job gets its own throwaway
-  # container; api and auth never share one, keeping the two stacks
-  # independent per project convention). Re-runs when app/migrator changes
-  # too, same reasoning as api-integration above.
+  # auth (Go) — Postgres integration tests. Same shape as api-integration
+  # above (delegates database creation + migration to app/migrator), own
+  # dedicated database ("auth") and own throwaway Postgres (each job starts
+  # its own `make db-up`; api and auth never share one, keeping the two
+  # stacks independent per project convention). Re-runs when app/migrator
+  # changes too, same reasoning as api-integration above.
   # ---------------------------------------------------------------------------
   auth-integration:
     name: auth (Postgres integration)
@@ -458,85 +483,42 @@ jobs:
     if: ${{ needs.changes.outputs.auth == 'true' || needs.changes.outputs.migrator == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    defaults:
-      run:
-        working-directory: app/auth
-    services:
-      postgres:
-        # `services.<id>.image` cannot reference the `env` context (only
-        # github/inputs/matrix/needs/strategy/vars are available here) —
-        # unlike the `run:` steps below, which do use env.POSTGRES_VERSION.
-        # Keep this literal in sync with env.POSTGRES_VERSION above.
-        image: postgres:17.5-alpine
-        env:
-          # See api-integration above: POSTGRES_DB need not match
-          # app/migrator's DB_MAINTENANCE_NAME — the postgres image always
-          # also creates a "postgres" database.
-          POSTGRES_DB: app
-          POSTGRES_USER: app
-          # See api-integration above: disposable, job-scoped credential
-          # only, not a real secret.
-          POSTGRES_PASSWORD: app
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      # See api-integration above: DB_NAME is this stack's own dedicated
-      # database (plan §RF.1.1), no DB_SCHEMA. DB_MAINTENANCE_NAME left
-      # unset so app/migrator defaults to "postgres".
-      DB_HOST: 127.0.0.1
-      DB_PORT: "5432"
-      DB_NAME: auth
-      DB_USER: app
-      DB_PASSWORD: app
-      DB_SSLMODE: disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          # See api-integration above: both go.sum files key/restore the
-          # module cache for everything this job downloads (app/auth's pgx
-          # plus app/migrator's goose+pgx).
-          cache-dependency-path: |
-            app/auth/go.sum
-            app/migrator/go.sum
+      - uses: ./.github/actions/build-toolchain-image
 
-      # See api-integration above: app/migrator (its own go.mod, invoked
-      # with `go -C` + a repo-root working-directory override) creates the
-      # "auth" database if missing and applies app/auth/db/migrations.
+      - name: Start Postgres (root make db-up)
+        run: make db-up
+
       - name: Create database + migrate up (app/migrator)
-        working-directory: ${{ github.workspace }}
-        run: |
-          go -C app/migrator run ./cmd/migrator \
-            -target auth -command up \
-            -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
+        run: make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/db/migrations"
 
       # Migration health check (R8): only one migration file exists today
       # (000001_create_auth.sql), so `-command down` fully unwinds the
       # database before `-command up` reapplies it.
       - name: Migration health check (up -> down -> up)
-        working-directory: ${{ github.workspace }}
         run: |
-          go -C app/migrator run ./cmd/migrator \
-            -target auth -command down \
-            -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
-          go -C app/migrator run ./cmd/migrator \
-            -target auth -command up \
-            -migrations-dir "${{ github.workspace }}/app/auth/db/migrations"
+          make -C app/migrator run ARGS="-target auth -command down -migrations-dir /workspace/app/auth/db/migrations"
+          make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/db/migrations"
 
       - name: Integration tests (build tag "integration")
+        working-directory: app/auth
         run: make test-integration
 
   # ---------------------------------------------------------------------------
   # iac (Terraform) — `make check ENV=dev` = fmt-check (root) + validate
   # (init -backend=false) + lint (tflint) + security (trivy). NO apply.
-  # CI installs terraform / tflint / trivy (pinned). Contract: .claude/rules/iac.md.
+  # Contract: .claude/rules/iac.md.
+  #
+  # SPEC-009 Phase C: `hashicorp/setup-terraform` / `terraform-linters/
+  # setup-tflint` / `aquasecurity/setup-trivy` and the separate `tflint
+  # --init` step are all gone — terraform/tflint/trivy are baked into the
+  # toolchain image, and `make check ENV=dev` (app/iac/Makefile, Phase B) is
+  # already a transparent wrapper that runs each of fmt-check/validate/lint/
+  # security in whichever of the toolbox's two services (network-enabled
+  # `tools` for validate's provider fetch, `tools-offline` for the other
+  # three) that Makefile's own header comment documents needing — nothing
+  # new for this job to orchestrate itself.
   # ---------------------------------------------------------------------------
   iac:
     name: iac (Terraform)
@@ -549,22 +531,7 @@ jobs:
         working-directory: app/iac
     steps:
       - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TERRAFORM_VERSION }}
-          # Disable the output-wrapper so `make`/`terraform` exit codes pass
-          # through cleanly.
-          terraform_wrapper: false
-      - uses: terraform-linters/setup-tflint@v4
-        with:
-          tflint_version: ${{ env.TFLINT_VERSION }}
-      # Prepare tflint plugins (no-op today: envs/dev has no .tflint.hcl, but
-      # this keeps CI working if a plugin config is added later).
-      - name: Init tflint
-        run: tflint --init
-        working-directory: app/iac/envs/dev
-      - uses: aquasecurity/setup-trivy@v0.2.3
-        with:
-          version: ${{ env.TRIVY_VERSION }}
+      - uses: ./.github/actions/build-toolchain-image
+
       - name: Check (fmt-check + validate + lint + security)
         run: make check ENV=dev

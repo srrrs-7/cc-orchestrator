@@ -66,7 +66,7 @@ func run() error {
 		return err
 	}
 
-	repo, closeRepo, err := newTaskRepository(ctx, mode, e.dbConfig())
+	taskReader, taskWriter, closeRepo, err := newTaskRepository(ctx, mode, e.writerConfig(), e.readerConfig())
 	if err != nil {
 		return fmt.Errorf("api: wire persistence (mode=%s): %w", mode, err)
 	}
@@ -76,8 +76,8 @@ func run() error {
 		}
 	}()
 
-	dupChk := task.NewDuplicateChecker(repo)
-	svc := service.NewTaskService(repo, dupChk)
+	dupChk := task.NewDuplicateChecker(taskReader)
+	svc := service.NewTaskService(taskReader, taskWriter, dupChk)
 	handler := route.NewRouter(svc)
 
 	srv := newServer(":"+e.Port, handler)
@@ -130,25 +130,35 @@ func newServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-// newTaskRepository builds the task.Repository selected by mode
-// (postgres.SelectMode's result) and a close function the caller must
-// defer to release the underlying resources (a no-op for
-// infra/memory; db.Close() -- releasing the connection pool -- for
+// newTaskRepository builds the task.Reader/task.Writer pair selected
+// by mode (postgres.SelectMode's result) and a close function the
+// caller must defer to release the underlying resources (a no-op for
+// infra/memory; the pool(s) postgres.OpenPair opened -- one or two
+// depending on whether readerCfg equals writerCfg -- for
 // infra/postgres). ctx bounds the initial Postgres connectivity check
-// (postgres.Open's Ping); it is the server's long-lived shutdown
-// context, not a separate per-call timeout, since this only runs once
-// at startup.
-func newTaskRepository(ctx context.Context, mode postgres.Mode, cfg postgres.Config) (task.Repository, func() error, error) {
+// (postgres.OpenPair's Ping(s)); it is the server's long-lived
+// shutdown context, not a separate per-call timeout, since this only
+// runs once at startup.
+//
+// In Postgres mode, reads (task.Reader) and writes (task.Writer) are
+// backed by separate *sql.DB pools (SPEC-010 R2): postgres.OpenPair
+// shares a single pool between them when readerCfg == writerCfg (the
+// default, DB_READER_* unset case) and opens a second, independent
+// pool only when they differ. In memory mode, the same
+// *memory.TaskRepository value is passed for both roles, since
+// infra/memory has no notion of separate pools (SPEC-010 R5).
+func newTaskRepository(ctx context.Context, mode postgres.Mode, writerCfg, readerCfg postgres.Config) (task.Reader, task.Writer, func() error, error) {
 	switch mode {
 	case postgres.ModePostgres:
-		db, err := postgres.Open(ctx, cfg)
+		writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		slog.Info("api: persistence selected", "mode", mode, "database", cfg.Name)
-		return postgres.NewTaskRepository(db), db.Close, nil
+		slog.Info("api: persistence selected", "mode", mode, "database", writerCfg.Name)
+		return postgres.NewTaskReader(readerDB), postgres.NewTaskWriter(writerDB), closeFn, nil
 	default:
 		slog.Info("api: persistence selected", "mode", postgres.ModeMemory)
-		return memory.NewTaskRepository(), func() error { return nil }, nil
+		mem := memory.NewTaskRepository()
+		return mem, mem, func() error { return nil }, nil
 	}
 }

@@ -190,3 +190,60 @@ func Open(ctx context.Context, cfg Config) (*sql.DB, error) {
 
 	return db, nil
 }
+
+// OpenPair opens the writer and reader connection pools SPEC-010's
+// Reader/Writer split routes queries through: task.Writer
+// implementations (TaskWriter) are wired to the returned writer pool,
+// task.Reader implementations (TaskReader) to reader.
+//
+// When readerCfg equals writerCfg (Config is a plain struct of
+// comparable string fields, so "==" is ordinary value equality --
+// pinned by persistence_selection_test.go's
+// TestConfigEquality_ReaderWriterSharing), the reader has nowhere
+// distinct to connect to, so OpenPair opens exactly one pool (via
+// Open, applying the same pool-size/ping-timeout bounds as every
+// other caller of Open) and returns it as both writer and reader: the
+// same *sql.DB pointer. This is the fail-safe default (SPEC-010 R3 /
+// non-functional "二重に開かない") that keeps every existing
+// deployment -- which sets no DB_READER_* -- on a single pool exactly
+// as before this Spec.
+//
+// Only when readerCfg differs from writerCfg does OpenPair open a
+// second, independent pool for the reader. If that second Open fails,
+// OpenPair closes the already-opened writer pool before returning, so
+// a failed OpenPair call never leaks the writer pool back to a caller
+// that has no reference to it (the returned writer/reader/closeFn are
+// all nil in that case).
+//
+// On success, closeFn releases every pool OpenPair actually opened,
+// exactly once each: closing the shared pool once when reader ==
+// writer, or closing both independent pools when they differ. Callers
+// (cmd/api/main.go) should defer closeFn() instead of calling
+// writer.Close()/reader.Close() directly, so they don't need to know
+// whether the two pools happen to be the same one.
+func OpenPair(ctx context.Context, writerCfg, readerCfg Config) (writer, reader *sql.DB, closeFn func() error, err error) {
+	writer, err = Open(ctx, writerCfg)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("postgres: open pair: writer: %w", err)
+	}
+
+	if readerCfg == writerCfg {
+		return writer, writer, writer.Close, nil
+	}
+
+	reader, err = Open(ctx, readerCfg)
+	if err != nil {
+		_ = writer.Close()
+		return nil, nil, nil, fmt.Errorf("postgres: open pair: reader: %w", err)
+	}
+
+	closeFn = func() error {
+		writerErr := writer.Close()
+		readerErr := reader.Close()
+		if writerErr != nil {
+			return writerErr
+		}
+		return readerErr
+	}
+	return writer, reader, closeFn, nil
+}

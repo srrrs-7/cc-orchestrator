@@ -14,6 +14,16 @@
 # rationale). The commands run here are exactly the contract defined in
 # .claude/rules/api.md (`make openapi`) and .claude/rules/web.md
 # (`bun run generate`) — do not invent commands here.
+#
+# SPEC-009 Phase C (2026-07-10): this job now runs both commands inside the
+# single pinned toolchain image (docker/toolchain/Dockerfile, built by
+# ./.github/actions/build-toolchain-image) instead of `actions/setup-go` +
+# `oven-sh/setup-bun`. This is also where SPEC-009's versions.env
+# consolidation resolves this file's own historical BUN_VERSION split from
+# cicd.yml (this file used to deliberately pin bun 1.3.14 while cicd.yml
+# pinned 1.2.21 — see versions.env's own header comment for that history):
+# both files now load the exact same versions.env, so there is only one bun
+# version pinned anywhere in this repo's CI/toolchain.
 name: OpenAPI Contract Drift
 
 on:
@@ -22,11 +32,21 @@ on:
     paths:
       - "app/api/**"
       - "app/web/**"
+      - "versions.env"
+      - "docker/toolchain/**"
+      - "compose.tools.yml"
+      - "bin/bun"
+      - ".github/actions/build-toolchain-image/**"
       - ".github/workflows/contract-drift.yml"
   pull_request:
     paths:
       - "app/api/**"
       - "app/web/**"
+      - "versions.env"
+      - "docker/toolchain/**"
+      - "compose.tools.yml"
+      - "bin/bun"
+      - ".github/actions/build-toolchain-image/**"
       - ".github/workflows/contract-drift.yml"
   workflow_dispatch:
 
@@ -40,14 +60,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # Must match app/api/go.mod's `go 1.24` directive.
-  GO_VERSION: "1.24"
-  # app/web is on the Bun 1.3 series (see app/web/Dockerfile: `FROM oven/bun:1`).
-  # NOTE: this intentionally differs from cicd.yml's BUN_VERSION (1.2.21);
-  # see this workflow's report for a note on reconciling the two pins.
-  BUN_VERSION: "1.3.14"
-
 jobs:
   contract-drift:
     name: Contract drift (api openapi.yaml <-> web generated)
@@ -55,33 +67,41 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-toolchain-image
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
-          # runtime dependency (previously stdlib-only, no go.sum); cache
-          # the module download layer keyed off go.sum. This job never
-          # touches Postgres itself (`make openapi` only parses swag
-          # annotations), but the module graph resolution below still
-          # benefits from the cache.
-          cache: true
-          cache-dependency-path: app/api/go.sum
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
+      # `make openapi` (app/api/Makefile) runs under `tools-offline`
+      # (network_mode: none) like every other app/api Makefile target — see
+      # cicd.yml's `api`/`migrator` job comments for why this stack's own
+      # go.sum-declared runtime deps (pgx) need one network-enabled warm
+      # pass into the shared gomodcache volume first, on a brand-new CI
+      # runner with no persisted local volume.
+      - name: Warm Go module cache (app/api)
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) \
+          docker compose --env-file "$GITHUB_WORKSPACE/versions.env" -f "$GITHUB_WORKSPACE/compose.tools.yml" \
+            run --rm -w /workspace/app/api tools go mod download
 
       # Regenerates app/api/docs/openapi.yaml from the swag v2 annotations
-      # (`make openapi` = go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5,
-      # pinned in app/api/Makefile). Contract: .claude/rules/api.md.
+      # (`make openapi` = swag init, pinned via versions.env's SWAG_VERSION,
+      # baked into the toolchain image — see app/api/Makefile). Contract:
+      # .claude/rules/api.md.
       - name: Regenerate OpenAPI contract (app/api)
         working-directory: app/api
         run: make openapi
 
+      # bin/bun (SPEC-009 Phase B, unchanged here) dispatches `bun ...` into
+      # the toolchain image; putting it at the FRONT of PATH is this job's
+      # only toolchain-specific setup for the web half below.
+      - name: Add repo bin/ (bun shim) to PATH
+        run: echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
       # --frozen-lockfile installs exactly what bun.lock pins; the
       # bunfig.toml minimumReleaseAge gate only affects resolving new
       # versions, so already-locked deps (incl. @hey-api/openapi-ts) pass.
+      # `install` is one of bin/bun's network-needing subcommands (routed to
+      # the toolbox's `tools` service); `generate` below is offline
+      # (`tools-offline`), consistent with .claude/rules/web.md's command
+      # table.
       - name: Install web dependencies
         working-directory: app/web
         run: bun install --frozen-lockfile
@@ -101,6 +121,15 @@ jobs:
       # (e.g. a future @hey-api/openapi-ts version/plugin change emitting an
       # additional generated file) — plain `git diff --exit-code` is blind
       # to untracked paths, so it would silently pass that case.
+      #
+      # This step runs directly on the runner (not inside the toolbox) —
+      # both regeneration steps above wrote their output through the same
+      # bind-mounted /workspace this checkout already is, owned by this
+      # runner's own uid:gid (compose.tools.yml's `user:` override, driven
+      # by the TOOLBOX_UID/TOOLBOX_GID each Makefile target / bin/bun
+      # invocation above computes via `id -u`/`id -g` automatically), so a
+      # plain host-side `git diff` sees the exact same files with no
+      # permission mismatch.
       - name: Fail on contract drift
         run: |
           # `git add -N` (--intent-to-add) registers any currently

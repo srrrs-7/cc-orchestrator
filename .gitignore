@@ -1,0 +1,22 @@
+# Repository-root .gitignore (SPEC-009 Phase B).
+#
+# Kept minimal on purpose: each app/<stack> already carries its own
+# .gitignore for stack-specific build artifacts (app/migrator/.gitignore's
+# /migrator binary, app/web/.gitignore's node_modules/dist, app/iac/.gitignore's
+# .terraform/*.tfstate) -- this file only covers root-level/cross-stack
+# concerns that don't belong to any single stack.
+
+# Local convenience symlink to versions.env (see that file's own header on
+# why: `set -a; . ./versions.env; set +a` in a shell, or letting an editor/
+# tool auto-load a plain `.env`). Every actual command in this repo
+# (root Makefile, compose.tools.yml, docker/toolchain/Dockerfile,
+# .github/workflows/*.yml) reads versions.env directly via an explicit
+# `--env-file versions.env` / `include`, never relying on `.env`
+# auto-discovery, so this symlink is local-only dev convenience, not a
+# dependency of any tracked command -- never commit it (also avoids
+# committing a symlink whose target resolution differs across OSes).
+.env
+
+# macOS Finder metadata (this repo is developed on macOS; harmless but
+# never intentional to track).
+.DS_Store
