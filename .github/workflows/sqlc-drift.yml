@@ -49,8 +49,8 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       auth: ${{ steps.filter.outputs.auth }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           # Paths mirror .claude/rules/db.md's frontmatter `paths` (the
@@ -81,9 +81,9 @@ jobs:
       run:
         working-directory: app/api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           # SPEC-005 added github.com/jackc/pgx/v5 as app/api's only
@@ -133,9 +133,9 @@ jobs:
       run:
         working-directory: app/auth
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true

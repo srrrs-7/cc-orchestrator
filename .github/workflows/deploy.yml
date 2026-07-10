@@ -70,19 +70,19 @@ jobs:
       id-token: write # required for aws-actions/configure-aws-credentials OIDC AssumeRole
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # OIDC AssumeRole — no long-lived AWS credentials stored in the repo.
       # secrets.AWS_DEPLOY_ROLE_ARN must be configured as a repository/
       # environment secret; the role ARN (and the AWS account id it embeds)
       # is never written in this file.
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false
@@ -106,15 +106,15 @@ jobs:
           registry="$(echo "${{ steps.tf.outputs.api_repo }}" | cut -d/ -f1)"
           aws ecr get-login-password --region "${{ env.AWS_REGION }}" | docker login --username AWS --password-stdin "$registry"
 
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
 
       # NOTE: ubuntu-latest runners are amd64, so linux/arm64 is built under
       # QEMU emulation here (slower than native). See SPEC-004 plan risks —
       # an arm64-native runner (e.g. self-hosted / GitHub larger runner) is
       # the recommended upgrade path if this workflow sees regular use.
       - name: Build & push api image (linux/arm64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: app/api
           platforms: linux/arm64
@@ -122,7 +122,7 @@ jobs:
           tags: ${{ steps.tf.outputs.api_repo }}:${{ inputs.image_tag }}
 
       - name: Build & push auth image (linux/arm64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: app/auth
           platforms: linux/arm64
@@ -144,10 +144,10 @@ jobs:
       run:
         working-directory: app/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -164,7 +164,7 @@ jobs:
       - name: Build
         run: bun run build
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false

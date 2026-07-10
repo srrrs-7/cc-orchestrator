@@ -68,8 +68,8 @@ jobs:
       iac: ${{ steps.filter.outputs.iac }}
       migrator: ${{ steps.filter.outputs.migrator }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -103,7 +103,7 @@ jobs:
       run:
         working-directory: app/web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -142,8 +142,8 @@ jobs:
       run:
         working-directory: app/migrator
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           # Unlike app/api and app/auth (pgx-only, `go run pkg@version` CLI
@@ -238,8 +238,8 @@ jobs:
       APP_DB_USER: api_app
       APP_DB_PASSWORD: api_app_password
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -275,8 +275,8 @@ jobs:
       run:
         working-directory: app/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
@@ -363,8 +363,8 @@ jobs:
       DB_PASSWORD: app
       DB_SSLMODE: disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -426,8 +426,8 @@ jobs:
       run:
         working-directory: app/auth
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           # SPEC-005 added github.com/jackc/pgx/v5 as this module's only
@@ -495,8 +495,8 @@ jobs:
       DB_PASSWORD: app
       DB_SSLMODE: disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -548,14 +548,14 @@ jobs:
       run:
         working-directory: app/iac
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           # Disable the output-wrapper so `make`/`terraform` exit codes pass
           # through cleanly.
           terraform_wrapper: false
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: ${{ env.TFLINT_VERSION }}
       # Prepare tflint plugins (no-op today: envs/dev has no .tflint.hcl, but
@@ -563,7 +563,7 @@ jobs:
       - name: Init tflint
         run: tflint --init
         working-directory: app/iac/envs/dev
-      - uses: aquasecurity/setup-trivy@v0.2.3
+      - uses: aquasecurity/setup-trivy@v0.3.1
         with:
           version: ${{ env.TRIVY_VERSION }}
       - name: Check (fmt-check + validate + lint + security)
