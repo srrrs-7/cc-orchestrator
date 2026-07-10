@@ -25,7 +25,9 @@ var envVars = []string{
 // TestNewEnv_Defaults confirms PORT/DB_PORT/DB_SSLMODE fall back to
 // their documented defaults when every relevant variable is unset,
 // while variables without a default (APP_ENV, DB_HOST, DB_NAME,
-// DB_USER, DB_PASSWORD) stay empty.
+// DB_USER, DB_PASSWORD) stay empty. DB_SSLMODE's default is
+// fail-closed ("require", ISSUE-016 m-2): omitting it must not
+// silently downgrade the connection to plaintext.
 func TestNewEnv_Defaults(t *testing.T) {
 	for _, key := range envVars {
 		t.Setenv(key, "")
@@ -39,8 +41,8 @@ func TestNewEnv_Defaults(t *testing.T) {
 	if e.DBPort != "5432" {
 		t.Errorf("Env.DBPort = %q, want %q", e.DBPort, "5432")
 	}
-	if e.DBSSLMode != "disable" {
-		t.Errorf("Env.DBSSLMode = %q, want %q", e.DBSSLMode, "disable")
+	if e.DBSSLMode != "require" {
+		t.Errorf("Env.DBSSLMode = %q, want %q", e.DBSSLMode, "require")
 	}
 	for _, tc := range []struct {
 		name string

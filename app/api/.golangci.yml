@@ -1,0 +1,31 @@
+# golangci-lint config (v1 schema -- CI pins golangci-lint 1.64.8, see
+# .github/workflows/cicd.yml env.GOLANGCI_LINT_VERSION; the v2 config
+# schema is not understood by that version).
+#
+# ISSUE-024: enables gosec (security-focused static analysis, bundled
+# into golangci-lint -- no separate binary needed) on top of the
+# previously-implicit default linter set, plus nolintlint to make sure
+# every //nolint suppression (gosec's included) carries an explanation.
+#
+# This file must be kept identical in content/intent to
+# app/auth/.golangci.yml and app/migrator/.golangci.yml (docs/plans/
+# ISSUE-024-plan.md §1.2): per-stack config is required because no
+# single impl agent owns a repository-root config file, but the three
+# files should not drift from each other.
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - gosec
+    - nolintlint
+
+linters-settings:
+  nolintlint:
+    # Every //nolint directive must name the linter(s) it suppresses
+    # and carry a `// <reason>` explanation (ISSUE-021/ISSUE-024
+    # re-triggered-suppression policy: suppressions are reviewed, not
+    # rubber-stamped).
+    require-explanation: true
+    require-specific: true
+    allow-unused: false

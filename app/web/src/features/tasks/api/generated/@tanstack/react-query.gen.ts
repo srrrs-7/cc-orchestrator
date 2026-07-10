@@ -7,36 +7,36 @@ import { getTasks, getTasksById, type Options, postTasks, postTasksByIdComplete,
 import type { GetTasksByIdData, GetTasksByIdError, GetTasksByIdResponse, GetTasksData, GetTasksError, GetTasksResponse, PostTasksByIdCompleteData, PostTasksByIdCompleteError, PostTasksByIdCompleteResponse, PostTasksByIdPriorityData, PostTasksByIdPriorityError, PostTasksByIdPriorityResponse, PostTasksByIdStartData, PostTasksByIdStartError, PostTasksByIdStartResponse, PostTasksData, PostTasksError, PostTasksResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
-    Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
-        _id: string;
-        _infinite?: boolean;
-        tags?: ReadonlyArray<string>;
-    }
+  Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
+    _id: string;
+    _infinite?: boolean;
+    tags?: ReadonlyArray<string>;
+  }
 ];
 
 const createQueryKey = <TOptions extends Options>(id: string, options?: TOptions, infinite?: boolean, tags?: ReadonlyArray<string>): [
-    QueryKey<TOptions>[0]
+  QueryKey<TOptions>[0]
 ] => {
-    const params: QueryKey<TOptions>[0] = { _id: id, baseUrl: options?.baseUrl || (options?.client ?? client).getConfig().baseUrl } as QueryKey<TOptions>[0];
-    if (infinite) {
-        params._infinite = infinite;
-    }
-    if (tags) {
-        params.tags = tags;
-    }
-    if (options?.body) {
-        params.body = options.body;
-    }
-    if (options?.headers) {
-        params.headers = options.headers;
-    }
-    if (options?.path) {
-        params.path = options.path;
-    }
-    if (options?.query) {
-        params.query = options.query;
-    }
-    return [params];
+  const params: QueryKey<TOptions>[0] = { _id: id, baseUrl: options?.baseUrl || (options?.client ?? client).getConfig().baseUrl } as QueryKey<TOptions>[0];
+  if (infinite) {
+    params._infinite = infinite;
+  }
+  if (tags) {
+    params.tags = tags;
+  }
+  if (options?.body) {
+    params.body = options.body;
+  }
+  if (options?.headers) {
+    params.headers = options.headers;
+  }
+  if (options?.path) {
+    params.path = options.path;
+  }
+  if (options?.query) {
+    params.query = options.query;
+  }
+  return [params];
 };
 
 export const getTasksQueryKey = (options?: Options<GetTasksData>) => createQueryKey('getTasks', options);
@@ -47,16 +47,16 @@ export const getTasksQueryKey = (options?: Options<GetTasksData>) => createQuery
  * Returns every task.
  */
 export const getTasksOptions = (options?: Options<GetTasksData>) => queryOptions<GetTasksResponse, GetTasksError, GetTasksResponse, ReturnType<typeof getTasksQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getTasks({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getTasksQueryKey(options)
+  queryFn: async ({ queryKey, signal }) => {
+    const { data } = await getTasks({
+      ...options,
+      ...queryKey[0],
+      signal,
+      throwOnError: true
+    });
+    return data;
+  },
+  queryKey: getTasksQueryKey(options)
 });
 
 /**
@@ -65,17 +65,17 @@ export const getTasksOptions = (options?: Options<GetTasksData>) => queryOptions
  * Creates a new task with the given title and an optional priority. An omitted or empty priority defaults to medium.
  */
 export const postTasksMutation = (options?: Partial<Options<PostTasksData>>): UseMutationOptions<PostTasksResponse, PostTasksError, Options<PostTasksData>> => {
-    const mutationOptions: UseMutationOptions<PostTasksResponse, PostTasksError, Options<PostTasksData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postTasks({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
+  const mutationOptions: UseMutationOptions<PostTasksResponse, PostTasksError, Options<PostTasksData>> = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await postTasks({
+        ...options,
+        ...fnOptions,
+        throwOnError: true
+      });
+      return data;
+    }
+  };
+  return mutationOptions;
 };
 
 export const getTasksByIdQueryKey = (options: Options<GetTasksByIdData>) => createQueryKey('getTasksById', options);
@@ -86,16 +86,16 @@ export const getTasksByIdQueryKey = (options: Options<GetTasksByIdData>) => crea
  * Returns a single task by id.
  */
 export const getTasksByIdOptions = (options: Options<GetTasksByIdData>) => queryOptions<GetTasksByIdResponse, GetTasksByIdError, GetTasksByIdResponse, ReturnType<typeof getTasksByIdQueryKey>>({
-    queryFn: async ({ queryKey, signal }) => {
-        const { data } = await getTasksById({
-            ...options,
-            ...queryKey[0],
-            signal,
-            throwOnError: true
-        });
-        return data;
-    },
-    queryKey: getTasksByIdQueryKey(options)
+  queryFn: async ({ queryKey, signal }) => {
+    const { data } = await getTasksById({
+      ...options,
+      ...queryKey[0],
+      signal,
+      throwOnError: true
+    });
+    return data;
+  },
+  queryKey: getTasksByIdQueryKey(options)
 });
 
 /**
@@ -104,17 +104,17 @@ export const getTasksByIdOptions = (options: Options<GetTasksByIdData>) => query
  * Transitions a task from doing to done.
  */
 export const postTasksByIdCompleteMutation = (options?: Partial<Options<PostTasksByIdCompleteData>>): UseMutationOptions<PostTasksByIdCompleteResponse, PostTasksByIdCompleteError, Options<PostTasksByIdCompleteData>> => {
-    const mutationOptions: UseMutationOptions<PostTasksByIdCompleteResponse, PostTasksByIdCompleteError, Options<PostTasksByIdCompleteData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postTasksByIdComplete({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
+  const mutationOptions: UseMutationOptions<PostTasksByIdCompleteResponse, PostTasksByIdCompleteError, Options<PostTasksByIdCompleteData>> = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await postTasksByIdComplete({
+        ...options,
+        ...fnOptions,
+        throwOnError: true
+      });
+      return data;
+    }
+  };
+  return mutationOptions;
 };
 
 /**
@@ -123,17 +123,17 @@ export const postTasksByIdCompleteMutation = (options?: Partial<Options<PostTask
  * Updates a task's priority (low, medium, or high) without altering its status.
  */
 export const postTasksByIdPriorityMutation = (options?: Partial<Options<PostTasksByIdPriorityData>>): UseMutationOptions<PostTasksByIdPriorityResponse, PostTasksByIdPriorityError, Options<PostTasksByIdPriorityData>> => {
-    const mutationOptions: UseMutationOptions<PostTasksByIdPriorityResponse, PostTasksByIdPriorityError, Options<PostTasksByIdPriorityData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postTasksByIdPriority({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
+  const mutationOptions: UseMutationOptions<PostTasksByIdPriorityResponse, PostTasksByIdPriorityError, Options<PostTasksByIdPriorityData>> = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await postTasksByIdPriority({
+        ...options,
+        ...fnOptions,
+        throwOnError: true
+      });
+      return data;
+    }
+  };
+  return mutationOptions;
 };
 
 /**
@@ -142,15 +142,15 @@ export const postTasksByIdPriorityMutation = (options?: Partial<Options<PostTask
  * Transitions a task from todo to doing.
  */
 export const postTasksByIdStartMutation = (options?: Partial<Options<PostTasksByIdStartData>>): UseMutationOptions<PostTasksByIdStartResponse, PostTasksByIdStartError, Options<PostTasksByIdStartData>> => {
-    const mutationOptions: UseMutationOptions<PostTasksByIdStartResponse, PostTasksByIdStartError, Options<PostTasksByIdStartData>> = {
-        mutationFn: async (fnOptions) => {
-            const { data } = await postTasksByIdStart({
-                ...options,
-                ...fnOptions,
-                throwOnError: true
-            });
-            return data;
-        }
-    };
-    return mutationOptions;
+  const mutationOptions: UseMutationOptions<PostTasksByIdStartResponse, PostTasksByIdStartError, Options<PostTasksByIdStartData>> = {
+    mutationFn: async (fnOptions) => {
+      const { data } = await postTasksByIdStart({
+        ...options,
+        ...fnOptions,
+        throwOnError: true
+      });
+      return data;
+    }
+  };
+  return mutationOptions;
 };

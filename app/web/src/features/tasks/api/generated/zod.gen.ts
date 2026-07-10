@@ -3,41 +3,41 @@
 import * as z from 'zod';
 
 export const zRouteChangePriorityRequest = z.object({
-    priority: z.enum([
-        'low',
-        'medium',
-        'high'
-    ])
+  priority: z.enum([
+    'low',
+    'medium',
+    'high'
+  ])
 });
 
 export const zRouteCreateTaskRequest = z.object({
-    priority: z.enum([
-        'low',
-        'medium',
-        'high'
-    ]).optional(),
-    title: z.string()
+  priority: z.enum([
+    'low',
+    'medium',
+    'high'
+  ]).optional(),
+  title: z.string()
 });
 
 export const zRouteErrorResponse = z.object({
-    error: z.string()
+  error: z.string()
 });
 
 export const zRouteTaskResponse = z.object({
-    created_at: z.string(),
-    id: z.string(),
-    priority: z.enum([
-        'low',
-        'medium',
-        'high'
-    ]),
-    status: z.enum([
-        'todo',
-        'doing',
-        'done'
-    ]),
-    title: z.string(),
-    updated_at: z.string()
+  created_at: z.string(),
+  id: z.string(),
+  priority: z.enum([
+    'low',
+    'medium',
+    'high'
+  ]),
+  status: z.enum([
+    'todo',
+    'doing',
+    'done'
+  ]),
+  title: z.string(),
+  updated_at: z.string()
 });
 
 /**
@@ -56,7 +56,7 @@ export const zPostTasksBody = zRouteCreateTaskRequest;
 export const zPostTasksResponse = zRouteTaskResponse;
 
 export const zGetTasksByIdPath = z.object({
-    id: z.string()
+  id: z.string()
 });
 
 /**
@@ -65,7 +65,7 @@ export const zGetTasksByIdPath = z.object({
 export const zGetTasksByIdResponse = zRouteTaskResponse;
 
 export const zPostTasksByIdCompletePath = z.object({
-    id: z.string()
+  id: z.string()
 });
 
 /**
@@ -79,7 +79,7 @@ export const zPostTasksByIdCompleteResponse = zRouteTaskResponse;
 export const zPostTasksByIdPriorityBody = zRouteChangePriorityRequest;
 
 export const zPostTasksByIdPriorityPath = z.object({
-    id: z.string()
+  id: z.string()
 });
 
 /**
@@ -88,7 +88,7 @@ export const zPostTasksByIdPriorityPath = z.object({
 export const zPostTasksByIdPriorityResponse = zRouteTaskResponse;
 
 export const zPostTasksByIdStartPath = z.object({
-    id: z.string()
+  id: z.string()
 });
 
 /**

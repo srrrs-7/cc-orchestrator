@@ -32,9 +32,19 @@ type Config struct {
 // DB_USER/DB_PASSWORD have no default and are validated as required by
 // configFromEnv, matching app/{api,auth}/infra/postgres.ConfigFromEnv's
 // existing contract for those three variables.
+//
+// defaultSSLMode is fail-closed ("require"): if DB_SSLMODE is left
+// unset, the connection defaults to encrypted rather than silently
+// falling back to a plaintext one (ISSUE-016 m-2). This matters most
+// here, since this migrator connects with the master credentials to
+// run CREATE DATABASE / goose migrations -- the highest-privilege
+// connection in the stack. Local development against a non-TLS
+// Postgres (e.g. compose's postgres service) must set
+// DB_SSLMODE=disable explicitly (see the root Makefile's
+// MIGRATOR_DB_ENV, which already does so).
 const (
 	defaultPort            = "5432"
-	defaultSSLMode         = "disable"
+	defaultSSLMode         = "require"
 	defaultMaintenanceName = "postgres"
 )
 

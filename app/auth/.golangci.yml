@@ -1,0 +1,34 @@
+# .golangci.yml -- ISSUE-024: integrate gosec into `make lint` / CI.
+#
+# v1 config schema, targeting the golangci-lint version CI actually
+# pins (env.GOLANGCI_LINT_VERSION == "1.64.8" in
+# .github/workflows/cicd.yml). Do NOT add a top-level `version: "2"`
+# key -- that switches golangci-lint to the v2 config schema, which
+# 1.64.8 cannot parse (config load fails outright with "unsupported
+# version of the configuration").
+#
+# This file only *adds* gosec + nolintlint on top of golangci-lint's
+# default linter set (no `disable-all`), so every linter that already
+# gated `make lint` before this file existed keeps running unchanged.
+#
+# Kept in sync with app/api/.golangci.yml and app/migrator/.golangci.yml
+# (docs/plans/ISSUE-024-plan.md S1.2): each Go stack owns its own copy
+# because no impl agent's charter currently covers a repo-root config
+# file. Do not let the three drift apart.
+linters:
+  enable:
+    # Security-focused static analysis (gosec, bundled in
+    # golangci-lint). Runs on top of the default linter set.
+    - gosec
+    # Requires every `//nolint` directive to name a specific linter and
+    # carry a human-readable reason (`//nolint:gosec // ...`), so gosec
+    # suppressions stay self-documenting and auditable, and so a stale
+    # suppression (finding no longer present) is itself flagged as an
+    # "unused directive" error rather than silently rotting.
+    - nolintlint
+
+linters-settings:
+  nolintlint:
+    require-explanation: true
+    require-specific: true
+    allow-unused: false

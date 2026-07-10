@@ -1,4 +1,5 @@
 import { useSearch } from "@tanstack/react-router";
+import { useMemo } from "react";
 import { filterByStatus, sortByPriority } from "../domain/task";
 import { useTasksQuery } from "../hooks/useTasks";
 import { TaskItem } from "./TaskItem";
@@ -12,6 +13,7 @@ import { TaskItem } from "./TaskItem";
 export function TaskList() {
   const { status } = useSearch({ from: "/" });
   const { data, isLoading, isError, error } = useTasksQuery();
+  const tasks = useMemo(() => sortByPriority(filterByStatus(data ?? [], status)), [data, status]);
 
   if (isLoading) {
     return <p className="text-sm text-gray-500">Loading tasks...</p>;
@@ -24,8 +26,6 @@ export function TaskList() {
       </p>
     );
   }
-
-  const tasks = sortByPriority(filterByStatus(data ?? [], status));
 
   if (tasks.length === 0) {
     return <p className="text-sm text-gray-500">No tasks found.</p>;

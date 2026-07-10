@@ -4,7 +4,7 @@ title: app/web を TypeScript 7.0(ネイティブ tsc)へ移行
 status: done  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
 updated: 2026-07-10
-issues: [ISSUE-020, ISSUE-013]       # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-020, ISSUE-013, ISSUE-023]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -105,3 +105,5 @@ TypeScript 7.0 stable(`typescript@7.0.2`)へ一本化し、コンパイラをプ
   - tester: 既存 Vitest 9 files / 73 tests 全 pass。checker: `format:check` / `lint` / `typecheck`(TS7 `tsc`)/ `build` 全 green。R4 達成(挙動不変)。
   - review: **performance** = 退行なし(typecheck 0.38s / build 0.54s、`dist` 不変、native バイナリ 1→1 の置換)。**security** = Major「`bun.lock` の `typescript@7.0.2` 系 21 エントリだけ URL が空」は、調査で既定レジストリ=社内ミラー(`~/.npmrc`、repo に registry 設定コミットなし)かつ sha512 ピン済みと判明し、実バイパスではなく cosmetic + 再現性ハイジーンと再評価 → ISSUE-020 で追跡。**spec** = Major「R5(vite)未達・未記録」は R5 を一般化し本経緯に見送り理由を記録して吸収。
   - 残課題: ISSUE-020(bun.lock URL 正規化 + レジストリ設定コミット、`npm.flatt.tech` の役割確認が前提)、R5 の vite 8.1.4(ゲート通過後 or dependabot)。
+- **移行後レビュー(プロジェクト全体レビュー)での回帰検出と解消**: 本移行がスコープ外(§3 スコープ外)とした `@hey-api/openapi-ts`(0.98.2)が、TS7 ネイティブ tsc の `ts.SyntaxKind` API と非互換で `cd app/web && bun run generate` が `TypeError: undefined is not an object (evaluating 'ts.SyntaxKind.AnyKeyword')` で失敗する回帰を検出。コミット済み生成物・typecheck・build・test は正常だが**再生成が不能**で、`.github/workflows/contract-drift.yml` が Go DTO 変更時に fail する状態だった。設計方針「吸収できない非互換は Issue 化する」(§4)に沿って **ISSUE-023** として起票し、frontmatter `issues` に追加。
+- 解消: impl-web が `@hey-api/openapi-ts` を TS7 対応の next プレリリース `0.0.0-next-20260708192938` へピン留め(stable は最新 `0.99.0` まで TS7 未対応を実機確認)。lock-then-restore で `bunfig.toml` は `minimumReleaseAgeExcludes = []` を維持し、`typescript@^7.0.2`(TS7)も維持。checker が `bun run generate`(成功・冪等)/ typecheck / lint / format:check / build / test を独立検証して全 pass。stable が TS7 対応したら stable へ戻す follow-up は ISSUE-023 の経緯で追跡(新規 Issue は切らない)。

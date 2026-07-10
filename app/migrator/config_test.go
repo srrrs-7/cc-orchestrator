@@ -79,7 +79,10 @@ func TestConfigFromEnv_DBNameExplicitOverride(t *testing.T) {
 }
 
 // TestConfigFromEnv_Defaults covers the remaining defaulted fields:
-// DB_PORT, DB_SSLMODE and DB_MAINTENANCE_NAME.
+// DB_PORT, DB_SSLMODE and DB_MAINTENANCE_NAME. DB_SSLMODE's default is
+// fail-closed ("require", ISSUE-016 m-2): omitting it must not
+// silently downgrade this migrator's (master-credentialed) connection
+// to plaintext.
 func TestConfigFromEnv_Defaults(t *testing.T) {
 	setAllDBEnv(t, map[string]string{
 		"DB_HOST":     "db.internal",
@@ -94,8 +97,8 @@ func TestConfigFromEnv_Defaults(t *testing.T) {
 	if cfg.Port != "5432" {
 		t.Errorf("configFromEnv().Port = %q, want default %q", cfg.Port, "5432")
 	}
-	if cfg.SSLMode != "disable" {
-		t.Errorf("configFromEnv().SSLMode = %q, want default %q", cfg.SSLMode, "disable")
+	if cfg.SSLMode != "require" {
+		t.Errorf("configFromEnv().SSLMode = %q, want default %q", cfg.SSLMode, "require")
 	}
 	if cfg.MaintenanceName != "postgres" {
 		t.Errorf("configFromEnv().MaintenanceName = %q, want default %q", cfg.MaintenanceName, "postgres")

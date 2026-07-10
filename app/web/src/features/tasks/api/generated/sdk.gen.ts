@@ -5,17 +5,17 @@ import { client } from './client.gen';
 import type { GetTasksByIdData, GetTasksByIdErrors, GetTasksByIdResponses, GetTasksData, GetTasksErrors, GetTasksResponses, PostTasksByIdCompleteData, PostTasksByIdCompleteErrors, PostTasksByIdCompleteResponses, PostTasksByIdPriorityData, PostTasksByIdPriorityErrors, PostTasksByIdPriorityResponses, PostTasksByIdStartData, PostTasksByIdStartErrors, PostTasksByIdStartResponses, PostTasksData, PostTasksErrors, PostTasksResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
-    /**
-     * You can provide a client instance returned by `createClient()` instead of
-     * individual options. This might be also useful if you want to implement a
-     * custom client.
-     */
-    client?: Client;
-    /**
-     * You can pass arbitrary values through the `meta` object. This can be
-     * used to access values that aren't defined as part of the SDK function.
-     */
-    meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
+  /**
+   * You can provide a client instance returned by `createClient()` instead of
+   * individual options. This might be also useful if you want to implement a
+   * custom client.
+   */
+  client?: Client;
+  /**
+   * You can pass arbitrary values through the `meta` object. This can be
+   * used to access values that aren't defined as part of the SDK function.
+   */
+  meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
 
 /**
@@ -31,12 +31,12 @@ export const getTasks = <ThrowOnError extends boolean = false>(options?: Options
  * Creates a new task with the given title and an optional priority. An omitted or empty priority defaults to medium.
  */
 export const postTasks = <ThrowOnError extends boolean = false>(options: Options<PostTasksData, ThrowOnError>): RequestResult<PostTasksResponses, PostTasksErrors, ThrowOnError> => (options.client ?? client).post<PostTasksResponses, PostTasksErrors, ThrowOnError>({
-    url: '/tasks',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
+  url: '/tasks',
+  ...options,
+  headers: {
+    'Content-Type': 'application/json',
+    ...options.headers
+  }
 });
 
 /**
@@ -59,12 +59,12 @@ export const postTasksByIdComplete = <ThrowOnError extends boolean = false>(opti
  * Updates a task's priority (low, medium, or high) without altering its status.
  */
 export const postTasksByIdPriority = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdPriorityData, ThrowOnError>): RequestResult<PostTasksByIdPriorityResponses, PostTasksByIdPriorityErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdPriorityResponses, PostTasksByIdPriorityErrors, ThrowOnError>({
-    url: '/tasks/{id}/priority',
-    ...options,
-    headers: {
-        'Content-Type': 'application/json',
-        ...options.headers
-    }
+  url: '/tasks/{id}/priority',
+  ...options,
+  headers: {
+    'Content-Type': 'application/json',
+    ...options.headers
+  }
 });
 
 /**

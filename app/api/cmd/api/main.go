@@ -23,6 +23,19 @@ import (
 
 const (
 	shutdownTimeout = 10 * time.Second
+
+	// HTTP server timeouts (ISSUE-010 / ISSUE-024 G112). In particular,
+	// ReadHeaderTimeout bounds how long a client may take to send
+	// request headers, which mitigates Slowloris-style attacks (many
+	// connections trickling in headers to exhaust server resources).
+	// Since this server does not stream request/response bodies,
+	// ReadTimeout and WriteTimeout can safely bound the whole
+	// request/response. Values are kept identical to app/auth's
+	// cmd/authz/main.go so the two services behave symmetrically.
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
+	writeTimeout      = 10 * time.Second
+	idleTimeout       = 60 * time.Second
 )
 
 // @title        Task Management API
@@ -67,10 +80,7 @@ func run() error {
 	svc := service.NewTaskService(repo, dupChk)
 	handler := route.NewRouter(svc)
 
-	srv := &http.Server{
-		Addr:    ":" + e.Port,
-		Handler: handler,
-	}
+	srv := newServer(":"+e.Port, handler)
 
 	serveErr := make(chan error, 1)
 	go func() {
@@ -102,6 +112,22 @@ func run() error {
 	}
 
 	return nil
+}
+
+// newServer builds the *http.Server this process listens with, setting
+// the package's four timeout constants (readHeaderTimeout/readTimeout/
+// writeTimeout/idleTimeout) so the server is never left with Go's
+// zero-value (unbounded) defaults. Extracted from run so it can be
+// unit-tested without starting a real listener.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 }
 
 // newTaskRepository builds the task.Repository selected by mode

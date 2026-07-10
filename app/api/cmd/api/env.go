@@ -10,10 +10,16 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
 )
 
+// defaultSSLMode is fail-closed ("require"): if DB_SSLMODE is left
+// unset, the connection defaults to encrypted rather than silently
+// falling back to a plaintext one (ISSUE-016 m-2). Local development
+// against a non-TLS Postgres (e.g. compose's postgres service) must
+// set DB_SSLMODE=disable explicitly (see compose.yml and this repo's
+// Makefiles, which already do so).
 const (
 	defaultPort    = "8080"
 	defaultDBPort  = "5432"
-	defaultSSLMode = "disable"
+	defaultSSLMode = "require"
 )
 
 // Env holds every environment-derived value app/api needs at startup.

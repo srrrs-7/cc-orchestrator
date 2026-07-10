@@ -15,6 +15,7 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
 
@@ -157,6 +158,18 @@ func tokenErrorCode(err error) (status int, code, description string) {
 		return http.StatusBadRequest, "invalid_request", "client_id is required"
 	case errors.Is(err, client.ErrNotFound):
 		return http.StatusBadRequest, "invalid_client", "unknown client"
+	case errors.Is(err, user.ErrNotFound):
+		// The authorization code / refresh token itself resolved
+		// successfully but the resource owner it names no longer
+		// exists (e.g. deleted after the grant was issued). RFC 6749
+		// 5.2 has no dedicated code for this; invalid_grant is the
+		// closest fit ("the ... authorization grant ... is invalid").
+		// The description intentionally mirrors the other invalid_grant
+		// cases below rather than mentioning the user, so this
+		// response is indistinguishable from an ordinary expired/
+		// already-used grant (ISSUE-019 課題 3: no user-existence
+		// oracle via /token).
+		return http.StatusBadRequest, "invalid_grant", "the authorization grant is invalid, expired, or already used"
 	case errors.Is(err, authcode.ErrNotFound),
 		errors.Is(err, authcode.ErrAlreadyConsumed),
 		errors.Is(err, authcode.ErrExpired),

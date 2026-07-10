@@ -3,8 +3,8 @@ id: SPEC-003
 title: Go⇄TypeScript 型共有基盤(OpenAPI 契約 / B2 方式)
 status: approved  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-08
-updated: 2026-07-09
-issues: [ISSUE-009, ISSUE-011, ISSUE-012, ISSUE-013]       # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-10
+issues: [ISSUE-009, ISSUE-011, ISSUE-012, ISSUE-013, ISSUE-023]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -155,3 +155,7 @@ CI: Go→yaml→TS を再生成し git diff --exit-code(ドリフト検査)
   - **ISSUE-012**(low): hey-api 生成 fetch クライアントが未使用の SSE 実装(`serverSentEvents.gen.ts` 約242行)を常に client に組み込み本番バンドルへ混入(推定 gzip 数KB)。`@hey-api/openapi-ts@0.98.2` に SSE 無効化オプションが無いバージョン制約。上流更新 / 別テンプレート検討。
   - **ISSUE-013**(low): 推移依存 `js-yaml@4.1.1` の moderate 脆弱性 GHSA-h67p-54hq-rp68(ビルド時のみ・入力はリポジトリ管理下の `openapi.yaml` で信頼済み)。上流更新待ち or `overrides`/`resolutions` 固定(bunfig 21日ゲート要確認)。
 - **ISSUE-009 を `resolved` に更新。** 本 Spec の **D2 解消(web を Go の `POST …/start`・`…/complete` に合わせる)** で状態遷移契約の cross-stack 乖離が解消したことを web 実コード・テストで検証し、R6 ドリフト検査(`.github/workflows/contract-drift.yml`)で再発を機械検出できる状態になったため。
+
+### 2026-07-10
+
+- **プロジェクト全体レビューでの契約再生成の一時的破壊と解消(ISSUE-023)。** SPEC-007(app/web の TypeScript 7 ネイティブ tsc 移行)により、本契約の web 型生成器 `@hey-api/openapi-ts@0.98.2` が TS7 の `ts.SyntaxKind` API と非互換になり `bun run generate` が失敗し、R6 ドリフト検査(`.github/workflows/contract-drift.yml`)が Go DTO 変更時に fail する状態になっていた(コミット済み生成物・typecheck・build は正常だが再生成が不能)。`@hey-api/openapi-ts` を TS7 対応の next プレリリース `0.0.0-next-20260708192938` へピン留めして解消(checker が `bun run generate` 成功・冪等 + typecheck/lint/build/test 全 pass を独立検証)。生成物は契約 `app/api/docs/openapi.yaml` 由来の型・エンドポイント内容に差分なし。stable 復帰の follow-up は ISSUE-023 / SPEC-007 経緯で追跡。frontmatter `issues` に ISSUE-023 を追加。
