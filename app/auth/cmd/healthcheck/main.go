@@ -31,6 +31,7 @@ func run() int {
 
 	client := &http.Client{Timeout: timeout}
 
+	//nolint:gosec // G704: url is operator-controlled (os.Args / HEALTHCHECK_URL env / const defaultURL above), used only by the container HEALTHCHECK self-probe; no external-injection path exists (ISSUE-021)
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: request failed: %v\n", err)

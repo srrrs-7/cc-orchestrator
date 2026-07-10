@@ -59,10 +59,24 @@ func setTokenNoCacheHeaders(w http.ResponseWriter) {
 // cannot be verified, the authorization server MUST NOT redirect the
 // user-agent and must instead inform the resource owner directly
 // (otherwise this endpoint could be abused as an open redirector to
-// an unregistered/attacker-controlled URI). AuthorizationService.Authorize
-// is intentionally structured so that exactly the errors checked by
-// isUnverifiedAuthorizeError occur before client_id/redirect_uri are
-// confirmed; every other error is safe to report via redirect.
+// an unregistered/attacker-controlled URI). This is enforced two ways:
+//
+//  1. (primary, data flow) writeAuthorizeError is always called with
+//     result.RedirectURI from AuthorizationService.Authorize, never
+//     the raw request redirect_uri (see route/authorize_handler.go).
+//     Authorize only ever populates that field once it has itself
+//     confirmed client_id/redirect_uri; every error before that point
+//     yields "" (see that function's `verified` value), so
+//     writeAuthorizeError's `redirectURI == ""` check below blocks the
+//     redirect regardless of ordering mistakes made in the future.
+//  2. (secondary, sentinel-based) isUnverifiedAuthorizeError below
+//     matches AuthorizationService.Authorize's ordering contract
+//     directly, as a second, independent gate on the same decision.
+//
+// ISSUE-004 tracks (1) as the data-flow hardening of what used to be
+// this contract's sole guard; gosec's G710 (open redirect via taint
+// analysis) is satisfied by (1) since redirectURI here is no longer
+// sourced from the raw, request-derived string.
 
 // isUnverifiedAuthorizeError reports whether err occurred before the
 // client_id/redirect_uri were confirmed valid.

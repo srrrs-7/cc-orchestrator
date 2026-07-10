@@ -78,7 +78,7 @@ gosec のセキュリティ静的解析が、リポジトリの品質ゲート(`
 - [x] gosec 有効化方式を決める(golangci-lint の `.golangci.yml` で gosec を enable / gosec 単体を lint・CI に追加)→ per-stack の `.golangci.yml`(v1 スキーマ = CI pin 1.64.8 対応)で `gosec` + `nolintlint` を有効化
 - [x] app/api・app/auth・app/migrator の 3 スタックで gosec が実行される状態にする(設定の共有 or スタック別配置を決定)→ スタック別配置(各スタック直下に `.golangci.yml`)
 - [x] `make lint` および `.github/workflows/cicd.yml` で gosec が回ることを確認する(設定ファイルを既存経路が自動で拾う)
-- [ ] 既存の gosec 由来 Issue(ISSUE-021 G704 / ISSUE-010 G112 / ISSUE-004 G710)の指摘が新設定で再現し、各 Issue の対応が「解消 / 抑制済み」と判定できることを確認する → **部分達成**: G112 のみ再現・解消(ISSUE-010)。G704 / G710 は CI pin 1.64.8 の gosec に該当ルールが無く再現不可(ISSUE-021 / ISSUE-004 は open 継続。下記経緯・follow-up 参照)
+- [x] 既存の gosec 由来 Issue(ISSUE-021 G704 / ISSUE-010 G112 / ISSUE-004 G710)の指摘が新設定で再現し、各 Issue の対応が「解消 / 抑制済み」と判定できることを確認する → **達成**: G112 は 1.64.8 で再現・解消(ISSUE-010)。G704 / G710 は v2 follow-up(golangci-lint pin を 2.12.2 へ更新 + config を v2 スキーマへ移行)で再現・機械検出できる状態にし、ISSUE-021(G704: 根拠付き `//nolint:gosec` 抑制)/ ISSUE-004(G710: 実装修正で nolint 無し解消)として解消済み(下記経緯参照)
 - [x] `#nosec` による抑制を許す場合、抑制には必ず理由コメントを付ける運用(ISSUE-021 の方針と整合)を明記する → `nolintlint`(`require-explanation` / `require-specific` / `allow-unused: false`)で機械強制
 
 ### 再発防止
@@ -112,3 +112,13 @@ gosec のセキュリティ静的解析が、リポジトリの品質ゲート(`
   - **ISSUE-004**(G710 open-redirect): 1.64.8 の gosec では非検出(G710 不在)。機械強制には v2 系更新か型による不変条件強制が必要なため **open 維持**。
 - follow-up(本 Issue の resolved 後に残るフォロー。必要時に別途起票 or 上記 Issue で追跡): golangci-lint pin を v2 系へ更新 →(a)config を v2 スキーマへ移行(b)再出現する G704 / G710 を ISSUE-021 / ISSUE-004 の方針で抑制 or 実修正(c)ローカル / CI の golangci-lint バージョン整合の周知。
 - ステータスを **resolved** に更新。判定根拠: gosec を 3 スタックの lint / CI に恒久組み込みし、1.64.8 で gosec 0 件 green(G112 は実修正で解消)を検証できたため。resolved のスコープは「gosec の恒久統合と 1.64.8 での回帰検出基盤の確立」であり、G704 / G710 の機械検出は 1.64.8 の gosec の能力外である旨を上記に明記した(follow-up として追跡)。`updated` を 2026-07-10 に更新。
+
+### 2026-07-10(v2 follow-up 完了: golangci-lint pin を 2.12.2 へ更新・config を v2 スキーマへ移行し G704 / G710 を gosec ゲートに有効化 / resolved 維持)
+
+- **v2 follow-up 完了。** 前エントリで残した follow-up を実施した。CI の golangci-lint pin を **1.64.8 → 2.12.2**(`.github/workflows/cicd.yml`)に更新し、3 スタック(app/api / app/auth / app/migrator)の `.golangci.yml` を **v1 → v2 スキーマ**へ移行した。これにより 1.64.8 では存在しなかった taint 解析系ルール(**G704 SSRF / G710 open-redirect**)が gosec ゲートで有効化された(前エントリで記録した「1.64.8 の gosec は G704 / G710 を持たない」制約の解消)。
+- v2 baseline の実測結果と対応(すべて **v2.12.2** で計測):
+  - **app/api = healthcheck の G704 のみ**。運用者制御 URL による偽陽性評価を根拠に、根拠付き `//nolint:gosec` で抑制(ISSUE-021)。
+  - **app/auth = healthcheck の G704**(同じく `//nolint:gosec` 抑制、ISSUE-021)+ **`/authorize` の G710**。G710 は **実装修正で解消し nolint は付けていない**(ISSUE-004 参照)。
+  - **app/migrator = 0 件**(`CREATE DATABASE` は gosec の DML keyword regex の対象外)。
+- checker が 3 スタックの `make check` green・gosec **0 件**を **v2.12.2** で確認。これで「1.64.8 では未検出だった SSRF / open-redirect も active な gosec ゲート下に入った」状態になり、**ISSUE-021 / ISSUE-004 の機械検出の前提が整った**(両 Issue はこの follow-up 上で解消判定できるようになった)。
+- ステータスは **resolved** を維持(本 Issue のスコープ = gosec の恒久統合と回帰検出基盤の確立は前エントリで達成済みで、本エントリはその follow-up の完了報告)。`updated` は 2026-07-10。

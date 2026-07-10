@@ -1,7 +1,7 @@
 ---
 id: ISSUE-004
 title: /authorize エラーリダイレクトのオープンリダイレクト不変条件がコメント規約のみで担保されている(型 or 回帰テストで機械強制すべき)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
 updated: 2026-07-10
@@ -72,10 +72,10 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 
 ### 実施内容
 
-- [ ] 不変条件の機械強制方式(型 / 回帰テスト)を決定する
-- [ ] (A の場合)検証済み redirect_uri を型で表現し、リダイレクト経路を型で縛る
-- [ ] (B の場合)検証前 sentinel を全列挙し、未検証エラーが redirect されないことを検証する回帰テストを追加する
-- [ ] gosec G710 相当の検出について、対応後の状態(抑制の妥当性 or 解消)を記録する
+- [x] 不変条件の機械強制方式(型 / 回帰テスト)を決定する → `Authorize` が検証成功後にのみ `AuthorizeResult{RedirectURI: <検証済み値>}` を返す構造化 + 回帰テスト(B)で機械強制する方式を採用
+- [ ] (A の場合)検証済み redirect_uri を型で表現し、リダイレクト経路を型で縛る → 未採用(任意ハードニング。severity low・実害なしのため必須ではない旨を経緯に明記)
+- [x] (B の場合)検証前 sentinel を全列挙し、未検証エラーが redirect されないことを検証する回帰テストを追加する → `route/authorize_open_redirect_test.go`(未検証エラーは攻撃者 URI へリダイレクトしない×4 / 検証済みは登録 URI へリダイレクト×1)を追加し全 pass
+- [x] gosec G710 相当の検出について、対応後の状態(抑制の妥当性 or 解消)を記録する → gosec v2(2.12.2)の G710 が **nolint 無しで消える**ことを実測(実装修正で解消)
 
 ### 再発防止
 
@@ -106,3 +106,16 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - 不変条件(「未検証の redirect_uri へはリダイレクトしない」)は従来どおり **コメント規約 + コードの検証順序**(`Authorize` で client_id / redirect_uri を先に検証 / `isUnverifiedAuthorizeError` の sentinel 列挙)で担保されており、**機械強制は未達**。現行実装は正しく実害はない点も不変。
 - **open 維持**。理由: 機械強制には (1) golangci-lint を v2 系へ更新して G710 を有効化(ISSUE-024 の follow-up)し根拠付き `//nolint:gosec` 抑制 or 実修正する、または (2) 検証済み redirect_uri を専用型で表す等の不変条件の実装(対応方針 A)のいずれかが必要。方針(A: 型で表現 / B: 回帰テスト)は変更なし。ISSUE-024 の follow-up と併せて判断する。severity は low のまま。
 - ステータスは `open` のまま。`updated` は 2026-07-10。
+
+### 2026-07-10(open-redirect 不変条件をコメント規約から機械強制へ引き上げて解消 / gosec v2 G710 が nolint 無しで消えることを実測 / resolved)
+
+- **open-redirect 不変条件をコメント規約から機械強制へ引き上げて解消した。** 実装修正の要点:
+  - `AuthorizationService.Authorize` は client_id / redirect_uri の検証成功後にのみ `AuthorizeResult{RedirectURI: <検証済み値>}` を返す(検証前に発生したエラーでは `RedirectURI` は空文字列)。リダイレクト先の「検証済みであること」を戻り値の構造で表現する。
+  - `route/authorize_handler.go` は生の `req.RedirectURI` ではなく `result.RedirectURI`(= サービス層が検証済みとして返した値)を使ってリダイレクトする。未検証のユーザー入力がリダイレクト経路に直接流れない。
+  - `writeAuthorizeError` は `redirectURI == "" || isUnverifiedAuthorizeError(err)` の二重ガードで、検証前エラー・空 URI のときは redirect せず直接エラーを返し、安全側に倒れる。
+- 検証:
+  - gosec **v2**(ISSUE-024 の v2 follow-up で有効化した 2.12.2)の **G710 が nolint 無しで消える**ことを実測(抑制ではなく構造的な解消)。
+  - tester が回帰テスト `route/authorize_open_redirect_test.go` を追加(未検証エラーは攻撃者 URI へリダイレクトしない ×4 / 検証済みは登録 URI へリダイレクトする ×1)し、全 pass。検証順序を将来崩すとこのテストが落ちる。
+  - review-security が Blocker / Major 0・「不変条件は構造的に担保」と結論。
+- 残る任意ハードニング(**候補 A**: 検証済み redirect_uri を専用型 `VerifiedRedirectURI` で表しコンパイル時に強制)は、severity **low**・実害なしのため **必須ではない**。将来の任意改善として記録するにとどめる(本 Issue のクローズ条件には含めない)。
+- **ステータスを `resolved` に更新。** 判定根拠: 不変条件を「戻り値の構造 + 回帰テスト + gosec v2 の G710 消失」で機械的に担保し(コメント規約依存を脱した)、review-security の Blocker/Major 0 で検証できたため。severity は **low** のまま(元々現行実害はなく、予防的ハードニングを完了したもの)。`updated` は 2026-07-10。

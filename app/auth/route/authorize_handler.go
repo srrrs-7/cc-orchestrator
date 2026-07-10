@@ -47,12 +47,15 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Authorize(r.Context(), req)
 	if err != nil {
-		// req.RedirectURI/req.State are the *raw, unvalidated* request
-		// values; writeAuthorizeError only ever redirects to
-		// req.RedirectURI once AuthorizationService.Authorize itself
-		// has confirmed it is a registered redirect_uri for a known
-		// client (see that function's ordering contract).
-		writeAuthorizeError(w, r, req.RedirectURI, req.State, err)
+		// result.RedirectURI (not the raw req.RedirectURI) is used here:
+		// AuthorizationService.Authorize only ever populates it once it
+		// has itself confirmed redirect_uri is registered for a known
+		// client, and leaves it empty for every error that occurs before
+		// that point (see that function's ordering contract and its
+		// verified value). writeAuthorizeError additionally still gates
+		// on isUnverifiedAuthorizeError(err) as a second, independent
+		// check.
+		writeAuthorizeError(w, r, result.RedirectURI, req.State, err)
 		return
 	}
 

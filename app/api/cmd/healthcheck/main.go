@@ -31,6 +31,13 @@ func run() int {
 
 	client := &http.Client{Timeout: timeout}
 
+	//nolint:gosec // G704: url is operator-controlled (os.Args[1] ->
+	// HEALTHCHECK_URL env -> the const defaultURL, in that order) and
+	// is used only for this container's own Docker HEALTHCHECK
+	// self-probe. There is no path for an external inbound request to
+	// influence this value (ISSUE-021; re-detected under golangci-lint
+	// 2.12.2's gosec as part of the v1->v2 config migration, ISSUE-024
+	// follow-up).
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "healthcheck: request failed: %v\n", err)

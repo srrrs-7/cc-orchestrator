@@ -83,10 +83,17 @@ func NewAuthorizationService(
 // if the client or the redirect_uri cannot be verified, the error
 // MUST be shown to the resource owner directly rather than via
 // redirect, since redirecting to an unverified/unregistered URI would
-// make this endpoint an open redirector. Every error returned after
-// that point is intentionally safe to report via a redirect to
-// redirectURI (see route/response.go, which uses this exact ordering
-// contract to decide "direct error" vs "redirect with error").
+// make this endpoint an open redirector. This is enforced by data
+// flow, not just by ordering: the returned AuthorizeResult.RedirectURI
+// is the zero value ("") for every error above this point, and is
+// only ever populated (with the exact string ValidateRedirectURI just
+// confirmed) once client_id/redirect_uri are verified -- see `verified`
+// below. route/authorize_handler.go's error path redirects only using
+// this returned value (never the raw, unvalidated request
+// redirect_uri), so an unverified error cannot carry a non-empty
+// redirect target regardless of ordering mistakes made in the future
+// (ISSUE-004; route/response.go's isUnverifiedAuthorizeError remains a
+// second, independent check on top of this).
 func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
 	cid, err := client.ParseClientID(req.ClientID)
 	if err != nil {
@@ -106,36 +113,49 @@ func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeReque
 	}
 
 	// --- client_id and redirect_uri are now verified. ---
+	//
+	// verified carries redirectURI.String() -- the exact string that
+	// ValidateRedirectURI just confirmed matches one of the client's
+	// registered redirect URIs (client.RedirectURI.String() returns its
+	// value unchanged, so this is byte-for-byte the value validated
+	// above, not a normalized/re-derived one). Every error return past
+	// this point uses verified instead of the zero-value AuthorizeResult{}
+	// used above, so route/authorize_handler.go's error path always
+	// receives a redirect_uri that came from Authorize itself having
+	// already confirmed it, rather than reaching for the raw request
+	// value directly (see writeAuthorizeError in route/response.go,
+	// gosec G710 rationale, ISSUE-004).
+	verified := AuthorizeResult{RedirectURI: redirectURI.String()}
 
 	if req.ResponseType != responseTypeCode || !c.SupportsResponseType(responseTypeCode) {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", client.ErrUnsupportedResponseType)
+		return verified, fmt.Errorf("service: authorize: %w", client.ErrUnsupportedResponseType)
 	}
 
 	scope, err := authcode.ParseScope(req.Scope)
 	if err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 	for _, v := range scope.Values() {
 		if v == authcode.ScopeOpenID {
 			continue
 		}
 		if !c.AllowsScope(v) {
-			return AuthorizeResult{}, fmt.Errorf("service: authorize: scope %q not permitted: %w", v, authcode.ErrInvalidScope)
+			return verified, fmt.Errorf("service: authorize: scope %q not permitted: %w", v, authcode.ErrInvalidScope)
 		}
 	}
 
 	method, err := authcode.ParseCodeChallengeMethod(req.CodeChallengeMethod)
 	if err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 	challenge, err := authcode.NewCodeChallenge(req.CodeChallenge, method)
 	if err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 
 	owner, err := s.resolveOwner(ctx, req.LoginHint)
 	if err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 
 	ac, err := authcode.New(
@@ -147,10 +167,10 @@ func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeReque
 		challenge,
 	)
 	if err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 	if err := s.authCodes.Save(ctx, ac); err != nil {
-		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
+		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 
 	return AuthorizeResult{

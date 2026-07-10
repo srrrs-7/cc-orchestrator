@@ -1,7 +1,7 @@
 ---
 id: ISSUE-021
 title: healthcheck バイナリの client.Get に SSRF 検出(gosec G704)— 悪用可能性の検証と抑制/制限が必要
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-10
 updated: 2026-07-10
@@ -81,11 +81,11 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 
 ### 実施内容
 
-- [ ] healthcheck の URL 入力に外部注入経路が実在するかを検証する(impl-api / impl-auth)
-- [ ] 偽陽性なら `#nosec G704` + 根拠コメントで抑制、実在するなら scheme/host 制限を追加する
-- [ ] api・auth の両 healthcheck に同一対応を適用する
-- [ ] (制限を入れる場合)許可/拒否 URL のテストを追加する(tester)
-- [ ] gosec スキャンで G704 が解消/抑制されたことを確認する(checker / review-security)
+- [x] healthcheck の URL 入力に外部注入経路が実在するかを検証する(impl-api / impl-auth)→ 偽陽性と評価(URL は `os.Args[1]` → `HEALTHCHECK_URL` env → 定数 `defaultURL` の順で運用者制御。外部インバウンドからの注入経路なし)
+- [x] 偽陽性なら `#nosec G704` + 根拠コメントで抑制、実在するなら scheme/host 制限を追加する → 偽陽性のため理由付き `//nolint:gosec`(nolintlint の require-explanation / require-specific を満たす)で抑制
+- [x] api・auth の両 healthcheck に同一対応を適用する → app/api・app/auth 双方の `cmd/healthcheck/main.go` に適用
+- [ ] (制限を入れる場合)許可/拒否 URL のテストを追加する(tester)→ 該当なし(抑制のみで挙動不変のため不要)
+- [x] gosec スキャンで G704 が解消/抑制されたことを確認する(checker / review-security)→ gosec v2.12.2 で 0 件を確認(ISSUE-024 の v2 follow-up)
 
 ### 再発防止
 
@@ -109,3 +109,10 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - runtime 評価は据え置き: URL 入力は運用者制御(`os.Args[1]` / `HEALTHCHECK_URL` env / 固定の `defaultURL`)で、外部からの注入経路が現状のコードに見当たらないという偽陽性の心証(2026-07-10 起票時の評価)は変更なし。
 - **open 維持**。理由: 機械検出したい場合は golangci-lint を v2 系へ上げる必要があり(ISSUE-024 の follow-up)、その際に根拠付き `//nolint:gosec`(理由コメント付き抑制)または scheme/host 制限の実修正を判断する。severity は low のまま(検出ツールの制約が判明しただけで、悪用可能性の評価自体は変わっていないため)。
 - ステータスは `open` のまま。`updated` は 2026-07-10。
+
+### 2026-07-10(gosec v2.12.2 で G704 が検出される状態にした上で偽陽性評価 + 根拠付き nolint 抑制により解消 / resolved)
+
+- ISSUE-024 の v2 follow-up で golangci-lint pin を **2.12.2** に更新し config を v2 スキーマへ移行したことで、healthcheck の `client.Get(url)`(`app/api/cmd/healthcheck/main.go` / `app/auth/cmd/healthcheck/main.go`)が gosec **G704** として検出される状態になった(前エントリで記録した「1.64.8 では非検出」制約の解消)。
+- その **検出可能な状態の上で**、URL が運用者制御(`os.Args[1]` → `HEALTHCHECK_URL` env → 定数 `defaultURL` の順で決まり、外部インバウンドからの注入経路が現状のコード・配線上に無い)で偽陽性であるという評価を根拠に、app/api・app/auth 双方の `cmd/healthcheck/main.go` に **理由付き `//nolint:gosec`**(nolintlint の `require-explanation` / `require-specific` を満たす)を付与して抑制した。2 ファイルへ同一対応を適用し非対称を作らない方針も満たす。
+- 検証: gosec v2.12.2 下で該当箇所の G704 が抑制され、checker が 3 スタック `make check` green・gosec 0 件を確認(ISSUE-024)。抑制の根拠(なぜ安全か)はコード上のコメントに残り、将来の監査で追える。
+- **ステータスを `resolved` に更新。** 判定根拠: 検出可能な gosec ゲート下での偽陽性評価済み + 明示抑制(根拠コメント付き)により、本 Issue の目的(悪用可能性の判定と抑制の根拠づけ)を達成したため、クローズ相当。severity は **low** のまま(悪用可能性の評価は起票時から不変で、検出ツール制約が解消され抑制を根拠付きで確定できたことによる状態変化)。`updated` は 2026-07-10。
