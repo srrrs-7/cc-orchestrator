@@ -40,7 +40,8 @@ clean: ## 停止・コンテナ・volume を削除する
 	$(COMPOSE) down -v
 
 # ---------------------------------------------------------------------------
-# ローカル Postgres(SPEC-005。2026-07-09 リファクタ: 別データベース + app/migrator)
+# ローカル Postgres(SPEC-005。2026-07-09 リファクタ: 別データベース + app/migrator。
+# 2026-07-10 SPEC-009 Phase B: `migrate` の実行環境をコンテナ化)
 #
 # api/auth はどちらも起動時に DB_HOST の有無で永続化先を選ぶ fail-closed な
 # 配線になっている(app/{api,auth}/infra/postgres/db.go の SelectMode)。
@@ -56,35 +57,118 @@ clean: ## 停止・コンテナ・volume を削除する
 # 適用する。DB_NAME は migrator の既定(-target と同名: api/auth)に任せ、
 # 接続先(host/port/user/password/sslmode)だけをローカル compose の postgres
 # に合わせて明示する(app/api・app/auth Makefile の DB_* 既定と同じ値)。
-#
-# `go run ./app/migrator` はこの実行にホストの Go ツールチェーンを要求する
-# (app/api・app/auth の `make check` 等と同じ前提)。docker のみで完結しない
-# 点に注意。
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Containerized toolchain wiring (SPEC-009 Phase B; foundation built in
+# Phase A: docker/toolchain/, compose.tools.yml, versions.env). `migrate`
+# below and `deploy-web`'s `bun run build` step (further down) previously
+# shelled out to a *host* language runtime (`go`/`bun`) -- both are
+# wrapped here to run inside the pinned toolchain image instead. `build`/
+# `up`/`up-d`/`down`/`logs`/`ps`/`restart`/`clean`, and `push-images`'s
+# `docker buildx` image build, are plain docker/compose *operations*, not
+# language-toolchain invocations, so they need no such wrapping (SPEC-009
+# plan §手順 フェーズ B). `db-up` is the one partial exception among these
+# "plain operation" targets: it still only ever starts the `postgres`
+# service (no toolchain container involved), but -- see COMPOSE_DB_FILES
+# just below -- its *compose file combination* must be aligned with
+# `migrate`'s, for a network-consistency reason unrelated to toolchain
+# wrapping itself.
+TOOLBOX_UID := $(shell id -u)
+TOOLBOX_GID := $(shell id -g)
+# TOOLBOX_UID/TOOLBOX_GID must be real *shell* environment variables --
+# not `-e` flags on `docker compose run` -- for compose.tools.yml's
+# `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"` to resolve at
+# container-creation time (see that file's own header comment on why
+# `-e`, which only sets a variable *inside* the already-created
+# container, is too late). Prefixing each invocation below achieves this
+# without a persistent `export`.
+TOOLBOX_ENV := TOOLBOX_UID=$(TOOLBOX_UID) TOOLBOX_GID=$(TOOLBOX_GID)
+
+# Compose file combination shared by `db-up` below and `migrate`'s
+# DB_TOOLS_RUN further down: both MUST resolve to the *exact same*
+# docker-compose project config (same `--env-file`, same `-f ... -f ...`
+# file list), so that the CLI computes an identical config hash for the
+# implicit default network on every invocation.
+#
+# Observed empirically during Phase B implementation: `db-up` originally
+# ran bare `$(COMPOSE) up -d --wait postgres` (compose.yml alone), while
+# `migrate` (via DB_TOOLS_RUN) ran `-f compose.yml -f compose.tools.yml`.
+# Even though neither file declares an explicit top-level `networks:`
+# (both rely on the same implicit `<project>_default` network, and the
+# project name is identical either way -- derived from this directory,
+# no COMPOSE_PROJECT_NAME override), docker compose detected the config
+# mismatch between these two *separate* invocations and recreated the
+# default network for the second one: the already-running `postgres`
+# container (attached under the first invocation's network object)
+# stayed attached to the now-orphaned old network, while `migrate`'s new
+# `tools` container joined the freshly recreated one -- same network
+# *name*, different object underneath, so the two could no longer reach
+# each other by service name (`DB_HOST=postgres` resolution failed).
+#
+# Aligning `db-up` to this exact same file combination removes the
+# mismatch: both invocations now hash identically, so no recreation
+# happens between them and `migrate` can resolve `postgres` by name.
+#
+# `up`/`up-d` do NOT need this same treatment and are left on plain
+# compose.yml (see those targets' own recipes above): unlike the
+# `db-up` → (separate) `migrate` pair, `up`/`up-d`'s `$(COMPOSE) up
+# --build` brings up postgres/api/auth/web together in one single
+# reconciled invocation -- if docker compose needs to recreate the
+# network at that point, it does so as part of that same invocation and
+# reconnects all four containers to it together, so no split-network
+# state can persist by the time it finishes. The bug above was
+# specifically about two *separate* invocations (`db-up` alone, then
+# `migrate` alone) disagreeing with each other; `up`/`up-d` never split
+# postgres's startup from api/auth/web's this way.
+COMPOSE_DB_FILES := --env-file $(CURDIR)/versions.env -f compose.yml -f compose.tools.yml
 
 .PHONY: db-up
-db-up: ## postgres のみを起動し healthy になるまで待つ
-	$(COMPOSE) up -d --wait postgres
+db-up: ## postgres のみを起動し healthy になるまで待つ(migrate と同じ compose ファイル構成で network 整合を保つ)
+	$(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) up -d --wait postgres
 
-MIGRATOR_DB_ENV := DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=app DB_PASSWORD=app DB_SSLMODE=disable
+# `tools` (network enabled), merged with this same file's own
+# compose.yml so the container can reach its `postgres` service by name.
+# Used only by `migrate` below -- the one root-Makefile phase that needs
+# a real Postgres (SPEC-009 plan's network-要否 table: "root make
+# migrate(app/migrator 実行)" row is a `tools`(+compose.yml) exception,
+# not `tools-offline`). Shares COMPOSE_DB_FILES with `db-up` above so
+# both resolve to the identical compose project config (see that
+# variable's own comment for why this matters).
+DB_TOOLS_RUN := $(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) run --rm
 
-# `go run ./app/migrator/cmd/migrator` cannot be invoked from this (root)
-# directory: app/migrator has its own go.mod (an independent module,
-# deliberately not part of a workspace with app/api/app/auth -- plan
-# §RF.1.2/§RF.1.3 "goose の閉じ込め"), and this repo root has no go.mod
-# of its own for Go to resolve a "main module" from. `go -C app/migrator
-# run ./cmd/migrator` runs in app/migrator's own module context instead
-# (cmd/migrator is app/migrator's composition root, a DDD-layered
-# module like app/api/cmd/api and app/auth/cmd/authz); -migrations-dir
-# is passed as an absolute path ($(CURDIR)-rooted) so it resolves
-# correctly regardless of that directory change.
+# `tools-offline` (network_mode: none). Used only by `deploy-web` below,
+# to run `bun run build` -- an exec-phase command per the SPEC-009 plan's
+# network-要否 table (no network needed once app/web's dependencies are
+# already installed via a prior `bun install`).
+TOOLS_OFFLINE_RUN := $(TOOLBOX_ENV) $(COMPOSE) --env-file $(CURDIR)/versions.env -f compose.tools.yml run --rm
+
+MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
+
+# `go run ./cmd/migrator` now runs *inside* the `tools` container above
+# (DB_TOOLS_RUN), with `-w /workspace/app/migrator` as its working
+# directory -- app/migrator's own go.mod-rooted module, reached this way
+# instead of the previous host-side `go -C app/migrator run ...` (this
+# repo root has no go.mod of its own, so `-C`/`-w` into app/migrator's
+# module context is still required; only *where* that `go run` executes
+# has changed). `-migrations-dir` is therefore rooted at /workspace (the
+# container's bind-mounted view of this repo, per compose.tools.yml),
+# not $(CURDIR) (the host's view) -- app/api's and app/auth's
+# db/migrations directories are bind-mounted at exactly
+# /workspace/app/{api,auth}/db/migrations. DB_HOST=postgres (a compose
+# service *name*, not 127.0.0.1) because this container joins the
+# postgres service's own compose network via the `-f compose.yml -f
+# compose.tools.yml` file overlay above, rather than reaching it through
+# compose.yml's host-published 127.0.0.1:5432 port the previous
+# host-side `go run` used.
 .PHONY: migrate
-migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行)
-	$(MIGRATOR_DB_ENV) go -C app/migrator run ./cmd/migrator -target api -migrations-dir $(CURDIR)/app/api/db/migrations
-	$(MIGRATOR_DB_ENV) go -C app/migrator run ./cmd/migrator -target auth -migrations-dir $(CURDIR)/app/auth/db/migrations
+migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行。toolchain コンテナ内で go を実行し、postgres へは compose ネットワーク越しに到達する)
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/db/migrations
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/db/migrations
 
 # ---------------------------------------------------------------------------
-# AWS デプロイ(build-push)ツーリング(SPEC-004)
+# AWS デプロイ(build-push)ツーリング(SPEC-004。2026-07-10 SPEC-009 Phase B:
+# deploy-web の build ステップをコンテナ化)
 #
 # 前提: app/iac/envs/dev が `terraform apply` 済みで、実行環境に AWS 認証情報
 # (`aws configure` 等)が設定されていること。ECR リポジトリ URL・S3 バケット名・
@@ -94,6 +178,15 @@ migrate: db-up ## api/auth のデータベースをローカル compose の post
 # apply 済み + AWS 認証情報が前提のため、agent はこれらのターゲットを実行
 # しない(手動実行前提)。ARM64 を明示指定するのは、amd64 で誤ビルドすると
 # ECS の ARM64 タスク定義でコンテナが起動できない不具合(ISSUE-014)を防ぐため。
+#
+# SPEC-009 R7 (build=コンテナ / aws=host の分割): `push-images` はもともと
+# `docker buildx build`(app/*/Dockerfile。app のビルド用イメージで、この
+# SPEC のスコープ外)と `aws ecr`/`docker login` のみで、host の言語
+# ランタイム(go/bun)を直接叩く箇所が無いため変更不要。`deploy-web` だけは
+# `bun run build` を host の bun で実行していたため、その 1 ステップのみ
+# toolchain コンテナ(`tools-offline`)へ切り出す。どちらのターゲットも
+# `aws s3`/`aws cloudfront`/`aws ecr`/`docker login`/`docker buildx` は
+# 引き続き host 実行のまま(AWS 認証情報を toolchain コンテナに渡さない)。
 # ---------------------------------------------------------------------------
 
 AWS_REGION ?= ap-northeast-1
@@ -110,7 +203,7 @@ push-images: ## api/auth イメージを ARM64 で ECR に build & push する(a
 	docker buildx build --platform linux/arm64 --push -t "$$auth_repo:$(IMAGE_TAG)" app/auth
 
 .PHONY: deploy-web
-deploy-web: ## web を build して S3 sync + CloudFront invalidation する(apply 済み + AWS 認証情報が前提。agent は実行しない・手動実行前提)
-	cd app/web && bun run build
+deploy-web: ## web を build(toolchain コンテナの tools-offline 経由)して S3 sync + CloudFront invalidation する(apply 済み + AWS 認証情報が前提。agent は実行しない・手動実行前提)
+	$(TOOLS_OFFLINE_RUN) -w /workspace/app/web tools-offline bun run build
 	aws s3 sync app/web/dist "s3://$$(terraform -chdir=$(TF_ENV_DIR) output -raw web_bucket_name)" --delete
 	aws cloudfront create-invalidation --distribution-id "$$(terraform -chdir=$(TF_ENV_DIR) output -raw cloudfront_distribution_id)" --paths '/*'

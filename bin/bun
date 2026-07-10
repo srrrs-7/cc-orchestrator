@@ -1,0 +1,87 @@
+#!/bin/sh
+# bin/bun -- transparent host-side shim for `bun` (SPEC-009 Phase B).
+#
+# Lets `bun run <script>` / `bun install` / etc. keep working exactly as
+# documented in .claude/rules/web.md's command table -- app/web/package.json's
+# scripts are UNCHANGED -- while requiring NO bun installation on the host at
+# all: every invocation is delegated to the containerized toolchain built
+# from docker/toolchain/Dockerfile (see ../versions.env for the pinned
+# BUN_VERSION and ../compose.tools.yml for the `tools` / `tools-offline`
+# service definitions this shim dispatches to).
+#
+# Setup (one-time, per docs/plans/SPEC-009-plan.md
+# "web の透過ラッパー(bin/bun シム)"): put this repo's `bin/` directory at the
+# FRONT of your PATH, e.g. in ~/.zshrc / ~/.bashrc:
+#
+#   export PATH="/absolute/path/to/this/repo/bin:$PATH"
+#
+# so a plain `bun ...` (run from app/web, as already documented) resolves to
+# this script instead of a host-installed bun binary. Nothing else changes:
+# `cd app/web && bun run typecheck` / `bun install` etc. keep working
+# verbatim, with no host bun/node toolchain required.
+#
+# Dispatch:
+#   - Already inside the toolbox (IN_TOOLBOX is set by compose.tools.yml's
+#     service `environment:` block): exec the real bun baked into the
+#     image directly, so a script invoked *inside* a running toolbox
+#     container (e.g. a Makefile target that itself shells out to `bun`)
+#     never tries to re-enter `docker compose run` from within a container
+#     that is already the target.
+#   - On the host: delegate to `docker compose run`, picking the service by
+#     the first argument. Dependency-fetching subcommands (install / add /
+#     remove / update / pm) need the network and go through `tools`;
+#     everything else -- `run <script>` (typecheck / lint / format / test /
+#     build / generate; `generate` only reads the local
+#     ../api/docs/openapi.yaml, no network needed) -- is an exec-phase
+#     command and goes through `tools-offline` (network_mode: none), per
+#     the plan's network cutover table.
+set -e
+
+if [ -n "$IN_TOOLBOX" ]; then
+  exec /usr/local/bin/bun "$@"
+fi
+
+# Resolve the repo root from this script's own location (bin/bun lives in
+# <repo-root>/bin), independent of the caller's cwd and symlink-safe (in
+# case bin/bun itself is symlinked from elsewhere on PATH).
+SCRIPT="$0"
+while [ -h "$SCRIPT" ]; do
+  DIR=$(cd -P "$(dirname "$SCRIPT")" && pwd)
+  SCRIPT=$(readlink "$SCRIPT")
+  case "$SCRIPT" in
+    /*) ;;
+    *) SCRIPT="$DIR/$SCRIPT" ;;
+  esac
+done
+BIN_DIR=$(cd -P "$(dirname "$SCRIPT")" && pwd)
+ROOT=$(cd -P "$BIN_DIR/.." && pwd)
+
+# Dependency-fetching subcommands need the network (lockfile + sha512 +
+# bunfig.toml's minimumReleaseAge remain the first line of defense there,
+# per .claude/rules/web.md); everything else is an offline exec phase.
+case "$1" in
+  install | add | remove | update | pm) SERVICE=tools ;;
+  *) SERVICE=tools-offline ;;
+esac
+
+# TOOLBOX_UID/TOOLBOX_GID must be *exported shell env vars*, not `-e`
+# flags to `docker compose run`: compose.tools.yml's `user:` field is
+# resolved by compose itself (from its own process environment / the
+# --env-file) before the container is even created, at which point a `-e`
+# flag would be too late to take effect (see compose.tools.yml's own
+# header comment on this).
+export TOOLBOX_UID="$(id -u)"
+export TOOLBOX_GID="$(id -g)"
+
+# Prefer the `docker compose` CLI plugin (v2, used throughout this repo's
+# SPEC-009 docs); fall back to the standalone `docker-compose` binary for
+# hosts that only have that installed (same fallback the repo root
+# Makefile already uses for the same reason).
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE="docker compose"
+else
+  COMPOSE="docker-compose"
+fi
+
+exec $COMPOSE --env-file "$ROOT/versions.env" -f "$ROOT/compose.tools.yml" \
+  run --rm -w /workspace/app/web "$SERVICE" bun "$@"

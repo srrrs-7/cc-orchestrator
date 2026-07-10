@@ -1,78 +1,212 @@
 .DEFAULT_GOAL := help
 
-GOIMPORTS := go run golang.org/x/tools/cmd/goimports@latest
+# ---------------------------------------------------------------------------
+# SPEC-009 Phase B: containerized toolchain wrapper.
+#
+# Every public target below (fmt/fmt-check/lint/vet/build/test/test-race/
+# check/run/test-integration) keeps its pre-SPEC-009 name and behaviour
+# (R4: the command contract does not change) but, when invoked on the
+# host, transparently re-runs itself inside the pinned toolchain image
+# (docker/toolchain, compose.tools.yml) instead of shelling out to a
+# host-installed go/golangci-lint. The actual recipes live in the
+# `-native` targets guarded by `ifdef IN_TOOLBOX` below; that variable is
+# already exported as a container env var by compose.tools.yml's
+# x-tools-env anchor for both the `tools` and `tools-offline` services,
+# so a `-native` target never re-wraps itself into a second, nested
+# `docker compose run` when it executes inside the container that set it.
+#
+# See docs/plans/SPEC-009-plan.md "Makefile 透過ラッパーの形" and
+# .claude/rules/db.md for the command/network contract this follows.
+# ---------------------------------------------------------------------------
 
-# SPEC-005 2026-07-09 refactor (plan §RF.1.2/§RF.6.2 RF-e): this module
-# runs goose as a *library* dependency (require in go.mod), unlike
-# app/api and app/auth's Makefiles, which invoke it as a `go run
-# pkg@version` CLI kept out of their go.mod entirely. GOOSE_VERSION
-# here is a comment-only cross-reference, not a variable this Makefile
-# actually uses -- go.mod's `require github.com/pressly/goose/v3` line
-# is this module's single source of truth for the version actually
-# built into the migrator binary. Keep the two in sync: bump go.mod
-# (`go get github.com/pressly/goose/v3@<new version>`) and this
-# comment together, and bump app/{api,auth}/Makefile's own
-# GOOSE_VERSION (used only by their migrate-create CLI target) to
-# match, so every goose invocation across the repo stays on one
-# version.
-GOOSE_VERSION := v3.24.1 # must match go.mod's github.com/pressly/goose/v3 require and app/{api,auth}/Makefile's GOOSE_VERSION
+REPO_ROOT := $(shell git rev-parse --show-toplevel)
+include $(REPO_ROOT)/versions.env
+
+MODULE_DIR := app/migrator
+
+# docker compose (プラグイン) があればそれを使い、無ければ standalone
+# docker-compose にフォールバックする (root Makefile の $(COMPOSE) と同じ
+# probe。docker/toolchain/README.md もこのフォールバックを前提にしている)。
+COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
+# TOOLBOX_UID/TOOLBOX_GID must be plain *shell* environment variables
+# (not `-e`/`docker compose run -e`), because compose resolves
+# compose.tools.yml's `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"`
+# from its own process environment before the container is even
+# created -- a `-e` flag only sets a variable inside the
+# already-created container, too late to affect `user:` (see that
+# file's own header comment).
+COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
+	$(COMPOSE_BIN) --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+
+# network_mode:none -- fmt/fmt-check/lint/vet/build/test/test-race/check
+# never need the network themselves (this module's own go.sum deps are
+# pre-warmed into the gomodcache/gobuild named volumes by a one-time
+# `go mod download` via the network-enabled `tools` service first --
+# see docker/toolchain/README.md's "検証" section -- and GOPROXY=off
+# inside tools-offline makes any *unexpected* fetch fail loudly instead
+# of silently reaching out).
+OFFLINE := $(COMPOSE_TOOLS) run --rm tools-offline make -C $(MODULE_DIR)
+
+# `tools` (network enabled) layered on top of the sibling root
+# compose.yml, so the `postgres` service resolves by its compose
+# service name on their shared network -- this module's own `run`
+# target (the migrator binary itself, which only ever does anything
+# useful against a real Postgres) and `test-integration` (ISSUE-016's
+# privilege-boundary tests) both need real DB reachability, so neither
+# can run under network_mode:none. SPEC-009 plan's network cutover
+# table lists both "root make migrate(app/migrator 実行)" and "make
+# test-integration" as `tools`(+compose.yml) exceptions, not
+# `tools-offline`.
+#
+# DB_HOST=postgres (not 127.0.0.1) is hardcoded here deliberately: from
+# inside a container joined to compose.yml's network, the postgres
+# service is reachable by its compose service name, not via the
+# 127.0.0.1-published host port (that mapping only helps callers
+# running directly on the host, which is exactly the DB_HOST ?= 127.0.0.1
+# default the test-integration-native/run-native recipes below still
+# fall back to when invoked directly, e.g. inside an already-toolboxed
+# shell without this DB overlay). The rest of these values simply match
+# the sibling compose.yml's own postgres service credentials
+# (POSTGRES_USER=app/POSTGRES_PASSWORD=app) and app/{api,auth}/Makefile's
+# own DB_* defaults -- carrying no meaningful secret.
+DB_COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
+	$(COMPOSE_BIN) --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_ONLINE_ENV := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
+ONLINE_DB := $(DB_COMPOSE_TOOLS) run --rm $(DB_ONLINE_ENV) tools make -C $(MODULE_DIR)
 
 .PHONY: help
 help: ## ターゲット一覧を表示する
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-.PHONY: fmt
-fmt: ## フォーマットを自動修正する (gofmt + goimports)
+ifdef IN_TOOLBOX
+# ===========================================================================
+# Inside the toolbox (IN_TOOLBOX=1, set by compose.tools.yml's
+# x-tools-env anchor): the *-native targets are this Makefile's actual
+# recipes, otherwise unchanged from pre-SPEC-009 behaviour.
+# ===========================================================================
+
+# goose (library dependency of this module -- go.mod's own
+# `github.com/pressly/goose/v3` require is the single source of truth
+# for the version actually built into the migrator binary; GOOSE_VERSION
+# above, included from the repo root's versions.env, is a
+# comment-only cross-reference kept in sync with it, not something this
+# Makefile builds a command from -- see .claude/rules/db.md "版").
+#
+# goimports (GOIMPORTS_VERSION above, from versions.env) is baked into
+# docker/toolchain and already on PATH via
+# GOBIN=/usr/local/go-tools/bin -- called here by its installed binary
+# name, not `go run pkg@version`: `go run` performs a module-proxy
+# lookup on every invocation regardless of cache state and fails under
+# this image's GOPROXY=off even with the exact module fully warmed (see
+# docker/toolchain/README.md's "go run pkg@version does not work
+# offline" note -- the SPEC-009 plan's own pre-approved fallback for
+# this, now confirmed necessary rather than hypothetical).
+GOIMPORTS := goimports
+
+.PHONY: fmt-native
+fmt-native: ## フォーマットを自動修正する (gofmt + goimports)
 	gofmt -w .
 	$(GOIMPORTS) -w .
 
-.PHONY: fmt-check
-fmt-check: ## フォーマット差分がないかチェックする
+.PHONY: fmt-check-native
+fmt-check-native: ## フォーマット差分がないかチェックする
 	@files="$$(gofmt -l .)"; \
 	if [ -n "$$files" ]; then \
 		echo "gofmt required:"; echo "$$files"; exit 1; \
 	fi
 
-.PHONY: lint
-lint: ## golangci-lint を実行する
+.PHONY: lint-native
+lint-native: ## golangci-lint を実行する
 	golangci-lint run ./...
 
-.PHONY: vet
-vet: ## go vet を実行する
+.PHONY: vet-native
+vet-native: ## go vet を実行する
 	go vet ./...
 
-.PHONY: build
-build: ## 全パッケージをビルドする
+.PHONY: build-native
+build-native: ## 全パッケージをビルドする
 	go build ./...
 
-.PHONY: test
-test: ## テストを実行する
+.PHONY: test-native
+test-native: ## テストを実行する
 	go test ./...
 
-.PHONY: test-race
-test-race: ## race detector 付きでテストを実行する
+.PHONY: test-race-native
+test-race-native: ## race detector 付きでテストを実行する
 	go test -race ./...
 
-.PHONY: check
-check: fmt-check lint vet build test ## 全チェックを実行する (fmt-check + lint + vet + build + test)
+.PHONY: check-native
+check-native: fmt-check-native lint-native vet-native build-native test-native ## 全チェックを実行する (fmt-check + lint + vet + build + test)
 
-.PHONY: run
-run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")
+.PHONY: run-native
+run-native: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")
 	go run ./cmd/migrator $(ARGS)
 
-# Discrete DB_* settings for test-integration below, mirroring
+# Discrete DB_* settings for test-integration-native below, mirroring
 # app/{api,auth}/Makefile's own defaults (ISSUE-016 review Major-1):
 # these match the local compose Postgres and carry no meaningful
 # secret; real environments (in particular CI) override every one of
-# them via the environment (never edit them into this file).
-# test-integration relies on these being exported in the invoking
-# shell (this Makefile does not forward them itself).
+# them via the environment (never edit them into this file). Used only
+# when this -native target is invoked directly (e.g. inside an
+# already-toolboxed shell without the DB_ONLINE_ENV overlay above) --
+# the host-side `test-integration`/`run` targets below always pass
+# DB_HOST=postgres explicitly via ONLINE_DB instead of relying on these.
 DB_HOST ?= 127.0.0.1
 DB_PORT ?= 5432
 DB_USER ?= app
 DB_PASSWORD ?= app
 DB_SSLMODE ?= disable
 
-.PHONY: test-integration
-test-integration: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。ISSUE-016 R-c のロール権限境界を実 Postgres に対して検証する。DB_* env で master 資格情報の接続先を指定)
+.PHONY: test-integration-native
+test-integration-native: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。ISSUE-016 R-c のロール権限境界を実 Postgres に対して検証する。DB_* env で master 資格情報の接続先を指定)
 	go test -tags=integration ./infra/postgres/...
+
+else
+# ===========================================================================
+# On the host: re-invoke each target inside the pinned toolchain
+# container. Command names are unchanged (SPEC-009 R4) -- only the
+# execution environment moves.
+# ===========================================================================
+
+.PHONY: fmt
+fmt: ## フォーマットを自動修正する (gofmt + goimports。toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) fmt-native
+
+.PHONY: fmt-check
+fmt-check: ## フォーマット差分がないかチェックする (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) fmt-check-native
+
+.PHONY: lint
+lint: ## golangci-lint を実行する (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) lint-native
+
+.PHONY: vet
+vet: ## go vet を実行する (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) vet-native
+
+.PHONY: build
+build: ## 全パッケージをビルドする (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) build-native
+
+.PHONY: test
+test: ## テストを実行する (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) test-native
+
+.PHONY: test-race
+test-race: ## race detector 付きでテストを実行する (toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) test-race-native
+
+.PHONY: check
+check: ## 全チェックを実行する (fmt-check + lint + vet + build + test。toolbox 内 (tools-offline) で実行)
+	$(OFFLINE) check-native
+
+.PHONY: run
+run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")。実 postgres 到達が要るため tools(+compose.yml) で実行する
+	$(ONLINE_DB) run-native ARGS="$(ARGS)"
+
+.PHONY: test-integration
+test-integration: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。実 postgres 到達が要るため tools(+compose.yml) で実行する)
+	$(ONLINE_DB) test-integration-native
+
+endif

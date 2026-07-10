@@ -30,7 +30,7 @@
 | 実装・修正(app/api) | impl-api | |
 | 実装・修正(app/auth) | impl-auth | domain / service / route。永続化(infra/postgres)は impl-db |
 | 実装・修正(app/iac) | impl-iac | |
-| CI/CD・リポジトリツーリング設定(`.github/`) | impl-ci | GitHub Actions workflow / dependabot / copilot-instructions 等 |
+| CI/CD・リポジトリルート/横断ツーリング設定(`.github/` + リポジトリルート) | impl-ci | GitHub Actions workflow / dependabot / copilot-instructions、およびルート `Makefile` / `compose*.yml` / `docker/`(toolchain 等)/ `versions.env` / `.devcontainer/` / `.gitignore` / `.env` など特定 stack に属さない横断ツーリング(SPEC-009)。`app/<stack>` 内のコード・各 stack の Makefile/package.json の中身は各 impl が担当 |
 | 実装・修正(DB/永続化層: migrations / sqlc / infra/postgres, および `app/migrator`(独立 Go モジュール。対象 DB 作成 + goose 適用)。app/api・app/auth 横断) | impl-db | ポート(`Repository` interface)は domain 側(impl-api / auth)、実装は `infra/postgres` 側で分担。`app/migrator` 一式(main / config / database / Dockerfile / Makefile / go.mod)も impl-db 所有(SPEC-005)。概念で担当を切る(impl-ci と同型) |
 | テスト作成・実行 | tester | |
 | format / lint / type check | checker | |

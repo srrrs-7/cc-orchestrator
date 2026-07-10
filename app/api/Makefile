@@ -1,118 +1,253 @@
 .DEFAULT_GOAL := help
 
-GOIMPORTS := go run golang.org/x/tools/cmd/goimports@latest
-
-# swag v2 is still pre-1.0 (RC); pin the exact tag here so `make openapi`
-# is reproducible. `go run pkg@version` builds/runs the tool without
-# touching this module's go.mod/go.sum (std-lib runtime is preserved).
-SWAG := go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc5
-
-# SPEC-005: goose (migrations) and sqlc (query codegen) are run as
-# `go run pkg@version` CLIs -- like SWAG above -- so this module's
-# go.mod/go.sum only ever gains the Postgres driver (pgx) as a runtime
-# dependency, never the tool binaries themselves. This Makefile is the
-# single source of truth for the pinned versions
-# (docs/plans/SPEC-005-plan.md §0 "版固定").
+# --- SPEC-009 Phase B: transparent toolbox delegation -----------------------
 #
-# sqlc v1.28.0 (the plan's baseline) fails to build from source on this
-# machine's toolchain (macOS SDK / Xcode clang rejects a `strchrnul`
-# redeclaration inside the vendored pg_query_go/v5 C parser -- a known
-# upstream issue on newer macOS SDKs, fixed once sqlc moved to
-# pg_query_go/v6). v1.31.1 is the nearest stable release that resolves
-# and builds cleanly here; it is used in place of the plan's baseline
-# per the plan's own escape hatch ("resolve 不可なら最寄りの stable patch に
-# 調整して Makefile に確定記載する"). goose v3.24.1 (the plan's baseline)
-# builds without issue and is used as-is.
-GOOSE_VERSION := v3.24.1
-SQLC_VERSION := v1.31.1
+# Every target below (except `run`, `help`; see their own comments) is a
+# thin wrapper around a `-native` counterpart. The command *names* this
+# Makefile exposes are unchanged from before SPEC-009 (`make check`,
+# `make test`, `make openapi`, ... -- see .claude/rules/api.md's command
+# table, which this Makefile remains the single source of truth for);
+# what changed is that the real recipe now runs inside the pinned
+# toolbox container (docker/toolchain/Dockerfile via compose.tools.yml,
+# docs/plans/SPEC-009-plan.md) instead of directly on the host, so a
+# host with no go/golangci-lint/etc. installed can still run every
+# target here.
+#
+# `IN_TOOLBOX` (baked into compose.tools.yml's `tools`/`tools-offline`
+# services' `environment:`) is the multi-wrap guard: GNU make's `ifdef`
+# below is evaluated at parse time, so exactly one branch's targets
+# exist in a given `make` invocation --
+#   - IN_TOOLBOX unset (host):      only the public targets (`check`,
+#     `test`, ...) exist; each `docker compose run`s into the toolbox
+#     and invokes the matching `<target>-native` there.
+#   - IN_TOOLBOX=1 (inside toolbox): only the `-native` targets exist;
+#     there is no `check`/`test`/... target to accidentally re-delegate
+#     from in here, so a `make check` run a second time inside an
+#     already-toolboxed container fails fast (target not found) instead
+#     of nesting another container.
+REPO_ROOT := $(shell git rev-parse --show-toplevel)
+include $(REPO_ROOT)/versions.env
 
-# goose is a library dependency of app/migrator (2026-07-09 refactor,
-# SPEC-005 plan §RF.1.2/§RF.6.2 RF-e), not a runtime require of this
-# module; the `go run` CLI below is used only by migrate-create, which
-# just scaffolds a new migration file (no DB connection). Migration
-# *application* (up/down/status) now goes through app/migrator, not
-# this Makefile -- see the root Makefile's `migrate` target and
-# .claude/rules/db.md. Keep GOOSE_VERSION in sync with
-# app/migrator/go.mod's github.com/pressly/goose/v3 require.
-GOOSE := go run github.com/pressly/goose/v3/cmd/goose@$(GOOSE_VERSION)
-SQLC := go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+# TOOLBOX_UID/TOOLBOX_GID MUST be exported as real shell environment
+# variables (not passed via `docker compose run -e`) for
+# compose.tools.yml's `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"`
+# to resolve to the invoking host user: compose substitutes `${...}` in
+# a YAML value from its own process environment (or --env-file) before
+# the container is even created, while `-e`/`--env` only sets a
+# variable *inside* the already-created container -- too late to affect
+# `user:`. See compose.tools.yml's own header comment for the same
+# note.
+TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
+
+# `--env-file` is explicit (not relying on a committed `.env`) so the
+# same pinned versions.env this Makefile itself `include`s above is what
+# resolves compose.tools.yml's build args, regardless of cwd.
+COMPOSE    := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.tools.yml
+# `test-integration` is the one exception that needs a reachable
+# Postgres: layering the sibling compose.yml (which owns the `postgres`
+# service) on top lets `tools` join that project's network and resolve
+# `postgres` by service name (SPEC-009 plan network 切り分け表; the
+# offline `tools-offline` service cannot reach it at all under
+# network_mode:none).
+DB_COMPOSE := docker compose --env-file $(REPO_ROOT)/versions.env -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+WORKDIR    := --workdir /workspace/app/api
+
+# tools-offline (network_mode:none): the default execution service for
+# everything below except test-integration -- fmt/fmt-check/lint/vet/
+# build/test/test-race/check/openapi/sqlc/migrate-create all run
+# offline (no deps/install phase exists in this Makefile that would
+# need network).
+OFFLINE  := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools-offline
+# tools (network enabled) + compose.yml layered in, for test-integration
+# only (see DB_COMPOSE above). Deliberately stops short of the service
+# name/command: `docker compose run [OPTIONS] SERVICE [COMMAND...]`
+# requires any `-e` flags to precede SERVICE (anything after it is
+# parsed as the in-container command instead) -- test-integration below
+# appends its per-invocation `-e DB_*` flags, then `tools`, itself.
+DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR)
+
+# Tool CLIs previously invoked as `go run <pkg>@<version>` (a separate
+# pinned version per stack Makefile). SPEC-009 Phase A found that `go
+# run pkg@version` cannot resolve offline even with the exact
+# module+version fully warmed in GOMODCACHE (it performs an
+# unconditional module-proxy lookup every invocation) -- see
+# compose.tools.yml's and docker/toolchain/Dockerfile's header comments
+# for the verified detail. The toolbox image instead `go install`s each
+# at its pinned version (versions.env's SQLC_VERSION / GOOSE_VERSION /
+# SWAG_VERSION / GOIMPORTS_VERSION, `include`d above) onto
+# GOBIN=/usr/local/go-tools/bin, already on PATH in every toolbox
+# container regardless of volume/cache state -- so each is now invoked
+# by its plain installed binary name. versions.env (not this file) is
+# the single source of truth for which version that binary actually is.
+GOIMPORTS := goimports
+SWAG      := swag
+GOOSE     := goose
+SQLC      := sqlc
 
 MIGRATIONS_DIR := db/migrations
 
-# Discrete DB_* settings (SPEC-005 R6), documenting the same env
-# contract infra/postgres/db.go's ConfigFromEnv and app/migrator read
-# (DB_NAME defaults to "api", this stack's own dedicated Postgres
-# database -- 2026-07-09 refactor, plan §RF.1.1: api/auth are separated
-# by database, not by schema/search_path, so there is no DB_SCHEMA).
-# These defaults match the local compose Postgres (impl-db's
-# compose.yml) and carry no meaningful secret; real environments
-# override every one of them via the environment (never edit them into
-# this file). test-integration relies on these being exported in the
-# invoking shell (this Makefile does not forward them itself).
-DB_HOST ?= 127.0.0.1
+# Local-only, non-secret DB_* defaults (SPEC-005), matching
+# compose.yml's `postgres` service and app/auth/Makefile's own copies.
+# DB_HOST defaults to the compose *service* name `postgres` (not
+# 127.0.0.1) because test-integration now always runs inside the
+# `tools` container joined to compose.yml's network (SPEC-009) rather
+# than directly on the host against a published port -- see
+# test-integration below, which forwards each of these into the
+# container explicitly via `docker compose run -e` (docker isolates
+# env by default; a plain host-shell `export DB_HOST=...`, this
+# Makefile's pre-SPEC-009 contract, would not otherwise reach the
+# containerized `go test` process). Every value is still overridable at
+# invocation time, e.g. `make test-integration DB_HOST=other-host`.
+DB_HOST ?= postgres
 DB_PORT ?= 5432
 DB_NAME ?= api
 DB_USER ?= app
 DB_PASSWORD ?= app
 DB_SSLMODE ?= disable
 
+# `help`'s grep reads this file's raw text via $(MAKEFILE_LIST) --
+# unlike a target lookup, that is not filtered by the ifdef/else split
+# below, so both branches' doc comments are textually present
+# regardless of IN_TOOLBOX. HELP_FILTER keeps `help`'s output matching
+# whichever branch is actually active: the host-facing public targets
+# outside the toolbox, or the `-native` ones inside it.
+ifdef IN_TOOLBOX
+HELP_FILTER := grep -E -- '-native:'
+else
+HELP_FILTER := grep -v -E -- '-native:'
+endif
+
 .PHONY: help
 help: ## ターゲット一覧を表示する
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | $(HELP_FILTER) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-.PHONY: fmt
-fmt: ## フォーマットを自動修正する (gofmt + goimports)
+ifdef IN_TOOLBOX
+# =============================================================================
+# Inside the toolbox container (IN_TOOLBOX=1) -- the real recipes.
+# =============================================================================
+
+.PHONY: fmt-native
+fmt-native: ## フォーマットを自動修正する (gofmt + goimports)
 	gofmt -w .
 	$(GOIMPORTS) -w .
 
-.PHONY: fmt-check
-fmt-check: ## フォーマット差分がないかチェックする
+.PHONY: fmt-check-native
+fmt-check-native: ## フォーマット差分がないかチェックする
 	@files="$$(gofmt -l .)"; \
 	if [ -n "$$files" ]; then \
 		echo "gofmt required:"; echo "$$files"; exit 1; \
 	fi
 
-.PHONY: lint
-lint: ## golangci-lint を実行する
+.PHONY: lint-native
+lint-native: ## golangci-lint を実行する
 	golangci-lint run ./...
 
-.PHONY: vet
-vet: ## go vet を実行する
+.PHONY: vet-native
+vet-native: ## go vet を実行する
 	go vet ./...
 
-.PHONY: build
-build: ## 全パッケージをビルドする
+.PHONY: build-native
+build-native: ## 全パッケージをビルドする
 	go build ./...
 
-.PHONY: test
-test: ## テストを実行する
+.PHONY: test-native
+test-native: ## テストを実行する
 	go test ./...
 
-.PHONY: test-race
-test-race: ## race detector 付きでテストを実行する
+.PHONY: test-race-native
+test-race-native: ## race detector 付きでテストを実行する
 	go test -race ./...
 
-.PHONY: check
-check: fmt-check lint vet build test ## 全チェックを実行する (fmt-check + lint + vet + build + test)
+.PHONY: check-native
+check-native: fmt-check-native lint-native vet-native build-native test-native ## 全チェックを実行する (fmt-check + lint + vet + build + test)
 
-.PHONY: run
-run: ## API サーバーを起動する (PORT 環境変数でポート変更可)
-	go run ./cmd/api
-
-.PHONY: openapi
-openapi: ## OpenAPI 3.1 契約 (docs/openapi.yaml) を swag v2 注釈から生成する (check には含めない)
+.PHONY: openapi-native
+openapi-native: ## OpenAPI 3.1 契約 (docs/openapi.yaml) を swag v2 注釈から生成する (check には含めない)
 	$(SWAG) init -g cmd/api/main.go -o docs -ot yaml --v3.1
 	mv docs/swagger.yaml docs/openapi.yaml
 
-.PHONY: sqlc
-sqlc: ## sqlc でクエリ (db/queries) からコード (infra/postgres/sqlcgen) を生成する (生成であり検査ではないため check には含めない)
+.PHONY: sqlc-native
+sqlc-native: ## sqlc でクエリ (db/queries) からコード (infra/postgres/sqlcgen) を生成する (生成であり検査ではないため check には含めない)
 	$(SQLC) generate
 
-.PHONY: migrate-create
-migrate-create: ## 新しいマイグレーションファイルを作成する (例: make migrate-create name=add_foo_column)
+.PHONY: migrate-create-native
+migrate-create-native: ## 新しいマイグレーションファイルを作成する (例: make migrate-create name=add_foo_column)
 	@if [ -z "$(name)" ]; then echo "usage: make migrate-create name=<slug>"; exit 1; fi
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
 
-.PHONY: test-integration
-test-integration: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。事前に app/migrator で DB 作成 + up 適用が必要。DB_* env で接続先を指定)
+.PHONY: test-integration-native
+test-integration-native: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。事前に app/migrator で DB 作成 + up 適用が必要。DB_* env で接続先を指定)
 	go test -tags=integration ./infra/postgres/...
+
+else
+# =============================================================================
+# Host (IN_TOOLBOX unset) -- transparent delegation into the toolbox.
+# Target names/semantics are unchanged (.claude/rules/api.md); only the
+# execution environment moved into a container (SPEC-009 R4).
+# =============================================================================
+
+.PHONY: fmt
+fmt: ## フォーマットを自動修正する (gofmt + goimports)
+	$(OFFLINE) make fmt-native
+
+.PHONY: fmt-check
+fmt-check: ## フォーマット差分がないかチェックする
+	$(OFFLINE) make fmt-check-native
+
+.PHONY: lint
+lint: ## golangci-lint を実行する
+	$(OFFLINE) make lint-native
+
+.PHONY: vet
+vet: ## go vet を実行する
+	$(OFFLINE) make vet-native
+
+.PHONY: build
+build: ## 全パッケージをビルドする
+	$(OFFLINE) make build-native
+
+.PHONY: test
+test: ## テストを実行する
+	$(OFFLINE) make test-native
+
+.PHONY: test-race
+test-race: ## race detector 付きでテストを実行する
+	$(OFFLINE) make test-race-native
+
+.PHONY: check
+check: ## 全チェックを実行する (fmt-check + lint + vet + build + test)
+	$(OFFLINE) make check-native
+
+.PHONY: openapi
+openapi: ## OpenAPI 3.1 契約 (docs/openapi.yaml) を swag v2 注釈から生成する (check には含めない)
+	$(OFFLINE) make openapi-native
+
+.PHONY: sqlc
+sqlc: ## sqlc でクエリ (db/queries) からコード (infra/postgres/sqlcgen) を生成する (生成であり検査ではないため check には含めない)
+	$(OFFLINE) make sqlc-native
+
+.PHONY: migrate-create
+migrate-create: ## 新しいマイグレーションファイルを作成する (例: make migrate-create name=add_foo_column)
+	$(OFFLINE) make migrate-create-native name=$(name)
+
+.PHONY: test-integration
+test-integration: ## infra/postgres の実 DB 統合テストを実行する (offline 不可。tools サービス + compose.yml の postgres へ接続。事前に app/migrator で DB 作成 + up 適用が必要)
+	$(DB_ONLINE) \
+		-e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
+		-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \
+		tools make test-integration-native
+
+endif
+
+# `run` starts the API server itself (not a check/build/generate step),
+# and is not part of SPEC-009's network 切り分け表 (`docker compose run`
+# publishes no ports for tools/tools-offline, so wrapping this the same
+# way would make the server unreachable from the host). Local full-stack
+# serving already has a containerized path -- the root Makefile's
+# `make up`/`up-d` (compose.yml's own `api` service, built from
+# app/api/Dockerfile, with published ports) -- so this target is left
+# as a host-side convenience for interactive development and is out of
+# this Phase's scope, per SPEC-009 plan §手順 B1.
+.PHONY: run
+run: ## API サーバーを起動する (PORT 環境変数でポート変更可。ホスト go 実行。コンテナ経由のフルスタック起動はルート `make up` を使う)
+	go run ./cmd/api
