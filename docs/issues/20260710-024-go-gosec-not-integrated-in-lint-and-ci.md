@@ -1,7 +1,7 @@
 ---
 id: ISSUE-024
 title: gosec がプロジェクトの lint / CI に組み込まれておらず(.golangci.yml 不在、golangci-lint はデフォルト linter のみ)、既存 gosec 由来 Issue(G704 / G112 / G710)の再現・回帰検出ができない
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: medium  # critical | high | medium | low
 created: 2026-07-10
 updated: 2026-07-10
@@ -75,11 +75,11 @@ gosec のセキュリティ静的解析が、リポジトリの品質ゲート(`
 
 ### 実施内容
 
-- [ ] gosec 有効化方式を決める(golangci-lint の `.golangci.yml` で gosec を enable / gosec 単体を lint・CI に追加)
-- [ ] app/api・app/auth・app/migrator の 3 スタックで gosec が実行される状態にする(設定の共有 or スタック別配置を決定)
-- [ ] `make lint` および `.github/workflows/cicd.yml` で gosec が回ることを確認する
-- [ ] 既存の gosec 由来 Issue(ISSUE-021 G704 / ISSUE-010 G112 / ISSUE-004 G710)の指摘が新設定で再現し、各 Issue の対応が「解消 / 抑制済み」と判定できることを確認する
-- [ ] `#nosec` による抑制を許す場合、抑制には必ず理由コメントを付ける運用(ISSUE-021 の方針と整合)を明記する
+- [x] gosec 有効化方式を決める(golangci-lint の `.golangci.yml` で gosec を enable / gosec 単体を lint・CI に追加)→ per-stack の `.golangci.yml`(v1 スキーマ = CI pin 1.64.8 対応)で `gosec` + `nolintlint` を有効化
+- [x] app/api・app/auth・app/migrator の 3 スタックで gosec が実行される状態にする(設定の共有 or スタック別配置を決定)→ スタック別配置(各スタック直下に `.golangci.yml`)
+- [x] `make lint` および `.github/workflows/cicd.yml` で gosec が回ることを確認する(設定ファイルを既存経路が自動で拾う)
+- [ ] 既存の gosec 由来 Issue(ISSUE-021 G704 / ISSUE-010 G112 / ISSUE-004 G710)の指摘が新設定で再現し、各 Issue の対応が「解消 / 抑制済み」と判定できることを確認する → **部分達成**: G112 のみ再現・解消(ISSUE-010)。G704 / G710 は CI pin 1.64.8 の gosec に該当ルールが無く再現不可(ISSUE-021 / ISSUE-004 は open 継続。下記経緯・follow-up 参照)
+- [x] `#nosec` による抑制を許す場合、抑制には必ず理由コメントを付ける運用(ISSUE-021 の方針と整合)を明記する → `nolintlint`(`require-explanation` / `require-specific` / `allow-unused: false`)で機械強制
 
 ### 再発防止
 
@@ -96,4 +96,19 @@ gosec のセキュリティ静的解析が、リポジトリの品質ゲート(`
 - severity は **medium** と判定。判定根拠: 現時点でランタイムの新たな脆弱性が生じているわけではなく、手動 `gosec ./...` という回避策もある(= critical/high ではない)。一方で、認証基盤を含む Go 3 スタックのセキュリティ静的解析が品質ゲートに恒久的に組み込まれておらず、既存のセキュリティ指摘を再現・回帰検出できないという、軽微(low)には収まらないプロセス / 再現性の欠如のため medium。
 - 相互リンク: 直接ひもづく Spec は無いため frontmatter `specs` は空。既存 gosec 由来 Issue(ISSUE-021 / ISSUE-010 / ISSUE-004)と本文で相互参照する。
 - 次にやること: planner が gosec の組み込み方式(golangci-lint の gosec 有効化 / gosec 単体)を確定し、impl-ci を軸に(必要に応じ impl-api / impl-auth / impl-db と分担して)3 スタックの lint / CI に組み込み、既存 gosec 由来 Issue の再現・回帰検出ができることを確認する。
-</content>
+
+### 2026-07-10(gosec 統合を実装・検証し resolved / ただし CI pin 1.64.8 の gosec は G704・G710 を持たない制約を確認)
+
+- 対応完了。gosec を app/api・app/auth・app/migrator の各 `.golangci.yml`(per-stack 配置)で有効化した。CI が pin する golangci-lint **1.64.8** に合わせ **v1 スキーマ**の config とし、`linters.enable` に `gosec` と `nolintlint` を追加(nolintlint は `require-explanation: true` / `require-specific: true` / `allow-unused: false`。`//nolint` 抑制に理由と対象ルール指定を強制)。既存の `make lint`(= `golangci-lint run ./...`)および `.github/workflows/cicd.yml` の golangci-lint 実行が設定ファイルを自動で拾うため、lint 経路・CI に追加ステップは不要でそのまま gosec が回る。
+- baseline-first の実測結果(すべて CI pin 1.64.8 の gosec で計測):
+  - **app/api = G112(Potential Slowloris Attack)1 件**を検出。`cmd/api/main.go` にサーバタイムアウト 4 種(`ReadHeaderTimeout` 5s / `ReadTimeout` 10s / `WriteTimeout` 10s / `IdleTimeout` 60s)を実装(`newServer` を抽出して配線)し、tester が `main_test.go` に回帰テストを追加。再実行で G112 は 0 件。詳細は ISSUE-010 に追記。
+  - **app/auth = 0 件 / app/migrator = 0 件**。起票時に想定した G202 / G704 / G710 は 1.64.8 の gosec では非検出だった(下記の制約参照)。
+  - checker が 3 スタックの `make check` green・gosec 0 件を **1.64.8** で確認。
+- **重要な制約(本 Issue の結論を左右する事実)**: CI が pin する golangci-lint **1.64.8 にバンドルされた gosec は古く、taint-analysis 系ルール G704(SSRF)/ G710(open-redirect)を持たない**。これらは golangci-lint **v2 系**(ローカルの **v2.12.2** で実測)でのみ検出される。したがって「gosec を CI(1.64.8)で有効化」しても G704 / G710 は機械検出されない。この不一致が ISSUE-021(G704)/ ISSUE-004(G710)の扱いに直結する。将来 golangci-lint の pin を v2 系へ上げれば G704 / G710 が再出現し、その際は **v1 → v2 スキーマへの config 移行** + 当該指摘の抑制(根拠付き `//nolint:gosec`)または実修正が必要(follow-up)。
+- **ローカル環境の注意**: v1 スキーマの config のため、開発機の golangci-lint が v2 系だと `make lint` が `unsupported version of the configuration` で失敗する。**CI pin と同じ 1.64.8 の利用が前提**。周知手段(Makefile ガイド等)は impl-ci 領域で別途検討する。
+- 既存 gosec 由来 Issue との関係(相互参照。いずれも本統合の実測を各 Issue に追記済み):
+  - **ISSUE-010**(G112 Slowloris): 本統合で app/api に検出 → タイムアウト実装で解消。ただし body-size 上限は gosec 非検出・本スコープ外のため **open 維持**。
+  - **ISSUE-021**(G704 SSRF, healthcheck): 1.64.8 の gosec では非検出(G704 不在。G107 は `http.Get` 等パッケージ関数のみ対象で `*http.Client` メソッド呼び出しは非対象)。機械検出には v2 系が必要なため **open 維持**。
+  - **ISSUE-004**(G710 open-redirect): 1.64.8 の gosec では非検出(G710 不在)。機械強制には v2 系更新か型による不変条件強制が必要なため **open 維持**。
+- follow-up(本 Issue の resolved 後に残るフォロー。必要時に別途起票 or 上記 Issue で追跡): golangci-lint pin を v2 系へ更新 →(a)config を v2 スキーマへ移行(b)再出現する G704 / G710 を ISSUE-021 / ISSUE-004 の方針で抑制 or 実修正(c)ローカル / CI の golangci-lint バージョン整合の周知。
+- ステータスを **resolved** に更新。判定根拠: gosec を 3 スタックの lint / CI に恒久組み込みし、1.64.8 で gosec 0 件 green(G112 は実修正で解消)を検証できたため。resolved のスコープは「gosec の恒久統合と 1.64.8 での回帰検出基盤の確立」であり、G704 / G710 の機械検出は 1.64.8 の gosec の能力外である旨を上記に明記した(follow-up として追跡)。`updated` を 2026-07-10 に更新。

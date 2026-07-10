@@ -1,34 +1,31 @@
-# .golangci.yml -- ISSUE-024: integrate gosec into `make lint` / CI.
+# golangci-lint config (v1 schema -- CI pins golangci-lint 1.64.8, see
+# .github/workflows/cicd.yml env.GOLANGCI_LINT_VERSION; the v2 config
+# schema is not understood by that version).
 #
-# v1 config schema, targeting the golangci-lint version CI actually
-# pins (env.GOLANGCI_LINT_VERSION == "1.64.8" in
-# .github/workflows/cicd.yml). Do NOT add a top-level `version: "2"`
-# key -- that switches golangci-lint to the v2 config schema, which
-# 1.64.8 cannot parse (config load fails outright with "unsupported
-# version of the configuration").
+# ISSUE-024: enables gosec (security-focused static analysis, bundled
+# into golangci-lint -- no separate binary needed) on top of the
+# previously-implicit default linter set, plus nolintlint to make sure
+# every //nolint suppression (gosec's included) carries an explanation.
 #
-# This file only *adds* gosec + nolintlint on top of golangci-lint's
-# default linter set (no `disable-all`), so every linter that already
-# gated `make lint` before this file existed keeps running unchanged.
-#
-# Kept in sync with app/api/.golangci.yml and app/migrator/.golangci.yml
-# (docs/plans/ISSUE-024-plan.md S1.2): each Go stack owns its own copy
-# because no impl agent's charter currently covers a repo-root config
-# file. Do not let the three drift apart.
+# This file must be kept identical in content/intent to
+# app/api/.golangci.yml and app/migrator/.golangci.yml (docs/plans/
+# ISSUE-024-plan.md §1.2): per-stack config is required because no
+# single impl agent owns a repository-root config file, but the three
+# files should not drift from each other.
+run:
+  timeout: 5m
+
 linters:
   enable:
-    # Security-focused static analysis (gosec, bundled in
-    # golangci-lint). Runs on top of the default linter set.
     - gosec
-    # Requires every `//nolint` directive to name a specific linter and
-    # carry a human-readable reason (`//nolint:gosec // ...`), so gosec
-    # suppressions stay self-documenting and auditable, and so a stale
-    # suppression (finding no longer present) is itself flagged as an
-    # "unused directive" error rather than silently rotting.
     - nolintlint
 
 linters-settings:
   nolintlint:
+    # Every //nolint directive must name the linter(s) it suppresses
+    # and carry a `// <reason>` explanation (ISSUE-021/ISSUE-024
+    # re-triggered-suppression policy: suppressions are reviewed, not
+    # rubber-stamped).
     require-explanation: true
     require-specific: true
     allow-unused: false

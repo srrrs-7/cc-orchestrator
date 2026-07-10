@@ -102,5 +102,10 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - severity は **low** と判定。判定根拠: 入力が運用者制御で外部注入経路が現状のコードに見当たらず、healthcheck は内部自己プローブであること、退行バグではなく静的解析指摘のトリアージであること、回避策(運用上任意 URL を渡さない)があること。critical/high/medium ではないのは、エンドユーザー向けランタイム挙動への実害が現時点で確認されていないため。**ただし本 severity は「偽陽性」という仮説を前提とした暫定値であり、検証で外部注入経路が見つかった場合は引き上げる**。
 - 重複判定: `docs/issues` を再走査し、healthcheck バイナリの SSRF/G704 を扱う既存 Issue は無いことを確認(`20260708-001` は `/healthz` エンドポイント + postgres リポジトリの別件)。よって新規起票とした。
 - 次にやること: impl-api / impl-auth が URL 入力の外部注入経路の有無を検証し、偽陽性なら根拠コメント付きで抑制、実在するなら scheme/host 制限を追加する。両スタックの healthcheck に同一対応を適用する。
-</content>
-</invoke>
+
+### 2026-07-10(gosec 統合〈ISSUE-024〉の実測で CI pin 1.64.8 では本指摘が非検出と判明 / open 維持)
+
+- ISSUE-024(gosec を Go 3 スタックの lint / CI に恒久組み込み)の実装・実測で、healthcheck の `client.Get(url)`(`app/api/cmd/healthcheck/main.go:34` / `app/auth/cmd/healthcheck/main.go:34`)は **CI pin の gosec(golangci-lint 1.64.8 バンドル)では検出されない**ことを確認した。理由は 2 点: (1) 1.64.8 の gosec には taint-analysis 系の **G704(SSRF)ルールが存在しない**(G704 は golangci-lint **v2 系**〈ローカル v2.12.2 で実測〉でのみ検出される)、(2) 近縁の **G107**(Url provided to HTTP request as taint input)は `http.Get` 等のパッケージ関数呼び出しのみを対象とし、本コードのような `*http.Client` のメソッド呼び出し(`client.Get`)は対象外。したがって現状 CI(1.64.8)では本指摘は gosec ゲートに一切掛からない。
+- runtime 評価は据え置き: URL 入力は運用者制御(`os.Args[1]` / `HEALTHCHECK_URL` env / 固定の `defaultURL`)で、外部からの注入経路が現状のコードに見当たらないという偽陽性の心証(2026-07-10 起票時の評価)は変更なし。
+- **open 維持**。理由: 機械検出したい場合は golangci-lint を v2 系へ上げる必要があり(ISSUE-024 の follow-up)、その際に根拠付き `//nolint:gosec`(理由コメント付き抑制)または scheme/host 制限の実修正を判断する。severity は low のまま(検出ツールの制約が判明しただけで、悪用可能性の評価自体は変わっていないため)。
+- ステータスは `open` のまま。`updated` は 2026-07-10。

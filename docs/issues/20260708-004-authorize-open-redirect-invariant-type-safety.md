@@ -99,3 +99,10 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
   - `app/auth/route/response.go:119` の `if redirectURI == "" || isUnverifiedAuthorizeError(err)` により、未検証段階のエラー(`client.ErrNotFound` / `ErrInvalidClientID` / `ErrInvalidRedirectURI` / `ErrRedirectURIMismatch`)は redirect せず直接 JSON を返し、143 行の `http.Redirect` に到達するのは検証済み後のエラーのみ。現行実装は正しく、現時点でオープンリダイレクトは発生しない(本 Issue の当初結論と一致)。
 - 検証事項への回答: 「RFC 6749 の `redirect_uri` 完全一致検証がコード上で client 登録値に対して行われているか」という要検証点は、**行われている**(`ValidateRedirectURI`)と再確認した。よって追加の redirect_uri 検証実装は不要。残る課題は本 Issue が既に記録する「不変条件がコメント規約のみで担保されており型/回帰テストで機械強制されていない(将来の検証順序改修時の退行リスク)」で、この点は不変。対応方針(A: 型で表現 / B: 回帰テスト)も変更なし。
 - ステータスは `open` のまま(現行実害なし・機械強制のハードニングは未着手)。`updated` を 2026-07-10 に更新。
+
+### 2026-07-10(gosec 統合〈ISSUE-024〉の実測で CI pin 1.64.8 では G710 が非検出と判明 / open 維持)
+
+- ISSUE-024(gosec を Go 3 スタックの lint / CI に恒久組み込み)の実装・実測で、`app/auth/route/response.go` の `writeAuthorizeError` 内 `http.Redirect` に対する **open-redirect(gosec G710)は CI pin の gosec(golangci-lint 1.64.8 バンドル)では検出されない**ことを確認した(1.64.8 の gosec に該当ルール G710 が存在しない。G710 は golangci-lint **v2 系**〈ローカル v2.12.2 で実測〉でのみ検出される)。したがって本 Issue がこれまで参照してきた「gosec G710 相当が当該経路を検出」は v2 系での検出であり、恒久組み込み後の CI(1.64.8)では gosec ゲートに掛からない。
+- 不変条件(「未検証の redirect_uri へはリダイレクトしない」)は従来どおり **コメント規約 + コードの検証順序**(`Authorize` で client_id / redirect_uri を先に検証 / `isUnverifiedAuthorizeError` の sentinel 列挙)で担保されており、**機械強制は未達**。現行実装は正しく実害はない点も不変。
+- **open 維持**。理由: 機械強制には (1) golangci-lint を v2 系へ更新して G710 を有効化(ISSUE-024 の follow-up)し根拠付き `//nolint:gosec` 抑制 or 実修正する、または (2) 検証済み redirect_uri を専用型で表す等の不変条件の実装(対応方針 A)のいずれかが必要。方針(A: 型で表現 / B: 回帰テスト)は変更なし。ISSUE-024 の follow-up と併せて判断する。severity は low のまま。
+- ステータスは `open` のまま。`updated` は 2026-07-10。
