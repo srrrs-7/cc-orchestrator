@@ -14,7 +14,7 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 
 - `app/api` — Go の DDD サンプル(タスク管理)。`domain/task` + `service` + `infra/memory` + `infra/postgres` + `route` を実装済みで、実体のあるコードの中心。標準ライブラリ主体だが、永続化層 `infra/postgres` のみ Postgres ドライバ `pgx` に依存する(SPEC-005)
 - `app/auth` — OAuth 2.0 + OIDC 認可サーバー(Go)。`app/api` と同じ DDD レイヤ構成で authorize / token / userinfo / discovery を実装済み(AUTH-001)。グラントは Authorization Code(PKCE S256)+ refresh_token(RFC 6749 §6、rotation + family 単位の reuse 検出。SPEC-006)、トークンは JWT(RS256 / JWKS)。ドメインは client / user / authcode / refreshtoken の 4 集約 +(署名ポートのみで永続化しない)token。標準ライブラリ主体で、永続化層 `infra/postgres`(client / user / authcode / refreshtoken)のみ `pgx` に依存する(SPEC-005)
-- `app/web` — TypeScript / React。feature-sliced な SPA(`features/tasks` に domain / api / hooks / components、`shared/`、MSW モック、Vitest)を実装済み
+- `app/web` — TypeScript / React。feature-sliced な SPA(`features/tasks` に domain / api / hooks / components、`shared/`、MSW モック、Vitest)を実装済み。スタイルは **Tailwind CSS v4**(`@tailwindcss/vite` + `src/index.css` の `@import "tailwindcss"`)、UI は **任意のディスプレイ幅で崩れないレスポンシブが必須要件**(SPEC-012。固定幅禁止・受け入れ幅などの正は `.claude/rules/web.md`)
 - `app/iac` — Terraform。`modules/{network,db,platform,service,cdn}` と `envs/dev`(ルートモジュール)を実装済み(SPEC-001 / SPEC-004)。`platform` は共有基盤(ECS クラスタ / ALB 等)、`service` は 1 サービス分の定義で api・auth の 2 回インスタンス化する
 - `app/migrator` — Go(独立モジュール)。DB マイグレーション実行ツール。`-target api|auth` で対象 DB を作成(冪等)+ 各スタックの `db/migrations` を goose 適用する。goose を api/auth から隔離するためのモジュール(SPEC-005)
 

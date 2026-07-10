@@ -130,4 +130,5 @@ githooks_print_plan() {
   [[ "$NEED_CONTRACT_DRIFT" == 1 ]] && githooks_log "  - contract drift (make openapi + make generate)"
   [[ "$NEED_SQLC_API" == 1 ]] && githooks_log "  - api sqlc drift (make sqlc)"
   [[ "$NEED_SQLC_AUTH" == 1 ]] && githooks_log "  - auth sqlc drift (make sqlc)"
+  return 0
 }

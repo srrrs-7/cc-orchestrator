@@ -74,8 +74,8 @@ function TaskDetailPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <h1 className="text-xl font-semibold">{data.title}</h1>
+    <div className="flex min-w-0 flex-col gap-4">
+      <h1 className="break-words text-xl font-semibold">{data.title}</h1>
       <TaskItem task={data} />
     </div>
   );

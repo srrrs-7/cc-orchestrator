@@ -37,7 +37,7 @@ export function CreateTaskForm() {
         <input
           id="title"
           type="text"
-          className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1 text-sm pointer-coarse:min-h-11"
           {...register("title")}
         />
         {errors.title ? (
@@ -52,7 +52,7 @@ export function CreateTaskForm() {
         </label>
         <select
           id="priority"
-          className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          className="w-full rounded border border-gray-300 px-2 py-1 text-sm pointer-coarse:min-h-11"
           {...register("priority")}
         >
           {TASK_PRIORITIES.map((priority) => (
@@ -62,7 +62,7 @@ export function CreateTaskForm() {
           ))}
         </select>
       </div>
-      <Button type="submit" disabled={isSubmitting} className="self-start">
+      <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto sm:self-start">
         Add task
       </Button>
     </form>

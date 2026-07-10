@@ -60,6 +60,28 @@ githooks_export_versions_env() {
   fi
 }
 
+# Inside toolbox (IN_TOOLBOX=1), stack Makefiles only expose *-native targets.
+githooks_make_target() {
+  local target="$1"
+  if githooks_in_toolbox; then
+    printf '%s-native' "$target"
+  else
+    printf '%s' "$target"
+  fi
+}
+
+githooks_run_iac_check() {
+  local repo_root="$1"
+  if githooks_in_toolbox; then
+    make -C "$repo_root/app/iac" fmt-check-native
+    make -C "$repo_root/app/iac" validate-native
+    make -C "$repo_root/app/iac" lint-native
+    make -C "$repo_root/app/iac" security-native
+  else
+    make -C "$repo_root/app/iac" check
+  fi
+}
+
 # Re-exec hook logic inside the online toolbox on the host. No-op when
 # IN_TOOLBOX is already set (devcontainer session or nested make).
 githooks_ensure_toolbox() {
