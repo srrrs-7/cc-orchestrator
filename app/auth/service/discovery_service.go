@@ -39,6 +39,7 @@ func (s *DiscoveryService) Metadata(_ context.Context) ProviderMetadata {
 		Issuer:                            s.issuer,
 		AuthorizationEndpoint:             s.issuer + "/authorize",
 		TokenEndpoint:                     s.issuer + "/token",
+		RevocationEndpoint:                s.issuer + "/revoke",
 		UserInfoEndpoint:                  s.issuer + "/userinfo",
 		EndSessionEndpoint:                s.issuer + "/logout",
 		JWKSURI:                           s.issuer + "/.well-known/jwks.json",

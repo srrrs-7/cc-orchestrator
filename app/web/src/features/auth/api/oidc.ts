@@ -13,6 +13,7 @@ const discoverySchema = z.object({
   issuer: z.string(),
   authorization_endpoint: z.string(),
   token_endpoint: z.string(),
+  revocation_endpoint: z.string().optional(),
   userinfo_endpoint: z.string().optional(),
   end_session_endpoint: z.string().optional(),
   jwks_uri: z.string().optional(),
@@ -93,6 +94,35 @@ export function buildEndSessionUrl(params: {
     url.searchParams.set("state", params.state);
   }
   return url.toString();
+}
+
+/** Revoke an access or refresh token (RFC 7009). Errors are swallowed so logout is not blocked. */
+export async function revokeToken(params: {
+  readonly revocationEndpoint: string;
+  readonly token: string;
+  readonly clientId: string;
+  readonly tokenTypeHint?: string;
+}): Promise<void> {
+  const body = new URLSearchParams({
+    token: params.token,
+    client_id: params.clientId,
+  });
+  if (params.tokenTypeHint) {
+    body.set("token_type_hint", params.tokenTypeHint);
+  }
+
+  try {
+    const response = await fetch(params.revocationEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    });
+    if (!response.ok) {
+      console.warn(`Token revocation failed: HTTP ${response.status}`);
+    }
+  } catch {
+    // Best-effort revocation must not block sign-out.
+  }
 }
 
 /** Exchange an authorization code for tokens. */

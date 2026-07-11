@@ -21,6 +21,7 @@ type providerMetadataBody struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
+	RevocationEndpoint                string   `json:"revocation_endpoint"`
 	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
 	EndSessionEndpoint                string   `json:"end_session_endpoint"`
 	JWKSURI                           string   `json:"jwks_uri"`
@@ -60,6 +61,7 @@ func TestDiscovery_Metadata(t *testing.T) {
 	for name, got := range map[string]string{
 		"authorization_endpoint": meta.AuthorizationEndpoint,
 		"token_endpoint":         meta.TokenEndpoint,
+		"revocation_endpoint":    meta.RevocationEndpoint,
 		"userinfo_endpoint":      meta.UserInfoEndpoint,
 		"end_session_endpoint":   meta.EndSessionEndpoint,
 		"jwks_uri":               meta.JWKSURI,

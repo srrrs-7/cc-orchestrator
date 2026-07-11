@@ -424,6 +424,26 @@ func doRefreshToken(t *testing.T, h http.Handler, refreshToken, clientID, scope 
 	return doToken(t, h, form)
 }
 
+func doRevoke(t *testing.T, h http.Handler, token, clientID, tokenTypeHint string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	form := url.Values{
+		"token": {token},
+	}
+	if clientID != "" {
+		form.Set("client_id", clientID)
+	}
+	if tokenTypeHint != "" {
+		form.Set("token_type_hint", tokenTypeHint)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 // pkceChallenge independently computes the RFC 7636 S256 transformation.
 func pkceChallenge(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))

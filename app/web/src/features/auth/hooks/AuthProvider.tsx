@@ -1,6 +1,12 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import type { ReactNode } from "react";
-import { buildAuthorizeUrl, buildEndSessionUrl, exchangeCode, fetchDiscovery } from "../api/oidc";
+import {
+  buildAuthorizeUrl,
+  buildEndSessionUrl,
+  exchangeCode,
+  fetchDiscovery,
+  revokeToken,
+} from "../api/oidc";
 import { resolveAuthConfig } from "../domain/config";
 import { deriveCodeChallenge, generateCodeVerifier } from "../domain/pkce";
 import {
@@ -82,12 +88,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const logout = useCallback(async (): Promise<void> => {
     const session = getStoredSession();
     const idTokenHint = session?.idToken;
-    clearAllAuthStorage();
-    setUser(null);
+    const refreshTokenValue = session?.refreshToken;
 
     const config = resolveAuthConfig();
     try {
       const discovery = await fetchDiscovery(config.issuer);
+      if (refreshTokenValue && discovery.revocation_endpoint) {
+        await revokeToken({
+          revocationEndpoint: discovery.revocation_endpoint,
+          token: refreshTokenValue,
+          clientId: config.clientId,
+          tokenTypeHint: "refresh_token",
+        });
+      }
+
+      clearAllAuthStorage();
+      setUser(null);
+
       if (discovery.end_session_endpoint) {
         window.location.href = buildEndSessionUrl({
           endSessionEndpoint: discovery.end_session_endpoint,
@@ -98,7 +115,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return;
       }
     } catch {
-      // Fall back to local-only sign-out when discovery is unavailable.
+      clearAllAuthStorage();
+      setUser(null);
     }
     window.location.href = "/login";
   }, []);

@@ -36,6 +36,7 @@ func NewRouter(
 	login := newLoginHandler(authnSvc, cfg.Issuer, cfg.SecureCookies)
 	consent := newConsentHandler(authSvc, authnSvc, consentSvc, cfg.Issuer, cfg.SecureCookies)
 	logout := newLogoutHandler(authnSvc, clients, cfg.Issuer, cfg.SecureCookies)
+	revoke := &revokeHandler{svc: authSvc}
 	tok := &tokenHandler{svc: authSvc}
 	userInfo := &userInfoHandler{svc: userInfoSvc}
 	discovery := &discoveryHandler{svc: discoverySvc}
@@ -47,6 +48,7 @@ func NewRouter(
 	mux.HandleFunc("GET /consent", consent.handleGet)
 	mux.HandleFunc("POST /consent", consent.handlePost)
 	mux.HandleFunc("GET /logout", logout.handle)
+	mux.HandleFunc("POST /revoke", revoke.handle)
 	mux.HandleFunc("POST /token", tok.handle)
 	mux.HandleFunc("GET /userinfo", userInfo.handle)
 	mux.HandleFunc("GET /.well-known/openid-configuration", discovery.metadata)
