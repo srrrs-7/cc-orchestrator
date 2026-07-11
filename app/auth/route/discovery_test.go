@@ -22,6 +22,7 @@ type providerMetadataBody struct {
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
+	EndSessionEndpoint                string   `json:"end_session_endpoint"`
 	JWKSURI                           string   `json:"jwks_uri"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	SubjectTypesSupported             []string `json:"subject_types_supported"`
@@ -60,6 +61,7 @@ func TestDiscovery_Metadata(t *testing.T) {
 		"authorization_endpoint": meta.AuthorizationEndpoint,
 		"token_endpoint":         meta.TokenEndpoint,
 		"userinfo_endpoint":      meta.UserInfoEndpoint,
+		"end_session_endpoint":   meta.EndSessionEndpoint,
 		"jwks_uri":               meta.JWKSURI,
 	} {
 		if got == "" {

@@ -73,6 +73,28 @@ export function buildAuthorizeUrl(params: {
   return url.toString();
 }
 
+/** Build the OIDC RP-initiated logout URL. */
+export function buildEndSessionUrl(params: {
+  readonly endSessionEndpoint: string;
+  readonly clientId: string;
+  readonly idTokenHint?: string;
+  readonly postLogoutRedirectUri?: string;
+  readonly state?: string;
+}): string {
+  const url = new URL(params.endSessionEndpoint);
+  url.searchParams.set("client_id", params.clientId);
+  if (params.idTokenHint) {
+    url.searchParams.set("id_token_hint", params.idTokenHint);
+  }
+  if (params.postLogoutRedirectUri) {
+    url.searchParams.set("post_logout_redirect_uri", params.postLogoutRedirectUri);
+  }
+  if (params.state) {
+    url.searchParams.set("state", params.state);
+  }
+  return url.toString();
+}
+
 /** Exchange an authorization code for tokens. */
 export async function exchangeCode(params: {
   readonly tokenEndpoint: string;

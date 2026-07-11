@@ -119,7 +119,7 @@ func newDiscoveryTestHandler(t *testing.T) http.Handler {
 	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 	_ = username
-	return route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, nil, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // newTokenErrorTestHandler builds a router for /token error-injection
@@ -248,7 +248,7 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
-	return route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // ---------------------------------------------------------------------------

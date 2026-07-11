@@ -124,7 +124,7 @@ func run() error {
 	consentSvc := service.NewConsentService(consentRepo)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
 	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
-	handler := route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{
+	handler := route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, route.RouterConfig{
 		Issuer:        e.Issuer,
 		SecureCookies: route.SecureCookiesFromIssuer(e.Issuer),
 	})

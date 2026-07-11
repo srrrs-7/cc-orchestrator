@@ -64,6 +64,20 @@ func clearPendingCookie(w http.ResponseWriter, secure bool) {
 	})
 }
 
+func clearSessionCookie(w http.ResponseWriter, secure bool) {
+	//nolint:gosec // G124: Secure follows ISSUER scheme (false for local http compose); HttpOnly and SameSite=Lax are always set.
+	http.SetCookie(w, &http.Cookie{
+		Name:     idpSessionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+		Expires:  time.Unix(0, 0),
+	})
+}
+
 func setIDPCookie(w http.ResponseWriter, name, value string, maxAge int, secure bool) {
 	//nolint:gosec // G124: Secure follows ISSUER scheme (false for local http compose); HttpOnly and SameSite=Lax are always set.
 	http.SetCookie(w, &http.Cookie{

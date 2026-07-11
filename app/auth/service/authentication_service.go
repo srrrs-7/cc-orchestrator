@@ -78,6 +78,14 @@ func (s *AuthenticationService) SavePendingAuthorize(ctx context.Context, rawQue
 	return p.ID, nil
 }
 
+// Logout deletes the IdP session identified by sessionID.
+func (s *AuthenticationService) Logout(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	return s.sessions.DeleteSession(ctx, sessionID)
+}
+
 // PeekPendingAuthorize returns a pending authorize query without deleting it.
 func (s *AuthenticationService) PeekPendingAuthorize(ctx context.Context, id string) (string, error) {
 	p, err := s.sessions.FindPendingAuthorize(ctx, id)

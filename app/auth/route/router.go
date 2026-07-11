@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
 
@@ -26,6 +27,7 @@ func NewRouter(
 	authSvc *service.AuthorizationService,
 	authnSvc *service.AuthenticationService,
 	consentSvc *service.ConsentService,
+	clients client.Repository,
 	userInfoSvc *service.UserInfoService,
 	discoverySvc *service.DiscoveryService,
 	cfg RouterConfig,
@@ -33,6 +35,7 @@ func NewRouter(
 	authorize := &authorizeHandler{svc: authSvc, authn: authnSvc, consent: consentSvc, issuer: cfg.Issuer, secureCookies: cfg.SecureCookies}
 	login := newLoginHandler(authnSvc, cfg.Issuer, cfg.SecureCookies)
 	consent := newConsentHandler(authSvc, authnSvc, consentSvc, cfg.Issuer, cfg.SecureCookies)
+	logout := newLogoutHandler(authnSvc, clients, cfg.Issuer, cfg.SecureCookies)
 	tok := &tokenHandler{svc: authSvc}
 	userInfo := &userInfoHandler{svc: userInfoSvc}
 	discovery := &discoveryHandler{svc: discoverySvc}
@@ -43,6 +46,7 @@ func NewRouter(
 	mux.HandleFunc("POST /login", login.handlePost)
 	mux.HandleFunc("GET /consent", consent.handleGet)
 	mux.HandleFunc("POST /consent", consent.handlePost)
+	mux.HandleFunc("GET /logout", logout.handle)
 	mux.HandleFunc("POST /token", tok.handle)
 	mux.HandleFunc("GET /userinfo", userInfo.handle)
 	mux.HandleFunc("GET /.well-known/openid-configuration", discovery.metadata)
