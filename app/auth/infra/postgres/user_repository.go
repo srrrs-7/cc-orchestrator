@@ -82,5 +82,5 @@ func rowToUser(row sqlcgen.User) (*user.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new profile: %w", err)
 	}
-	return user.Reconstruct(id, username, row.Password, profile), nil
+	return user.Reconstruct(id, username, row.PasswordHash, profile), nil
 }

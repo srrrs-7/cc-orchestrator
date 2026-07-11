@@ -112,7 +112,11 @@ func newTestUser(t *testing.T, id, username, password, profileName, profileEmail
 	if err != nil {
 		t.Fatalf("setup NewProfile(%q, %q) unexpected error: %v", profileName, profileEmail, err)
 	}
-	return user.New(userID, uname, password, profile)
+	u, err := user.New(userID, uname, password, profile)
+	if err != nil {
+		t.Fatalf("setup user.New() unexpected error: %v", err)
+	}
+	return u
 }
 
 func assertSameUser(t *testing.T, got, want *user.User) {
@@ -123,8 +127,8 @@ func assertSameUser(t *testing.T, got, want *user.User) {
 	if got.Username() != want.Username() {
 		t.Errorf("Username() = %v, want %v", got.Username(), want.Username())
 	}
-	if got.Password() != want.Password() {
-		t.Errorf("Password() = %v, want %v", got.Password(), want.Password())
+	if got.PasswordHash() != want.PasswordHash() {
+		t.Errorf("PasswordHash() = %v, want %v", got.PasswordHash(), want.PasswordHash())
 	}
 	if got.Profile().Name() != want.Profile().Name() {
 		t.Errorf("Profile().Name() = %v, want %v", got.Profile().Name(), want.Profile().Name())

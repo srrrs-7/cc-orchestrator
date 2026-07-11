@@ -6,7 +6,7 @@
 -- name: GetUserByID :one
 -- Backs user.Repository.FindByID. Returns sql.ErrNoRows when absent;
 -- infra/postgres/user_repository.go maps that to user.ErrNotFound.
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE id = $1;
 
@@ -15,7 +15,7 @@ WHERE id = $1;
 -- migration), so at most one row ever matches. Returns sql.ErrNoRows
 -- when absent; infra/postgres/user_repository.go maps that to
 -- user.ErrNotFound.
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE username = $1;
 
@@ -25,10 +25,10 @@ WHERE username = $1;
 -- a new row, or overwrites every column in place when id already
 -- exists, so repeated process starts converge on the same seed data
 -- rather than erroring on the second run.
-INSERT INTO users (id, username, password, profile_name, profile_email)
+INSERT INTO users (id, username, password_hash, profile_name, profile_email)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    password      = EXCLUDED.password,
-    profile_name  = EXCLUDED.profile_name,
-    profile_email = EXCLUDED.profile_email;
+    username       = EXCLUDED.username,
+    password_hash  = EXCLUDED.password_hash,
+    profile_name   = EXCLUDED.profile_name,
+    profile_email  = EXCLUDED.profile_email;

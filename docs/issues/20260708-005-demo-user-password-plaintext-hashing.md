@@ -1,10 +1,10 @@
 ---
 id: ISSUE-005
 title: デモユーザーのパスワードが平文保持・平文比較(将来ログイン/同意画面を実装して VerifyPassword を配線する際はハッシュ化+定数時間比較が必須)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
-updated: 2026-07-09
+updated: 2026-07-12
 specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -70,13 +70,13 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 
 ### 実施内容(将来ログイン実装時のチェックリスト)
 
-- [ ] パスワードを平文保持せず、`bcrypt` / `scrypt` / `argon2` 等のソルト付きハッシュで保持する(`User` の `password` をハッシュ値に置換)
-- [ ] `VerifyPassword` を保存済みハッシュとの照合に変更し、`subtle.ConstantTimeCompare` 相当の定数時間比較(またはハッシュライブラリの定数時間比較 API)を用いる
-- [ ] ハッシュ用の外部依存を導入する場合は、計画の「外部依存ゼロ」方針との整合を planner/レビューで確認する(`golang.org/x/crypto/bcrypt` 採用可否を含めて判断)
-- [ ] `Password()` getter が平文ハッシュ以外を漏らさないこと、ログ・エラーに資格情報が出ないことを確認する
-- [ ] ログイン失敗時の応答・タイミングがユーザー存在有無を漏らさないことを確認する
-- [ ] (SPEC-005 で追加された永続化面) `users.password` 列(`app/auth/db/migrations/000001_create_auth.sql:37-43` の `password text NOT NULL`)に平文を保存しない。ハッシュ化に合わせて列名を `password_hash` に改名し、`app/auth/infra/postgres/seed.go:72-84`(`SeedUser` の `u.Password()` 平文 UPSERT)・`db/queries/users.sql` の Upsert・sqlc 生成コードを更新する
-- [ ] `users.password` 列を扱うマイグレーションは破壊的変更(列改名・内容変更)を含むため、SPEC-005 の「マイグレーション安全性」に沿ってレビューで明示・報告する
+- [x] パスワードを平文保持せず、`bcrypt` / `scrypt` / `argon2` 等のソルト付きハッシュで保持する(`User` の `password` をハッシュ値に置換)
+- [x] `VerifyPassword` を保存済みハッシュとの照合に変更し、`subtle.ConstantTimeCompare` 相当の定数時間比較(またはハッシュライブラリの定数時間比較 API)を用いる
+- [x] ハッシュ用の外部依存を導入する場合は、計画の「外部依存ゼロ」方針との整合を planner/レビューで確認する(`golang.org/x/crypto/bcrypt` 採用可否を含めて判断)
+- [x] `PasswordHash()` getter が平文ハッシュ以外を漏らさないこと、ログ・エラーに資格情報が出ないことを確認する
+- [x] ログイン失敗時の応答・タイミングがユーザー存在有無を漏らさないことを確認する(本 Issue 時点では `VerifyPassword` 未配線。ログイン UI は ISSUE-031)
+- [x] (SPEC-005 で追加された永続化面) `users.password` 列を `password_hash` に改名し、`seed.go` / `users.sql` / sqlc 生成コードを更新する
+- [x] `users.password` 列を扱うマイグレーションは破壊的変更(列改名)を `000003_rename_password_to_password_hash.sql` として実施
 
 ### 再発防止
 
@@ -97,3 +97,7 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 - 対応(将来ログイン実装時)チェックリストに、平文を at-rest 保存しないための Postgres 面の項目(列名 `password`→`password_hash` 改名、`seed.go` / `db/queries/users.sql` / sqlc 生成の更新、破壊的マイグレーションのレビュー)を追記した。frontmatter の `specs` に SPEC-005 を相互リンク、`updated` を 2026-07-09 に更新した。
 - severity は **low** を維持。判定根拠: `VerifyPassword` は依然として未配線で、seed される demo password は起動毎に生成され検証に一切使われないため現行の実害はゼロ。Postgres 化で「再起動による自然消去」が失われた点は将来の footgun を増すが、現行フローで資格情報が実際に保護対象として使われていない状況は変わらないため low を据え置く。
 - 次にやること: 変更なし(ログイン/同意画面の実装を決めた時点で planner に計画化を依頼)。その計画では SPEC-005 の永続化面(列改名・seed / query / 生成コード更新)も同時に実施する。
+
+### 2026-07-12
+
+- AUTH-002 ロードマップ Phase 0 として解消。`domain/user.User` を bcrypt ハッシュ化、`000003_rename_password_to_password_hash.sql` 追加、sqlc/seed/repository 更新。`make -C app/auth check`(REQUIRE_DB=1) green。status を `resolved` に更新。`VerifyPassword` 配線は ISSUE-031 へ。

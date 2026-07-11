@@ -258,7 +258,7 @@ func buildDemoUser() (*user.User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build demo user: %w", err)
 	}
-	return user.New(userID, username, password, profile), nil
+	return user.New(userID, username, password, profile)
 }
 
 // seedPostgres idempotently upserts the demo client/user data via

@@ -218,7 +218,10 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	if err != nil {
 		t.Fatalf("setup NewProfile() unexpected error: %v", err)
 	}
-	demoUser := user.New(uid, username, "irrelevant-demo-password", profile)
+	demoUser, err := user.New(uid, username, "irrelevant-demo-password", profile)
+	if err != nil {
+		t.Fatalf("setup user.New() unexpected error: %v", err)
+	}
 	testsupport.SeedUser(t, db, demoUser)
 
 	kid, err := jwt.ComputeKeyID(&testRSAKey.PublicKey)

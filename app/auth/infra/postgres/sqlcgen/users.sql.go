@@ -11,7 +11,7 @@ import (
 
 const getUserByID = `-- name: GetUserByID :one
 
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE id = $1
 `
@@ -28,7 +28,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Password,
+		&i.PasswordHash,
 		&i.ProfileName,
 		&i.ProfileEmail,
 	)
@@ -36,7 +36,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE username = $1
 `
@@ -51,7 +51,7 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Password,
+		&i.PasswordHash,
 		&i.ProfileName,
 		&i.ProfileEmail,
 	)
@@ -59,19 +59,19 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 }
 
 const upsertUser = `-- name: UpsertUser :exec
-INSERT INTO users (id, username, password, profile_name, profile_email)
+INSERT INTO users (id, username, password_hash, profile_name, profile_email)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    password      = EXCLUDED.password,
-    profile_name  = EXCLUDED.profile_name,
-    profile_email = EXCLUDED.profile_email
+    username       = EXCLUDED.username,
+    password_hash  = EXCLUDED.password_hash,
+    profile_name   = EXCLUDED.profile_name,
+    profile_email  = EXCLUDED.profile_email
 `
 
 type UpsertUserParams struct {
 	ID           string
 	Username     string
-	Password     string
+	PasswordHash string
 	ProfileName  string
 	ProfileEmail string
 }
@@ -85,7 +85,7 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
 	_, err := q.db.ExecContext(ctx, upsertUser,
 		arg.ID,
 		arg.Username,
-		arg.Password,
+		arg.PasswordHash,
 		arg.ProfileName,
 		arg.ProfileEmail,
 	)

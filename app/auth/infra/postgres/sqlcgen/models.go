@@ -46,7 +46,7 @@ type RefreshToken struct {
 type User struct {
 	ID           string
 	Username     string
-	Password     string
+	PasswordHash string
 	ProfileName  string
 	ProfileEmail string
 }

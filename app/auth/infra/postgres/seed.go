@@ -62,18 +62,14 @@ func SeedClient(ctx context.Context, db *sql.DB, c *client.Client) error {
 // INSERT ... ON CONFLICT (id) DO UPDATE); see SeedClient's doc
 // comment for the rationale (user.Repository is also read-only).
 //
-// u.Password() is written as-is (plaintext): this mirrors the
-// existing domain/user.User design and is a deliberate, documented
-// scope limit of this Spec (docs/plans/SPEC-005-plan.md §6.1 R-b) --
-// this function itself never receives or embeds a hardcoded password;
-// the demo password remains generated at process startup by
-// cmd/authz/main.go's seed(), same as the memory path.
+// u.PasswordHash() is written as the bcrypt hash produced by
+// domain/user.New at startup (cmd/authz/main.go's buildDemoUser).
 func SeedUser(ctx context.Context, db *sql.DB, u *user.User) error {
 	q := sqlcgen.New(db)
 	if err := q.UpsertUser(ctx, sqlcgen.UpsertUserParams{
 		ID:           u.ID().String(),
 		Username:     u.Username().String(),
-		Password:     u.Password(),
+		PasswordHash: u.PasswordHash(),
 		ProfileName:  u.Profile().Name(),
 		ProfileEmail: u.Profile().Email(),
 	}); err != nil {
