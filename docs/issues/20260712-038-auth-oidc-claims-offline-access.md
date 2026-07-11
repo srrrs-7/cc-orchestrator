@@ -1,7 +1,7 @@
 ---
 id: ISSUE-038
 title: app/auth OIDC クレーム強化(auth_time / at_hash) と offline_access ゲート
-status: open
+status: resolved
 severity: low
 created: 2026-07-12
 updated: 2026-07-12
@@ -62,3 +62,8 @@ SPEC-006 で offline_access ゲートをスコープ外。auth_time はログイ
 ### 2026-07-12
 
 - 起票。AUTH-002 ロードマップ Phase 2.3。
+
+### 2026-07-12 (resolved)
+
+- ID token に `auth_time`/`at_hash` を設定。refresh token は `offline_access` スコープ時のみ発行。migration 000005。
+- 検証: `REQUIRE_DB=1 make -C app/auth check` 緑、`make -C app/web check` 140 tests 緑。

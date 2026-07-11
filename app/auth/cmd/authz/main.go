@@ -249,7 +249,7 @@ func buildDemoClient() (*client.Client, error) {
 	return client.New(
 		clientID,
 		[]client.RedirectURI{redirectURI, redirectURICompose},
-		[]string{"openid", "profile", "email"},
+		[]string{"openid", "profile", "email", "offline_access"},
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},
 	), nil

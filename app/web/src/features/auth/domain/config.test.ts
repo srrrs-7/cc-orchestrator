@@ -22,8 +22,8 @@ describe("resolveAuthConfig (defaults)", () => {
     expect(redirectUri).toBe(`${window.location.origin}/callback`);
   });
 
-  it("defaults the scopes to openid, profile, email", () => {
+  it("defaults the scopes to openid, profile, email, offline_access", () => {
     const { scopes } = resolveAuthConfig();
-    expect(scopes).toEqual(["openid", "profile", "email"]);
+    expect(scopes).toEqual(["openid", "profile", "email", "offline_access"]);
   });
 });

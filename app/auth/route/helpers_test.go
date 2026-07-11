@@ -183,7 +183,7 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	demoClient := client.New(
 		cid,
 		[]client.RedirectURI{redirectURI},
-		[]string{"openid", "profile", "email"},
+		[]string{"openid", "profile", "email", "offline_access"},
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},
 	)
@@ -202,7 +202,7 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	otherClient := client.New(
 		cid2,
 		[]client.RedirectURI{redirectURI2},
-		[]string{"openid", "profile", "email"},
+		[]string{"openid", "profile", "email", "offline_access"},
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},
 	)

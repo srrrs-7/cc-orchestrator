@@ -39,10 +39,12 @@ func (s *IdPSessionStore) CreateSession(ctx context.Context, userID user.UserID,
 	if err != nil {
 		return idpsession.Session{}, err
 	}
+	now := time.Now()
 	sess := idpsession.Session{
-		ID:        id,
-		UserID:    userID,
-		ExpiresAt: time.Now().Add(ttl),
+		ID:              id,
+		UserID:          userID,
+		AuthenticatedAt: now,
+		ExpiresAt:       now.Add(ttl),
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess

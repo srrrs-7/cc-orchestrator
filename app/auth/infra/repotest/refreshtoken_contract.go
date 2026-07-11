@@ -318,6 +318,7 @@ func newTestRefreshToken(t *testing.T) (*refreshtoken.RefreshToken, refreshtoken
 		refreshtoken.NewClientID("client-1"),
 		refreshtoken.NewUserID("user-1"),
 		scope,
+		time.Time{}, // authTime: zero in contract tests (not needed for repo behavior)
 	)
 	if err != nil {
 		t.Fatalf("setup Issue() unexpected error: %v", err)
@@ -351,6 +352,7 @@ func newRefreshTokenExpiringAt(t *testing.T, offset time.Duration) *refreshtoken
 	base, _ := newTestRefreshToken(t)
 	return refreshtoken.Reconstruct(
 		base.TokenHash(), base.FamilyID(), base.ClientID(), base.UserID(), base.Scope(),
+		time.Time{}, // authTime: zero in contract tests
 		time.Now().Add(offset), false,
 	)
 }
@@ -385,5 +387,12 @@ func assertSameRefreshToken(t *testing.T, got, want *refreshtoken.RefreshToken) 
 	}
 	if !got.ExpiresAt().Truncate(time.Microsecond).Equal(want.ExpiresAt().Truncate(time.Microsecond)) {
 		t.Errorf("ExpiresAt() = %v, want %v", got.ExpiresAt(), want.ExpiresAt())
+	}
+	// AuthTime persisted/loaded via the nullable auth_time column (ISSUE-038,
+	// migration 000005): SQL NULL ↔ time.Time{}. Truncate to microsecond
+	// precision for the same reason as ExpiresAt -- Postgres timestamptz has
+	// microsecond resolution while Go's time.Time carries nanoseconds.
+	if !got.AuthTime().Truncate(time.Microsecond).Equal(want.AuthTime().Truncate(time.Microsecond)) {
+		t.Errorf("AuthTime() = %v, want %v", got.AuthTime(), want.AuthTime())
 	}
 }

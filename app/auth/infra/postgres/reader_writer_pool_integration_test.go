@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
+	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
@@ -119,6 +120,7 @@ func newPoolRoutingAuthCode(t *testing.T) *authcode.AuthorizationCode {
 		scope,
 		authcode.NewNonce(""),
 		challenge,
+		time.Time{},
 	)
 	if err != nil {
 		t.Fatalf("setup New() unexpected error: %v", err)

@@ -69,6 +69,17 @@ func (s *AuthenticationService) UserFromSession(ctx context.Context, sessionID s
 	return u, nil
 }
 
+// FindSession returns the IdP session for sessionID. It returns
+// idpsession.ErrNotFound when sessionID is empty or the session does
+// not exist / has expired. Use this to access session metadata (e.g.
+// AuthenticatedAt for OIDC auth_time) without also resolving the user.
+func (s *AuthenticationService) FindSession(ctx context.Context, sessionID string) (idpsession.Session, error) {
+	if sessionID == "" {
+		return idpsession.Session{}, idpsession.ErrNotFound
+	}
+	return s.sessions.FindSession(ctx, sessionID)
+}
+
 // SavePendingAuthorize stores an in-flight /authorize query until login completes.
 func (s *AuthenticationService) SavePendingAuthorize(ctx context.Context, rawQuery string) (string, error) {
 	p, err := s.sessions.SavePendingAuthorize(ctx, rawQuery, defaultPendingAuthorizeTTL)

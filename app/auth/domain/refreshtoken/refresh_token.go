@@ -60,6 +60,7 @@ type RefreshToken struct {
 	clientID  ClientID
 	userID    UserID
 	scope     Scope
+	authTime  time.Time // IdP session login time (OIDC auth_time); zero when unavailable
 	expiresAt time.Time
 	consumed  bool
 }
@@ -69,8 +70,11 @@ type RefreshToken struct {
 // TokenHash, a fresh FamilyID (the start of a new rotation chain),
 // expiresAt = now + RefreshTokenTTL, and consumed=false. It returns
 // the aggregate together with the one-time plaintext Token the caller
-// must return to the client.
-func Issue(clientID ClientID, userID UserID, scope Scope) (*RefreshToken, Token, error) {
+// must return to the client. authTime is the IdP session login
+// timestamp carried forward into the refresh token so it can be
+// re-used when re-issuing ID tokens on subsequent refresh grants
+// (OIDC Core auth_time); a zero time.Time is valid.
+func Issue(clientID ClientID, userID UserID, scope Scope, authTime time.Time) (*RefreshToken, Token, error) {
 	plaintext, err := NewToken()
 	if err != nil {
 		return nil, Token{}, err
@@ -85,6 +89,7 @@ func Issue(clientID ClientID, userID UserID, scope Scope) (*RefreshToken, Token,
 		clientID:  clientID,
 		userID:    userID,
 		scope:     scope,
+		authTime:  authTime,
 		expiresAt: time.Now().Add(RefreshTokenTTL),
 		consumed:  false,
 	}
@@ -96,9 +101,10 @@ func Issue(clientID ClientID, userID UserID, scope Scope) (*RefreshToken, Token,
 // never starts a new family), a fresh sliding expiresAt = now +
 // RefreshTokenTTL, consumed=false, and scope set to the caller-supplied
 // effective scope (the result of Scope.Narrow against rt's own scope,
-// computed by the caller). It does not mutate rt; the actual atomic
-// consume-old + insert-new state transition is owned by
-// Repository.Rotate.
+// computed by the caller). authTime is carried forward unchanged from
+// rt so every ID token in the chain reflects the original login time.
+// It does not mutate rt; the actual atomic consume-old + insert-new
+// state transition is owned by Repository.Rotate.
 func (rt *RefreshToken) Rotate(scope Scope) (*RefreshToken, Token, error) {
 	plaintext, err := NewToken()
 	if err != nil {
@@ -110,6 +116,7 @@ func (rt *RefreshToken) Rotate(scope Scope) (*RefreshToken, Token, error) {
 		clientID:  rt.clientID,
 		userID:    rt.userID,
 		scope:     scope,
+		authTime:  rt.authTime,
 		expiresAt: time.Now().Add(RefreshTokenTTL),
 		consumed:  false,
 	}
@@ -119,14 +126,16 @@ func (rt *RefreshToken) Rotate(scope Scope) (*RefreshToken, Token, error) {
 // Reconstruct rebuilds a RefreshToken from already-validated persisted
 // state. It is intended to be used exclusively by infrastructure-layer
 // repository implementations when loading a RefreshToken from
-// storage.
-func Reconstruct(hash TokenHash, familyID FamilyID, clientID ClientID, userID UserID, scope Scope, expiresAt time.Time, consumed bool) *RefreshToken {
+// storage. authTime is the IdP session login timestamp; pass
+// time.Time{} when the column is not yet persisted in the DB.
+func Reconstruct(hash TokenHash, familyID FamilyID, clientID ClientID, userID UserID, scope Scope, authTime time.Time, expiresAt time.Time, consumed bool) *RefreshToken {
 	return &RefreshToken{
 		tokenHash: hash,
 		familyID:  familyID,
 		clientID:  clientID,
 		userID:    userID,
 		scope:     scope,
+		authTime:  authTime,
 		expiresAt: expiresAt,
 		consumed:  consumed,
 	}
@@ -172,6 +181,14 @@ func (rt *RefreshToken) UserID() UserID {
 // rotation, effective) scope.
 func (rt *RefreshToken) Scope() Scope {
 	return rt.scope
+}
+
+// AuthTime returns the IdP session login time carried in this refresh
+// token (OIDC auth_time). A zero time.Time means the timestamp was
+// not available at Issue time (e.g. loaded from a DB row that
+// predates the auth_time column).
+func (rt *RefreshToken) AuthTime() time.Time {
+	return rt.authTime
 }
 
 // ExpiresAt returns the time at which the RefreshToken expires.

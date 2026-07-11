@@ -22,6 +22,7 @@ type AuthorizationCode struct {
 	ExpiresAt       time.Time
 	Consumed        bool
 	CreatedAt       time.Time
+	AuthTime        sql.NullTime
 }
 
 type Client struct {
@@ -48,6 +49,7 @@ type RefreshToken struct {
 	ExpiresAt time.Time
 	Consumed  bool
 	CreatedAt time.Time
+	AuthTime  sql.NullTime
 }
 
 type User struct {

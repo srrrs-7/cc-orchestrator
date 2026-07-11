@@ -256,6 +256,7 @@ func newTestAuthCode(t *testing.T, codeVerifier string) *authcode.AuthorizationC
 		scope,
 		authcode.NewNonce("nonce-value"),
 		challenge,
+		time.Time{}, // authTime: zero in contract tests (not needed for repo behavior)
 	)
 	if err != nil {
 		t.Fatalf("setup New() unexpected error: %v", err)
@@ -274,6 +275,7 @@ func newAuthCodeExpiringAt(t *testing.T, codeVerifier string, offset time.Durati
 	return authcode.Reconstruct(
 		base.Code(), base.ClientID(), base.UserID(), base.RedirectURI(),
 		base.Scope(), base.Nonce(), base.Challenge(),
+		time.Time{}, // authTime: zero in contract tests
 		time.Now().Add(offset), false,
 	)
 }
@@ -332,5 +334,12 @@ func assertSameAuthCode(t *testing.T, got, want *authcode.AuthorizationCode, cod
 	}
 	if !got.ExpiresAt().Truncate(time.Microsecond).Equal(want.ExpiresAt().Truncate(time.Microsecond)) {
 		t.Errorf("ExpiresAt() = %v, want %v", got.ExpiresAt(), want.ExpiresAt())
+	}
+	// AuthTime persisted/loaded via the nullable auth_time column (ISSUE-038,
+	// migration 000005): SQL NULL ↔ time.Time{}. Truncate to microsecond
+	// precision for the same reason as ExpiresAt -- Postgres timestamptz has
+	// microsecond resolution while Go's time.Time carries nanoseconds.
+	if !got.AuthTime().Truncate(time.Microsecond).Equal(want.AuthTime().Truncate(time.Microsecond)) {
+		t.Errorf("AuthTime() = %v, want %v", got.AuthTime(), want.AuthTime())
 	}
 }

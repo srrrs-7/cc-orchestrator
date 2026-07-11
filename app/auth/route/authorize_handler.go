@@ -48,7 +48,8 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	owner, err := h.authn.UserFromSession(r.Context(), readSessionCookie(r))
+	sessionID := readSessionCookie(r)
+	owner, err := h.authn.UserFromSession(r.Context(), sessionID)
 	if err != nil {
 		if errors.Is(err, idpsession.ErrNotFound) {
 			pendingID, saveErr := h.authn.SavePendingAuthorize(r.Context(), r.URL.RawQuery)
@@ -64,6 +65,13 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		slog.Error("route: authorize: session lookup", "error", err)
 		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
 		return
+	}
+
+	// Carry the session's AuthenticatedAt into the AuthorizeRequest so
+	// the application layer can store it on the authorization code and
+	// propagate it to ID token auth_time claims (OIDC Core §2).
+	if sess, sessErr := h.authn.FindSession(r.Context(), sessionID); sessErr == nil {
+		req.AuthTime = sess.AuthenticatedAt
 	}
 
 	hasConsent, err := h.consent.HasGrant(r.Context(), owner.ID(), req.ClientID, req.Scope)

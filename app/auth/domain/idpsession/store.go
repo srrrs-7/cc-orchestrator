@@ -16,9 +16,10 @@ var ErrNotFound = errors.New("idpsession: not found")
 
 // Session represents an authenticated resource owner at the IdP.
 type Session struct {
-	ID        string
-	UserID    user.UserID
-	ExpiresAt time.Time
+	ID              string
+	UserID          user.UserID
+	AuthenticatedAt time.Time // when the resource owner authenticated (OIDC auth_time claim)
+	ExpiresAt       time.Time
 }
 
 // PendingAuthorize holds an in-flight /authorize query until login completes.

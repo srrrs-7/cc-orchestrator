@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
 )
@@ -41,7 +42,7 @@ func TestNewAccessTokenClaims(t *testing.T) {
 // shape).
 func TestNewIDTokenClaims(t *testing.T) {
 	t.Run("required claims and nonce reflection", func(t *testing.T) {
-		claims := token.NewIDTokenClaims("https://issuer.example", "user-1", "client-1", "nonce-xyz", "Demo User", "demo@example.com")
+		claims := token.NewIDTokenClaims("https://issuer.example", "user-1", "client-1", "nonce-xyz", "Demo User", "demo@example.com", time.Time{}, "")
 
 		if claims.Issuer != "https://issuer.example" {
 			t.Errorf("Issuer = %q, want %q", claims.Issuer, "https://issuer.example")
@@ -73,7 +74,7 @@ func TestNewIDTokenClaims(t *testing.T) {
 	})
 
 	t.Run("empty nonce is omitted from the JSON representation", func(t *testing.T) {
-		claims := token.NewIDTokenClaims("https://issuer.example", "user-1", "client-1", "", "", "")
+		claims := token.NewIDTokenClaims("https://issuer.example", "user-1", "client-1", "", "", "", time.Time{}, "")
 
 		raw, err := json.Marshal(claims)
 		if err != nil {

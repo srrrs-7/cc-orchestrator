@@ -37,7 +37,7 @@ export function resolveAuthConfig(): AuthConfig {
   const scopes =
     typeof rawScopes === "string" && rawScopes.length > 0
       ? rawScopes.split(" ").filter((s) => s.length > 0)
-      : ["openid", "profile", "email"];
+      : ["openid", "profile", "email", "offline_access"];
 
   return { issuer, clientId, redirectUri, scopes };
 }

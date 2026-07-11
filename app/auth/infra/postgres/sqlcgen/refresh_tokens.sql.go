@@ -7,6 +7,7 @@ package sqlcgen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -56,7 +57,7 @@ func (q *Queries) DeleteExpiredRefreshToken(ctx context.Context, tokenHash strin
 }
 
 const getRefreshToken = `-- name: GetRefreshToken :one
-SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 FROM refresh_tokens
 WHERE token_hash = $1 AND expires_at > now()
 `
@@ -69,6 +70,7 @@ type GetRefreshTokenRow struct {
 	Scope     string
 	ExpiresAt time.Time
 	Consumed  bool
+	AuthTime  sql.NullTime
 }
 
 // Backs refreshtoken.Repository.FindByTokenHash. Unlike
@@ -93,6 +95,7 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (GetRef
 		&i.Scope,
 		&i.ExpiresAt,
 		&i.Consumed,
+		&i.AuthTime,
 	)
 	return i, err
 }
@@ -100,9 +103,9 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (GetRef
 const insertRefreshToken = `-- name: InsertRefreshToken :exec
 
 INSERT INTO refresh_tokens (
-    token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+    token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, false
+    $1, $2, $3, $4, $5, $6, false, $7
 )
 `
 
@@ -113,6 +116,7 @@ type InsertRefreshTokenParams struct {
 	UserID    string
 	Scope     string
 	ExpiresAt time.Time
+	AuthTime  sql.NullTime
 }
 
 // SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
@@ -125,6 +129,9 @@ type InsertRefreshTokenParams struct {
 // INSERT, not an upsert: a token_hash collision would indicate a
 // broken random generator, not a legitimate re-save (mirrors
 // InsertAuthCode's doc comment in authcodes.sql).
+// auth_time ($7) is the OIDC IdP session login timestamp carried forward
+// through rotation; NULL means not available (maps to time.Time{} in Go --
+// see ISSUE-038).
 func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
 	_, err := q.db.ExecContext(ctx, insertRefreshToken,
 		arg.TokenHash,
@@ -133,6 +140,7 @@ func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshToken
 		arg.UserID,
 		arg.Scope,
 		arg.ExpiresAt,
+		arg.AuthTime,
 	)
 	return err
 }

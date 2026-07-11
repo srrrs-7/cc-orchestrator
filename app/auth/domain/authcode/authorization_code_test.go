@@ -42,6 +42,7 @@ func newValidAuthCode(t *testing.T) *authcode.AuthorizationCode {
 		scope,
 		authcode.NewNonce("nonce-1"),
 		testChallenge(t, testCodeVerifier),
+		time.Time{},
 	)
 	if err != nil {
 		t.Fatalf("setup New() unexpected error: %v", err)
@@ -137,7 +138,7 @@ func TestAuthorizationCode_Verify(t *testing.T) {
 		expired := authcode.Reconstruct(
 			ac.Code(), ac.ClientID(), ac.UserID(), ac.RedirectURI(),
 			ac.Scope(), ac.Nonce(), ac.Challenge(),
-			time.Now().Add(-1*time.Minute), false,
+			time.Time{}, time.Now().Add(-1*time.Minute), false,
 		)
 
 		err := expired.Verify(testCodeVerifier, validRedirect, validClient)
@@ -194,7 +195,7 @@ func TestAuthorizationCode_IsExpired(t *testing.T) {
 			ac := authcode.Reconstruct(
 				base.Code(), base.ClientID(), base.UserID(), base.RedirectURI(),
 				base.Scope(), base.Nonce(), base.Challenge(),
-				tt.expiresAt, false,
+				time.Time{}, tt.expiresAt, false,
 			)
 
 			if got := ac.IsExpired(); got != tt.want {
@@ -208,7 +209,7 @@ func TestAuthorizationCode_IsExpired(t *testing.T) {
 		ac := authcode.Reconstruct(
 			base.Code(), base.ClientID(), base.UserID(), base.RedirectURI(),
 			base.Scope(), base.Nonce(), base.Challenge(),
-			now, false,
+			time.Time{}, now, false,
 		)
 
 		if !ac.IsExpired() {

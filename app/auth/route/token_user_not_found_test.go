@@ -36,7 +36,7 @@ func TestRefreshToken_UserNotFound_InvalidGrant(t *testing.T) {
 
 	// Issue a full token set (including a refresh token) while the
 	// resource owner still exists.
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	// Simulate the owner disappearing after the grant was issued:
 	// DELETE the user row directly via the shared DB handle.

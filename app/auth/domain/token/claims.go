@@ -6,7 +6,11 @@
 // inversion).
 package token
 
-import "time"
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"time"
+)
 
 // AccessTokenTTL and IDTokenTTL are the lifetimes applied by
 // NewAccessTokenClaims / NewIDTokenClaims.
@@ -28,6 +32,7 @@ type Claims struct {
 	IssuedAt  int64  `json:"iat"`
 	Nonce     string `json:"nonce,omitempty"`
 	AuthTime  int64  `json:"auth_time,omitempty"`
+	AtHash    string `json:"at_hash,omitempty"`
 	Scope     string `json:"scope,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Email     string `json:"email,omitempty"`
@@ -56,19 +61,37 @@ func NewAccessTokenClaims(issuer, subject, audience, scope string) Claims {
 // name and email are included only when non-empty: nonce is echoed
 // back only when the authorization request carried one (OIDC Core
 // 3.1.2.1), and name/email are included only when the corresponding
-// scope ("profile"/"email") was granted.
-func NewIDTokenClaims(issuer, subject, audience, nonce, name, email string) Claims {
+// scope ("profile"/"email") was granted. authTime is the time the
+// resource owner authenticated at the IdP (OIDC Core auth_time
+// claim); zero value is omitted. atHash is the access token hash
+// computed via ComputeAtHash (OIDC Core at_hash); empty is omitted.
+func NewIDTokenClaims(issuer, subject, audience, nonce, name, email string, authTime time.Time, atHash string) Claims {
 	now := time.Now()
-	return Claims{
+	c := Claims{
 		Issuer:    issuer,
 		Subject:   subject,
 		Audience:  audience,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(IDTokenTTL).Unix(),
 		Nonce:     nonce,
+		AtHash:    atHash,
 		Name:      name,
 		Email:     email,
 	}
+	if !authTime.IsZero() {
+		c.AuthTime = authTime.Unix()
+	}
+	return c
+}
+
+// ComputeAtHash derives the at_hash claim value from an access token
+// string as specified by OIDC Core §2: SHA-256 the token, take the
+// left half of the digest, and base64url-encode it (no padding). The
+// hash algorithm matches this server's signing algorithm (RS256 →
+// SHA-256).
+func ComputeAtHash(accessToken string) string {
+	hash := sha256.Sum256([]byte(accessToken))
+	return base64.RawURLEncoding.EncodeToString(hash[:16])
 }
 
 // ExpiresAtTime returns ExpiresAt converted to a time.Time.

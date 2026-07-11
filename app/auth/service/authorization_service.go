@@ -110,6 +110,7 @@ func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeReque
 		scope,
 		authcode.NewNonce(req.Nonce),
 		challenge,
+		req.AuthTime,
 	)
 	if err != nil {
 		return verified, fmt.Errorf("service: authorize: %w", err)
@@ -281,19 +282,21 @@ func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req T
 	if scope.Has("email") {
 		email = owner.Profile().Email()
 	}
-	idClaims := token.NewIDTokenClaims(s.issuer, owner.ID().String(), c.ID().String(), ac.Nonce().String(), name, email)
+	atHash := token.ComputeAtHash(accessToken)
+	idClaims := token.NewIDTokenClaims(s.issuer, owner.ID().String(), c.ID().String(), ac.Nonce().String(), name, email, ac.AuthTime(), atHash)
 	idToken, err := s.signer.Sign(idClaims)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("service: token: sign id token: %w", err)
 	}
 
-	// SPEC-006 R2: a refresh_token-capable client receives a refresh
-	// token alongside the access/ID tokens, minted here and persisted
-	// as the start of a new rotation family (refreshtoken.Issue). A
-	// client not registered for grant_type=refresh_token gets none
-	// (TokenResponse.RefreshToken stays empty/omitted).
+	// SPEC-006 R2 + OIDC Core §11: a refresh_token-capable client
+	// receives a refresh token only when the granted scope includes
+	// offline_access (OIDC Core §11). Without offline_access the token
+	// endpoint returns access/ID tokens only (TokenResponse.RefreshToken
+	// stays empty/omitted). A client not registered for
+	// grant_type=refresh_token never receives a refresh token.
 	var refreshTokenPlaintext string
-	if c.SupportsGrantType(grantTypeRefreshToken) {
+	if c.SupportsGrantType(grantTypeRefreshToken) && scope.Has(authcode.ScopeOfflineAccess) {
 		rtScope, err := refreshtoken.ParseScope(scope.String())
 		if err != nil {
 			return TokenResponse{}, fmt.Errorf("service: token: %w", err)
@@ -302,6 +305,7 @@ func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req T
 			refreshtoken.NewClientID(c.ID().String()),
 			refreshtoken.NewUserID(owner.ID().String()),
 			rtScope,
+			ac.AuthTime(),
 		)
 		if err != nil {
 			return TokenResponse{}, fmt.Errorf("service: token: issue refresh token: %w", err)
@@ -402,7 +406,8 @@ func (s *AuthorizationService) refreshTokenGrant(ctx context.Context, req TokenR
 	if effectiveScope.Has("email") {
 		email = owner.Profile().Email()
 	}
-	idClaims := token.NewIDTokenClaims(s.issuer, owner.ID().String(), c.ID().String(), "", name, email)
+	rtAtHash := token.ComputeAtHash(accessToken)
+	idClaims := token.NewIDTokenClaims(s.issuer, owner.ID().String(), c.ID().String(), "", name, email, rt.AuthTime(), rtAtHash)
 	idToken, err := s.signer.Sign(idClaims)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("service: refresh token: sign id token: %w", err)

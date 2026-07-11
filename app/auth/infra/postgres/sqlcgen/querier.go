@@ -106,6 +106,8 @@ type Querier interface {
 	// issue-once/consume-once, so this is a plain INSERT (not an upsert --
 	// a code colliding with an existing primary key would indicate a
 	// broken random generator, not a legitimate re-save).
+	// auth_time ($10) is the OIDC IdP session login timestamp; NULL means
+	// not available (maps to time.Time{} in Go -- see ISSUE-038).
 	InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) error
 	// SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
 	// (schema/migrations/000002_create_refresh_tokens.sql). `make sqlc`
@@ -117,6 +119,9 @@ type Querier interface {
 	// INSERT, not an upsert: a token_hash collision would indicate a
 	// broken random generator, not a legitimate re-save (mirrors
 	// InsertAuthCode's doc comment in authcodes.sql).
+	// auth_time ($7) is the OIDC IdP session login timestamp carried forward
+	// through rotation; NULL means not available (maps to time.Time{} in Go --
+	// see ISSUE-038).
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
 	// Backs refreshtoken.Repository.RevokeFamily: the reuse-detection
 	// response (RFC 9700 4.14) that invalidates every token in a rotation

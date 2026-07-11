@@ -8,11 +8,13 @@
 -- issue-once/consume-once, so this is a plain INSERT (not an upsert --
 -- a code colliding with an existing primary key would indicate a
 -- broken random generator, not a legitimate re-save).
+-- auth_time ($10) is the OIDC IdP session login timestamp; NULL means
+-- not available (maps to time.Time{} in Go -- see ISSUE-038).
 INSERT INTO authorization_codes (
     code, client_id, user_id, redirect_uri, scope, nonce,
-    challenge, challenge_method, expires_at, consumed
+    challenge, challenge_method, expires_at, consumed, auth_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, false
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10
 );
 
 -- name: GetActiveAuthCode :one
@@ -25,7 +27,7 @@ INSERT INTO authorization_codes (
 -- matches; infra/postgres/authcode_repository.go maps that to
 -- authcode.ErrNotFound.
 SELECT code, client_id, user_id, redirect_uri, scope, nonce,
-       challenge, challenge_method, expires_at, consumed
+       challenge, challenge_method, expires_at, consumed, auth_time
 FROM authorization_codes
 WHERE code = $1 AND consumed = false AND expires_at > now();
 

@@ -10,7 +10,7 @@ import (
 // attempts fail.
 func TestRevoke_RefreshToken_RevokesFamily(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	rec := doRevoke(t, h, orig.RefreshToken, testClientID, "refresh_token")
 	if rec.Code != http.StatusOK {
@@ -41,7 +41,7 @@ func TestRevoke_UnknownToken_Returns200(t *testing.T) {
 // an already-revoked token is idempotent and returns HTTP 200.
 func TestRevoke_AlreadyRevoked_Returns200(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	first := doRevoke(t, h, orig.RefreshToken, testClientID, "refresh_token")
 	if first.Code != http.StatusOK {
@@ -59,7 +59,7 @@ func TestRevoke_AlreadyRevoked_Returns200(t *testing.T) {
 // revoked, yet still returns HTTP 200 per RFC 7009.
 func TestRevoke_ClientMismatch_DoesNotRevoke(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	rec := doRevoke(t, h, orig.RefreshToken, testClientID2, "refresh_token")
 	if rec.Code != http.StatusOK {
@@ -77,7 +77,7 @@ func TestRevoke_ClientMismatch_DoesNotRevoke(t *testing.T) {
 // hint and still revokes a refresh token.
 func TestRevoke_AccessTokenHint_StillRevokesRefreshToken(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	rec := doRevoke(t, h, orig.RefreshToken, testClientID, "access_token")
 	if rec.Code != http.StatusOK {

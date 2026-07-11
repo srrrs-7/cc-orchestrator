@@ -64,6 +64,7 @@ func (r *AuthCodeRepository) Save(ctx context.Context, ac *authcode.Authorizatio
 		Challenge:       ac.Challenge().Challenge(),
 		ChallengeMethod: ac.Challenge().Method().String(),
 		ExpiresAt:       ac.ExpiresAt(),
+		AuthTime:        encodeAuthTime(ac.AuthTime()),
 	}); err != nil {
 		return fmt.Errorf("postgres: save authorization code: %w", err)
 	}
@@ -95,7 +96,7 @@ func (r *AuthCodeRepository) FindByCode(ctx context.Context, code authcode.Code)
 
 	ac, err := reconstructAuthCode(
 		row.Code, row.ClientID, row.UserID, row.RedirectUri, row.Scope,
-		row.Nonce, row.Challenge, row.ChallengeMethod, row.ExpiresAt, row.Consumed,
+		row.Nonce, row.Challenge, row.ChallengeMethod, row.AuthTime, row.ExpiresAt, row.Consumed,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: find authorization code: %w", err)
@@ -141,10 +142,15 @@ func (r *AuthCodeRepository) Consume(ctx context.Context, code authcode.Code) er
 // authcode.ParseCodeChallengeMethod / authcode.NewCodeChallenge) so a
 // row that could not have been produced by this repository's own
 // Save is surfaced as an error rather than silently accepted.
+//
+// authTimeVal is the nullable auth_time column value (added by goose
+// migration 000005, ISSUE-038): SQL NULL decodes to time.Time{} (zero),
+// meaning "not available", via decodeAuthTime.
 func reconstructAuthCode(
 	codeStr, clientIDStr, userIDStr, redirectURIStr, scopeStr string,
 	nonce sql.NullString,
 	challengeStr, methodStr string,
+	authTimeVal sql.NullTime,
 	expiresAt time.Time,
 	consumed bool,
 ) (*authcode.AuthorizationCode, error) {
@@ -173,6 +179,7 @@ func reconstructAuthCode(
 		scope,
 		authcode.NewNonce(decodeNonce(nonce)),
 		challenge,
+		decodeAuthTime(authTimeVal),
 		expiresAt,
 		consumed,
 	), nil
@@ -197,4 +204,25 @@ func decodeNonce(n sql.NullString) string {
 		return ""
 	}
 	return n.String
+}
+
+// encodeAuthTime maps a time.Time onto the authorization_codes table's
+// nullable auth_time column (ISSUE-038): a zero time.Time (meaning "not
+// available") is stored as SQL NULL, so the round trip through sqlc's
+// sql.NullTime is unambiguous. Mirrors encodeNonce's pattern.
+func encodeAuthTime(t time.Time) sql.NullTime {
+	if t.IsZero() {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: t, Valid: true}
+}
+
+// decodeAuthTime is encodeAuthTime's inverse: SQL NULL decodes back to
+// time.Time{} (zero), the domain's canonical "auth_time not available"
+// value. Mirrors decodeNonce's pattern.
+func decodeAuthTime(n sql.NullTime) time.Time {
+	if !n.Valid {
+		return time.Time{}
+	}
+	return n.Time
 }

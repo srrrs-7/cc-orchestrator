@@ -6,11 +6,16 @@
 // objects never leak upward.
 package service
 
-import "github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
+import (
+	"time"
+
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
+)
 
 // AuthorizeRequest is the application-layer input for
 // AuthorizationService.Authorize, built by route/authorize_handler.go
-// from the /authorize query string.
+// from the /authorize query string. AuthTime is the IdP session login
+// timestamp obtained from the active session; zero when not available.
 type AuthorizeRequest struct {
 	ResponseType        string
 	ClientID            string
@@ -21,6 +26,7 @@ type AuthorizeRequest struct {
 	CodeChallenge       string
 	CodeChallengeMethod string
 	LoginHint           string
+	AuthTime            time.Time
 }
 
 // AuthorizeResult is the application-layer output of

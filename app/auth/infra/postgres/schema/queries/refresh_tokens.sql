@@ -10,10 +10,13 @@
 -- INSERT, not an upsert: a token_hash collision would indicate a
 -- broken random generator, not a legitimate re-save (mirrors
 -- InsertAuthCode's doc comment in authcodes.sql).
+-- auth_time ($7) is the OIDC IdP session login timestamp carried forward
+-- through rotation; NULL means not available (maps to time.Time{} in Go --
+-- see ISSUE-038).
 INSERT INTO refresh_tokens (
-    token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+    token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, false
+    $1, $2, $3, $4, $5, $6, false, $7
 );
 
 -- name: GetRefreshToken :one
@@ -28,7 +31,7 @@ INSERT INTO refresh_tokens (
 -- non-expired row matches; infra/postgres/refreshtoken_repository.go
 -- maps that to refreshtoken.ErrNotFound (after opportunistically
 -- evicting an expired row, if any).
-SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 FROM refresh_tokens
 WHERE token_hash = $1 AND expires_at > now();
 

@@ -95,7 +95,7 @@ func (r *RefreshTokenRepository) FindByTokenHash(ctx context.Context, hash refre
 
 	rt, err := reconstructRefreshToken(
 		row.TokenHash, row.FamilyID, row.ClientID, row.UserID, row.Scope,
-		row.ExpiresAt, row.Consumed,
+		row.AuthTime, row.ExpiresAt, row.Consumed,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: find refresh token: %w", err)
@@ -183,6 +183,7 @@ func insertRefreshTokenParams(rt *refreshtoken.RefreshToken) sqlcgen.InsertRefre
 		UserID:    rt.UserID().String(),
 		Scope:     rt.Scope().String(),
 		ExpiresAt: rt.ExpiresAt(),
+		AuthTime:  encodeAuthTime(rt.AuthTime()),
 	}
 }
 
@@ -193,8 +194,13 @@ func insertRefreshTokenParams(rt *refreshtoken.RefreshToken) sqlcgen.InsertRefre
 // repository's own Save/Rotate is surfaced as an error rather than
 // silently accepted (mirrors reconstructAuthCode in
 // authcode_repository.go).
+//
+// authTimeVal is the nullable auth_time column value (added by goose
+// migration 000005, ISSUE-038): SQL NULL decodes to time.Time{} (zero),
+// meaning "not available", via decodeAuthTime.
 func reconstructRefreshToken(
 	hashStr, familyIDStr, clientIDStr, userIDStr, scopeStr string,
+	authTimeVal sql.NullTime,
 	expiresAt time.Time,
 	consumed bool,
 ) (*refreshtoken.RefreshToken, error) {
@@ -217,6 +223,7 @@ func reconstructRefreshToken(
 		refreshtoken.NewClientID(clientIDStr),
 		refreshtoken.NewUserID(userIDStr),
 		scope,
+		decodeAuthTime(authTimeVal),
 		expiresAt,
 		consumed,
 	), nil
