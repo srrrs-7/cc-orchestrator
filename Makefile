@@ -272,6 +272,18 @@ test-db: migrate-test ## test DB を用意して api/auth の DB 到達テスト
 	REQUIRE_DB=1 $(MAKE) -C app/auth test
 
 # ---------------------------------------------------------------------------
+# ISSUE-036: 署名鍵リング生成(app/auth RSA key persistence)
+# ---------------------------------------------------------------------------
+
+.PHONY: auth-signing-keys
+auth-signing-keys: ## auth の RSA 署名鍵リングを生成する (.secrets/auth-signing-keys.json。gitignore 済み。秘密鍵を含むため絶対にコミットしない。事前に keygen ツールが app/auth/cmd/keygen に必要)
+	$(MAKE) -C app/auth auth-signing-keys
+
+.PHONY: rotate-auth-signing-keys
+rotate-auth-signing-keys: ## auth の RSA 署名鍵をローテーションする (旧 active 鍵を verify-only に降格し新しい active 鍵を追加)
+	$(MAKE) -C app/auth rotate-signing-keys
+
+# ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004。2026-07-10 SPEC-009 Phase B:
 # deploy-web の build ステップをコンテナ化)
 #

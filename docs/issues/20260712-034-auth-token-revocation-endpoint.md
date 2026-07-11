@@ -1,7 +1,7 @@
 ---
 id: ISSUE-034
 title: app/auth トークン失効エンドポイント POST /revoke (RFC 7009)
-status: open
+status: resolved
 severity: medium
 created: 2026-07-12
 updated: 2026-07-12
@@ -60,3 +60,8 @@ README「将来拡張点」として意図的に未実装。
 ### 2026-07-12
 
 - 起票。AUTH-002 ロードマップ Phase 2.1。
+
+### 2026-07-12 (resolved)
+
+- `POST /revoke` 実装(RFC 7009)。refresh token は family 単位で失効。Discovery に `revocation_endpoint` 追加。web Sign out から revoke 呼び出し。
+- 検証: `REQUIRE_DB=1 make -C app/auth check` 緑、`make -C app/web check` 140 tests 緑。コミット `e609154`。

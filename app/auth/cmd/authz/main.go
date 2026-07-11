@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -23,6 +22,7 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/consent"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
@@ -32,7 +32,6 @@ import (
 )
 
 const (
-	rsaKeyBits      = 2048
 	shutdownTimeout = 10 * time.Second
 
 	// HTTP server timeouts. In particular, ReadHeaderTimeout bounds how
@@ -82,21 +81,23 @@ func run() error {
 	// development. A production deployment MUST set ISSUER to an
 	// https URL (see README.md "issuer").
 
-	// RSA signing key: generated fresh in memory every time the
-	// process starts. It is never written to disk, logged, or
-	// otherwise persisted, so restarting the process invalidates
-	// every token issued by the previous instance (see README.md).
-	privateKey, err := rsa.GenerateKey(rand.Reader, rsaKeyBits)
+	// RSA signing key ring: loaded from SIGNING_KEYS_FILE when set
+	// (production / persistent keys), or generated ephemeral in memory
+	// when unset (local development). The key ring supports multiple
+	// public keys in JWKS for rotation overlap (ISSUE-036).
+	loader := buildKeyRingLoader(e.SigningKeysFile)
+	material, err := loader.Load()
 	if err != nil {
-		return fmt.Errorf("authz: generate rsa key: %w", err)
+		return fmt.Errorf("authz: load signing keys: %w", err)
 	}
-	kid, err := jwt.ComputeKeyID(&privateKey.PublicKey)
+	keyRing, err := jwt.NewKeyRingFromMaterial(material)
 	if err != nil {
-		return fmt.Errorf("authz: compute key id: %w", err)
+		return fmt.Errorf("authz: build key ring: %w", err)
 	}
-	signer := jwt.NewSigner(privateKey, kid)
-	verifier := jwt.NewVerifier(&privateKey.PublicKey)
-	keyProvider := jwt.NewKeyProvider(&privateKey.PublicKey, kid)
+	signer := keyRing.Signer()
+	verifier := keyRing.Verifier()
+	keyProvider := keyRing.KeyProvider()
+	kid := material.ActiveKid
 
 	// Repositories + demo seed data (SPEC-011: Postgres is the sole
 	// persistence backend). SPEC-010: setupPersistence opens a
@@ -168,6 +169,20 @@ func run() error {
 	}
 
 	return nil
+}
+
+// buildKeyRingLoader selects the appropriate token.KeyRingLoader
+// implementation based on the signingKeysFile env value:
+//   - non-empty: jwt.FileLoader reads from that path (production)
+//   - empty:     jwt.EphemeralLoader generates a fresh key in memory
+//     (local development; tokens do not survive restart)
+func buildKeyRingLoader(signingKeysFile string) token.KeyRingLoader {
+	if signingKeysFile != "" {
+		slog.Info("authz: loading signing keys from file", "path", signingKeysFile)
+		return jwt.NewFileLoader(signingKeysFile)
+	}
+	slog.Warn("authz: SIGNING_KEYS_FILE not set; generating ephemeral RSA key (tokens will not survive restart)")
+	return jwt.NewEphemeralLoader()
 }
 
 // setupPersistence is the persistence composition block (SPEC-011:

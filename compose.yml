@@ -122,6 +122,18 @@ services:
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
+      # ISSUE-036: persistent RSA signing keys (optional for local dev).
+      # When empty the auth server falls back to an ephemeral key that does
+      # not survive process restart. To enable persistence:
+      #   1. Run: make auth-signing-keys   (generates .secrets/auth-signing-keys.json)
+      #   2. Uncomment SIGNING_KEYS_FILE and the volumes stanza below.
+      #   3. Restart: make up-d
+      # SIGNING_KEYS_FILE: /run/secrets/auth-signing-keys.json
+    # volumes:
+    #   - type: bind
+    #     source: ./.secrets/auth-signing-keys.json
+    #     target: /run/secrets/auth-signing-keys.json
+    #     read_only: true
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped

@@ -38,6 +38,12 @@ type Env struct {
 	Port   string
 	Issuer string
 
+	// SigningKeysFile is the path to the JSON key ring file produced by
+	// `make auth-signing-keys` (ISSUE-036). When empty, the process
+	// generates an ephemeral RSA key pair that does not survive restart
+	// (acceptable for local development, not for production).
+	SigningKeysFile string
+
 	DemoPassword string
 
 	DBHost     string
@@ -79,9 +85,10 @@ type DBReaderEnv struct {
 // doc comment for the fail-closed contract).
 func NewEnv() Env {
 	e := Env{
-		Port:         orDefault(os.Getenv("PORT"), defaultPort),
-		Issuer:       orDefault(os.Getenv("ISSUER"), defaultIssuer),
-		DemoPassword: os.Getenv("DEMO_PASSWORD"),
+		Port:            orDefault(os.Getenv("PORT"), defaultPort),
+		Issuer:          orDefault(os.Getenv("ISSUER"), defaultIssuer),
+		SigningKeysFile: os.Getenv("SIGNING_KEYS_FILE"),
+		DemoPassword:    os.Getenv("DEMO_PASSWORD"),
 
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     orDefault(os.Getenv("DB_PORT"), defaultDBPort),
