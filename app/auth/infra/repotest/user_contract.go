@@ -13,13 +13,11 @@ import (
 //
 // user.Repository is read-only (FindByID / FindByUsername; see
 // domain/user/repository.go): seeding is necessarily performed
-// outside the interface, through whatever mechanism each
-// implementation uses in production (infra/memory.UserRepository's
-// Seed method; infra/postgres's planned startup idempotent-seed
-// UpsertUser, per docs/plans/SPEC-005-plan.md §2.2). Implementations
-// MUST start from an empty store on every call, the same way
-// memory.NewUserRepository() does, so subtests never observe data
-// left behind by another subtest.
+// outside the interface, through postgres.SeedUser's idempotent
+// upsert (wrapped by testsupport.SeedUser for tests; infra/postgres
+// is the sole implementation since SPEC-011). Implementations MUST
+// start from an empty store on every call so subtests never observe
+// data left behind by another subtest.
 type NewUserRepository func(t *testing.T, seed ...*user.User) user.Repository
 
 // RunUserRepositoryContract runs the behavioral contract shared by

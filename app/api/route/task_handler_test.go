@@ -12,14 +12,21 @@ import (
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres/testsupport"
 	"github.com/srrrs-7/cc-orchestrator/app/api/route"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
 )
 
 // failingRepository is a task.Repository whose every method returns a
-// generic, non-sentinel error. It exists solely to drive route's
-// default writeError branch (500 errorResponse), a wire-contract
-// scenario a functional store cannot produce.
+// generic, non-sentinel error. As of SPEC-013 (R2 exception 1), this
+// is the one hand-written double deliberately kept in this package:
+// infra/postgres's real repositories only ever return
+// *task.NotFoundError / *task.ValidationError / *task.ConflictError /
+// *task.DBError (see task_reader.go / task_writer.go), so an
+// unclassified error can never actually reach route.writeError's
+// default (fallback) branch through a real database -- only a stub
+// like this one can drive that specific branch.
 type failingRepository struct{}
 
 var _ task.Repository = failingRepository{}
@@ -41,7 +48,10 @@ func (failingRepository) ListPage(context.Context, task.Page) ([]*task.Task, int
 }
 
 // newFailingTestHandler wires a router backed by failingRepository,
-// for wire-contract cases that must observe a 500 errorResponse.
+// for the one wire-contract case that must observe route's default
+// (unclassified-error) 500 branch specifically -- see
+// failingRepository's doc comment for why a real DB cannot produce
+// this scenario.
 func newFailingTestHandler() http.Handler {
 	repo := failingRepository{}
 	dupChk := task.NewDuplicateChecker(repo)
@@ -49,70 +59,29 @@ func newFailingTestHandler() http.Handler {
 	return route.NewRouter(svc)
 }
 
-// dbErrorRepository is a task.Repository whose every method returns a
-// *task.DBError (ISSUE-018's category type for infrastructure-layer
-// failures). Unlike failingRepository (which returns a generic,
-// non-category error to drive route's default 500 branch),
-// dbErrorRepository exists to pin that the DBError *category*
-// independently maps to 500 through writeError's errors.As switch,
-// rather than only reaching 500 via the fallback default case.
-type dbErrorRepository struct{}
-
-var _ task.Repository = dbErrorRepository{}
-
-func (dbErrorRepository) Save(context.Context, *task.Task) error {
-	return task.NewDBError(errors.New("dbErrorRepository: save always fails"))
-}
-
-func (dbErrorRepository) FindByID(context.Context, task.ID) (*task.Task, error) {
-	return nil, task.NewDBError(errors.New("dbErrorRepository: find by id always fails"))
-}
-
-func (dbErrorRepository) FindByTitle(context.Context, task.Title) (*task.Task, error) {
-	return nil, task.NewDBError(errors.New("dbErrorRepository: find by title always fails"))
-}
-
-func (dbErrorRepository) ListPage(context.Context, task.Page) ([]*task.Task, int, error) {
-	return nil, 0, task.NewDBError(errors.New("dbErrorRepository: list page always fails"))
-}
-
-// newDBErrorTestHandler wires a router backed by dbErrorRepository.
-func newDBErrorTestHandler() http.Handler {
-	repo := dbErrorRepository{}
+// newDBErrorTestHandler wires a router backed by a real
+// postgres.TaskRepository against the api_test database, then closes
+// the underlying *sql.DB before returning the handler. Every
+// subsequent repository call therefore fails with a real driver error
+// ("sql: database is closed"), which infra/postgres wraps as a
+// *task.DBError (task_reader.go / task_writer.go's task.NewDBError
+// calls) -- pinning that the DBError *category* independently maps to
+// 500 through writeError's errors.As switch, rather than only
+// reaching 500 via failingRepository's fallback default case above.
+// This mirrors infra/postgres's own "forced driver failure (closed
+// connection)" pattern
+// (infra/postgres/task_repository_integration_test.go, ISSUE-018),
+// applied here at the route layer instead.
+func newDBErrorTestHandler(t *testing.T) http.Handler {
+	t.Helper()
+	db := testsupport.OpenTestDB(t)
+	testsupport.TruncateTasks(t, db)
+	repo := postgres.NewTaskRepository(db)
 	dupChk := task.NewDuplicateChecker(repo)
 	svc := service.NewTaskService(repo, repo, dupChk)
-	return route.NewRouter(svc)
-}
-
-// notFoundRepository is a task.Repository whose find methods always
-// return *task.NotFoundError (unwrapping to task.ErrNotFound). It
-// drives the route layer's 404 branch without needing a live store or
-// pre-existing data, for tests that only care about the not-found
-// error path. This is a minimal, targeted stub -- not a general-purpose
-// in-memory store -- consistent with SPEC-011's prohibition on
-// re-implementing infra/memory.
-type notFoundRepository struct{}
-
-var _ task.Repository = notFoundRepository{}
-
-func (notFoundRepository) Save(_ context.Context, _ *task.Task) error { return nil }
-func (notFoundRepository) FindByID(_ context.Context, _ task.ID) (*task.Task, error) {
-	return nil, task.NewNotFoundError()
-}
-func (notFoundRepository) FindByTitle(_ context.Context, _ task.Title) (*task.Task, error) {
-	return nil, task.NewNotFoundError()
-}
-func (notFoundRepository) ListPage(_ context.Context, _ task.Page) ([]*task.Task, int, error) {
-	return nil, 0, nil
-}
-
-// newNotFoundTestHandler wires a router backed by notFoundRepository,
-// for wire-contract cases that must observe a 404 errorResponse without
-// requiring any pre-existing store state.
-func newNotFoundTestHandler() http.Handler {
-	repo := notFoundRepository{}
-	dupChk := task.NewDuplicateChecker(repo)
-	svc := service.NewTaskService(repo, repo, dupChk)
+	if err := db.Close(); err != nil {
+		t.Fatalf("setup: close db: %v", err)
+	}
 	return route.NewRouter(svc)
 }
 
@@ -162,22 +131,30 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) errorResponseBody
 	return got
 }
 
-// --- untagged (offline) unit tests: validation + error injection --------
+// --- validation + error-injection tests ----------------------------------
 //
-// These tests exercise paths the route layer can decide without a
-// functional store: input validation that fails before any repository
-// call (invalid priority, empty title, malformed JSON, invalid query
-// params) and error injection via the stub repositories above
-// (failingRepository drives the 500 default branch,
-// dbErrorRepository pins the DBError category, notFoundRepository
-// drives the 404 branch). No real DB or in-memory store is required.
+// As of SPEC-013, this package is a single, untagged suite that runs
+// against the real api_test database as part of the default `make
+// test` / `make check` (see task_handler_integration_test.go's
+// newIntegrationTestHandler for the shared real-DB wiring). The tests
+// below exercise:
+//   - input validation that fails before any repository call (invalid
+//     priority, empty title, malformed JSON, invalid query params),
+//     wired against newIntegrationTestHandler since the store is
+//     never actually reached;
+//   - not-found paths, wired against newIntegrationTestHandler with an
+//     empty store (its real FindByID/FindByTitle return
+//     *task.NotFoundError for an absent row, no fixture required);
+//   - the two error-injection doubles kept for scenarios a functional
+//     Postgres store cannot itself produce (failingRepository's
+//     unclassified-error default branch, newDBErrorTestHandler's
+//     forced driver failure) -- see their doc comments above.
 
 // TestCreateTask_InvalidPriority covers R5: an unknown priority value
-// in the create request must be rejected with 400.  Priority validation
-// (service.Create -> task.ParsePriority) fires before any store access,
-// so failingRepository's errors are never surfaced.
+// in the create request must be rejected with 400. Priority validation
+// (service.Create -> task.ParsePriority) fires before any store access.
 func TestCreateTask_InvalidPriority(t *testing.T) {
-	h := newFailingTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "urgent"})
 
@@ -193,7 +170,7 @@ func TestCreateTask_InvalidPriority(t *testing.T) {
 // rejected with 400 before any store access (service.Create ->
 // task.NewTitle).
 func TestCreateTask_EmptyTitle(t *testing.T) {
-	h := newFailingTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": ""})
 
@@ -206,11 +183,11 @@ func TestCreateTask_EmptyTitle(t *testing.T) {
 }
 
 // TestGetTask_NotFound covers the not-found path: GET /tasks/{id} for
-// a nonexistent ID must return 404. notFoundRepository returns
-// *task.NotFoundError so the route layer maps it to 404 without a live
-// store or pre-existing data.
+// a nonexistent ID must return 404. Against an empty api_test store,
+// the real postgres.TaskReader's FindByID returns *task.NotFoundError,
+// which the route layer maps to 404.
 func TestGetTask_NotFound(t *testing.T) {
-	h := newNotFoundTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodGet, "/tasks/does-not-exist", nil)
 
@@ -227,7 +204,7 @@ func TestGetTask_NotFound(t *testing.T) {
 // domain validation (limit < 1, negative offset), must be rejected
 // with 400 and the existing error envelope {error}, never reaching a
 // 200 response. The handler and service validate these before any
-// store call, so failingRepository's errors are never surfaced.
+// store call.
 func TestListTasks_InvalidQueryParams(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -243,7 +220,7 @@ func TestListTasks_InvalidQueryParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newFailingTestHandler()
+			h := newIntegrationTestHandler(t)
 
 			rec := doRequest(t, h, http.MethodGet, "/tasks"+tt.query, nil)
 
@@ -260,10 +237,9 @@ func TestListTasks_InvalidQueryParams(t *testing.T) {
 // TestChangePriority_InvalidPriority covers R5: an unknown priority
 // value sent to POST /tasks/{id}/priority is rejected with 400.
 // service.ChangePriority validates priority (task.ParsePriority) before
-// fetching the task from the store, so no pre-existing task is needed
-// and failingRepository's errors are never surfaced.
+// fetching the task from the store, so no pre-existing task is needed.
 func TestChangePriority_InvalidPriority(t *testing.T) {
-	h := newFailingTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]string{"priority": "urgent"})
 
@@ -282,7 +258,7 @@ func TestChangePriority_InvalidPriority(t *testing.T) {
 // (strict) before any store access, so the empty string must be
 // rejected with 400 (ErrInvalidPriority) without needing a live store.
 func TestChangePriority_ExplicitNullPriority(t *testing.T) {
-	h := newFailingTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]any{"priority": nil})
 
@@ -297,10 +273,10 @@ func TestChangePriority_ExplicitNullPriority(t *testing.T) {
 // TestChangePriority_NotFound covers the boundary shared with
 // start/complete: a valid-priority request for an unknown task id yields
 // 404. service.ChangePriority validates priority first (task.ParsePriority),
-// then calls FindByID which notFoundRepository answers with
-// *task.NotFoundError → 404.
+// then calls FindByID which, against an empty api_test store, answers
+// with *task.NotFoundError -> 404.
 func TestChangePriority_NotFound(t *testing.T) {
-	h := newNotFoundTestHandler()
+	h := newIntegrationTestHandler(t)
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/priority", map[string]string{"priority": "high"})
 
@@ -322,7 +298,9 @@ func TestChangePriority_NotFound(t *testing.T) {
 // 500 -- if a future change moved DBError to, say, a 400 case by
 // mistake, this test (unlike the failingRepository-driven ones) would
 // catch it even though failingRepository's default-path assertions
-// would not move.
+// would not move. As of SPEC-013, the DBError is induced from a real
+// Postgres connection (closed mid-test) rather than a hand-written
+// stub -- see newDBErrorTestHandler's doc comment.
 func TestDBErrorCategory_MapsTo500(t *testing.T) {
 	tests := []struct {
 		name string
@@ -350,7 +328,7 @@ func TestDBErrorCategory_MapsTo500(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newDBErrorTestHandler()
+			h := newDBErrorTestHandler(t)
 
 			rec := tt.do(t, h)
 
@@ -372,14 +350,19 @@ func TestDBErrorCategory_MapsTo500(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Wire-contract tests (SPEC-003 T2 / R2) -- offline (untagged) half.
+// Wire-contract tests (SPEC-003 T2 / R2) -- validation/error half.
 //
-// This half covers error paths that do not require functional store
-// state: input validation errors (malformed JSON, empty title, invalid
-// priority), repository injection failures (500), and not-found paths
-// (404 via notFoundRepository). Success paths and state-dependent
-// error paths (duplicate, invalid transition) are in the
-// //go:build integration counterpart (task_handler_integration_test.go).
+// This half covers error paths that do not require pre-existing store
+// data: input validation errors (malformed JSON, empty title, invalid
+// priority), the failingRepository-driven unrecognized-error 500, and
+// not-found paths (404 against an empty api_test store). Success paths
+// and state-dependent error paths (duplicate, invalid transition) are
+// in task_handler_integration_test.go's
+// TestWireContract_SuccessAndStateShapes, which shares this file's
+// doRequest/doRawRequest/decodeMap/assertWireShape helpers -- both
+// live in the same untagged route_test package and run together as
+// part of the default `make test` (SPEC-013; there is no longer a
+// separate `//go:build integration` half).
 // ---------------------------------------------------------------------
 
 // wireErrorFields is the exact field set of route.errorResponse.
@@ -429,14 +412,16 @@ func assertWireShape(t *testing.T, body map[string]any, wantFields []string) {
 }
 
 // TestWireContract_ErrorAndValidationShapes covers every error/
-// validation path that does not require functional store state: malformed
-// JSON, empty title, invalid priority (400s), repository failures (500),
-// and not-found paths (404). Success paths and state-dependent error
-// shapes are covered in task_handler_integration_test.go.
+// validation path that does not require pre-existing store data:
+// malformed JSON, empty title, invalid priority (400s), the
+// unrecognized-error fallback (500, via failingRepository), and
+// not-found paths (404, against an empty api_test store). Success
+// paths and state-dependent error shapes are covered in
+// task_handler_integration_test.go.
 func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 	tests := []struct {
 		name       string
-		handler    func() http.Handler
+		handler    func(t *testing.T) http.Handler
 		do         func(t *testing.T, h http.Handler) *httptest.ResponseRecorder
 		wantStatus int
 		wantFields []string
@@ -444,7 +429,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		// POST /tasks
 		{
 			name:    "POST /tasks malformed JSON body -> 400 errorResponse",
-			handler: newFailingTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRawRequest(t, h, http.MethodPost, "/tasks", "{not-json")
 			},
@@ -453,7 +438,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		},
 		{
 			name:    "POST /tasks empty title -> 400 errorResponse",
-			handler: newFailingTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": ""})
 			},
@@ -462,7 +447,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		},
 		{
 			name:    "POST /tasks invalid priority -> 400 errorResponse",
-			handler: newFailingTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "urgent"})
 			},
@@ -470,8 +455,10 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 			wantFields: wireErrorFields,
 		},
 		{
-			name:    "POST /tasks repository failure -> 500 errorResponse",
-			handler: newFailingTestHandler,
+			name: "POST /tasks repository failure -> 500 errorResponse",
+			handler: func(t *testing.T) http.Handler {
+				return newFailingTestHandler()
+			},
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"})
 			},
@@ -482,7 +469,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		// GET /tasks/{id}
 		{
 			name:    "GET /tasks/{id} not found -> 404 errorResponse",
-			handler: newNotFoundTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodGet, "/tasks/does-not-exist", nil)
 			},
@@ -493,7 +480,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		// POST /tasks/{id}/start
 		{
 			name:    "POST /tasks/{id}/start not found -> 404 errorResponse",
-			handler: newNotFoundTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/start", nil)
 			},
@@ -504,7 +491,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		// POST /tasks/{id}/complete
 		{
 			name:    "POST /tasks/{id}/complete not found -> 404 errorResponse",
-			handler: newNotFoundTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/complete", nil)
 			},
@@ -515,7 +502,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		// POST /tasks/{id}/priority
 		{
 			name:    "POST /tasks/{id}/priority malformed JSON body -> 400 errorResponse",
-			handler: newFailingTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRawRequest(t, h, http.MethodPost, "/tasks/some-id/priority", "{not-json")
 			},
@@ -524,7 +511,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		},
 		{
 			name:    "POST /tasks/{id}/priority invalid priority value -> 400 errorResponse",
-			handler: newFailingTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]string{"priority": "urgent"})
 			},
@@ -533,7 +520,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 		},
 		{
 			name:    "POST /tasks/{id}/priority not found -> 404 errorResponse",
-			handler: newNotFoundTestHandler,
+			handler: newIntegrationTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/priority", map[string]string{"priority": "high"})
 			},
@@ -544,7 +531,7 @@ func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := tt.handler()
+			h := tt.handler(t)
 			rec := tt.do(t, h)
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, tt.wantStatus, rec.Body.String())

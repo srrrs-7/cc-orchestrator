@@ -1,5 +1,3 @@
-//go:build integration
-
 // Regression coverage for ISSUE-019 課題3: when a grant (refresh_token
 // / authorization_code) resolves to a valid, unexpired token/code but
 // the resource owner it names has since disappeared from the user
@@ -11,11 +9,9 @@
 // docs/issues/20260710-019-auth-refresh-token-deferred-hardening.md
 // 課題3 for the full history.
 //
-// SPEC-011: The previous implementation used a test-local
-// removableUserRepository (an in-memory stub with a Delete method).
-// This integration version uses a real Postgres DB and performs an SQL
-// DELETE on the users table to simulate the owner disappearing --
-// identical semantic, no in-memory store required.
+// This uses the real Postgres test DB (newTestHandlerWithDB) and
+// performs an SQL DELETE on the users table to simulate the owner
+// disappearing after a grant was issued.
 package route_test
 
 import (

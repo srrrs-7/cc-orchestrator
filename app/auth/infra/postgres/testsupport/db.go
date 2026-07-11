@@ -1,17 +1,18 @@
-//go:build integration
-
 // Package testsupport provides shared test-DB helpers for
-// infra/postgres integration tests (build tag: integration).
+// infra/postgres tests.
 //
 // It consolidates the openTestDB / truncateTable / testConfig helpers
 // that were previously defined in infra/postgres/testdb_integration_test.go,
 // and makes them available as an importable package so that route
-// integration tests (SPEC-011 Phase 2) can reuse the same connection,
-// truncation, and demo-data seeding logic without rebuilding it.
+// tests can reuse the same connection, truncation, and demo-data
+// seeding logic without rebuilding it.
 //
-// This package is tagged //go:build integration so it is never compiled
-// in the default `make test` (offline, no DB). Any file that imports
-// this package must also be tagged integration.
+// As of SPEC-013, this package (and everything that imports it) is
+// compiled and run as part of the default `make test` / `make check`,
+// against a dedicated test database (DB_NAME defaults to "auth_test",
+// never the "auth" database used by `make up`). There is no longer an
+// `integration` build tag gating DB-backed tests: they are the normal
+// tests for this stack.
 //
 // Importing this package also imports infra/postgres, which blank-imports
 // github.com/jackc/pgx/v5/stdlib, registering "pgx" as the
@@ -29,26 +30,66 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 )
 
+// requireDB reports whether OpenTestDB must fail the test outright
+// (via t.Fatal) rather than skip it, given that DB_HOST is unset. It is
+// a pure function of the REQUIRE_DB environment variable value so the
+// skip-vs-fatal branch selection can be exercised by an ordinary unit
+// test without needing to actually terminate a *testing.T.
+//
+// REQUIRE_DB=1 is injected by the "regular" test paths (CI check jobs,
+// the pre-commit DB phase, root-level `make test`) so a misconfigured
+// DB_HOST cannot silently skip DB-backed tests and appear green. Ad-hoc
+// local `go test ./...` without REQUIRE_DB set keeps the previous
+// graceful-skip behavior.
+func requireDB(requireDBEnv string) bool {
+	return requireDBEnv == "1"
+}
+
+// RequireDBHost enforces this package's fail-closed DB_HOST policy for
+// tests that need to dial Postgres themselves (e.g. opening more than
+// one *sql.DB pool via postgres.OpenPair) instead of going through
+// OpenTestDB. It centralizes the same skip-vs-fatal decision OpenTestDB
+// applies, so every DB-backed test -- whether or not it uses OpenTestDB
+// -- observes REQUIRE_DB=1 the same way:
+//
+//   - DB_HOST unset and REQUIRE_DB=1: fails the test via t.Fatal (the
+//     regular check/CI/pre-commit path must not silently skip
+//     DB-backed tests).
+//   - DB_HOST unset and REQUIRE_DB unset/other: skips the test, so
+//     ad-hoc local `go test ./...` without a live Postgres still
+//     compiles and passes.
+//   - DB_HOST set: returns normally: the caller may proceed to dial.
+func RequireDBHost(t *testing.T) {
+	t.Helper()
+
+	if os.Getenv("DB_HOST") != "" {
+		return
+	}
+	if requireDB(os.Getenv("REQUIRE_DB")) {
+		t.Fatalf("DB_HOST not set but REQUIRE_DB=1; refusing to silently skip a DB-backed test (see .claude/rules/db.md)")
+	}
+	t.Skip("DB_HOST not set; skipping DB-backed test (set DB_HOST to a reachable, migrated Postgres, or REQUIRE_DB=1 to fail instead of skip)")
+}
+
 // OpenTestDB opens a *sql.DB against the Postgres instance described
 // by the discrete DB_* environment variables (DB_HOST / DB_PORT /
-// DB_NAME / DB_USER / DB_PASSWORD / DB_SSLMODE). It skips the test
-// (rather than failing) when DB_HOST is unset, so integration-tagged
-// files compile and are ignored on machines without a live Postgres.
+// DB_NAME / DB_USER / DB_PASSWORD / DB_SSLMODE).
 //
-// DB_NAME defaults to "auth" (this stack's own dedicated Postgres
-// database, per SPEC-005 plan §RF.1.1: api and auth are separated by
-// database, not by schema / search_path; app/migrator creates and
-// migrates it, see .claude/rules/db.md).
+// It applies RequireDBHost's fail-closed policy first: when DB_HOST is
+// unset, REQUIRE_DB=1 fails the test via t.Fatal, otherwise it skips
+// the test so ad-hoc local `go test ./...` without a live Postgres
+// still compiles and passes.
+//
+// DB_NAME defaults to "auth_test" (a dedicated test database, separate
+// from the "auth" database used by `make up`/local development, so
+// running tests never touches development data; per SPEC-013).
 //
 // The returned *sql.DB is registered for cleanup via t.Cleanup; callers
 // must not call db.Close() themselves.
 func OpenTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	host := os.Getenv("DB_HOST")
-	if host == "" {
-		t.Skip("DB_HOST not set; skipping integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
+	RequireDBHost(t)
 
 	db, err := sql.Open("pgx", TestConfig().DSN())
 	if err != nil {
@@ -64,7 +105,7 @@ func OpenTestDB(t *testing.T) *sql.DB {
 
 // TestConfig builds a postgres.Config from the same discrete DB_*
 // environment variables the application itself uses to configure
-// persistence. DB_NAME defaults to "auth".
+// persistence. DB_NAME defaults to "auth_test".
 func TestConfig() postgres.Config {
 	env := func(key, def string) string {
 		if v := os.Getenv(key); v != "" {
@@ -75,7 +116,7 @@ func TestConfig() postgres.Config {
 	return postgres.Config{
 		Host:     env("DB_HOST", "127.0.0.1"),
 		Port:     env("DB_PORT", "5432"),
-		Name:     env("DB_NAME", "auth"),
+		Name:     env("DB_NAME", "auth_test"),
 		User:     env("DB_USER", "app"),
 		Password: env("DB_PASSWORD", "app"),
 		SSLMode:  env("DB_SSLMODE", "disable"),

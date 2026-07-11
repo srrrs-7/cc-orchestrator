@@ -11,9 +11,18 @@ COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compos
 # target-name column would print the filename instead of the target).
 # ---------------------------------------------------------------------------
 # Git hooks — pre-commit runs CI-equivalent checks for staged changes only
-# (see .githooks/README.md). Integration jobs are excluded (Postgres required).
-# On the host, hook-check re-enters the toolchain container; inside
-# devcontainer (IN_TOOLBOX=1) it runs directly.
+# (see .githooks/README.md). SPEC-013 (テストの実 DB 一本化): api/auth `make
+# check` is now test-DB-backed by default (formerly the separate
+# `*-integration` jobs' concern, folded into `check` itself), so a staged
+# api/auth change now provisions Postgres + the `api_test`/`auth_test`
+# databases (`db-up` + `migrate-test`, this same file's own targets) before
+# running that stack's `check` -- this is no longer "excluded" the way it
+# used to be. Only `migrator`'s own separate Postgres-permission-boundary
+# suite (CI's `migrator-integration` job, ISSUE-016 R-c) stays out of scope
+# here -- that is a distinct, slower concern unrelated to api/auth's own
+# persistence-layer tests and is not part of this hook. On the host,
+# hook-check re-enters the toolchain container; inside devcontainer
+# (IN_TOOLBOX=1) it runs directly.
 # ---------------------------------------------------------------------------
 
 .PHONY: setup-hooks
@@ -215,6 +224,52 @@ MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e D
 migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行。toolchain コンテナ内で go を実行し、postgres へは compose ネットワーク越しに到達する)
 	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
 	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+
+# ---------------------------------------------------------------------------
+# SPEC-013 (テストの実 DB 一本化): dedicated *test* databases, kept fully
+# separate from the dev `api`/`auth` databases `migrate` above provisions
+# (plan §1.3 "test DB 導線" -- app/migrator itself needs no code change,
+# since its own `DB_NAME` env var already defaults to `-target`'s name but
+# is happily overridden). `api_test`/`auth_test` (underscore, not hyphen)
+# because app/migrator's own identifier validation
+# (`domain/migration.ParseDatabaseName`, `^[a-z_][a-z0-9_]*$`) rejects a
+# hyphen outright (SPEC-013 §4 "test DB 命名").
+#
+# Mirrors `migrate` above exactly (same DB_TOOLS_RUN invocation shape, same
+# `-migrations-dir`s, same lack of any APP_DB_USER/APP_DB_PASSWORD role-
+# provisioning flags -- test databases have no least-privilege runtime role
+# to provision, unlike ISSUE-016's api_app/auth_app convention for the real
+# dev/prod databases), with only MIGRATOR_DB_ENV_FLAGS's DB_NAME overridden
+# per invocation (`-e DB_NAME=...` placed *after* the shared flags so it
+# wins -- `docker compose run -e` flags are applied left-to-right, last one
+# for a given name set takes effect).
+MIGRATOR_TEST_DB_ENV_FLAGS_API  := $(MIGRATOR_DB_ENV_FLAGS) -e DB_NAME=api_test
+MIGRATOR_TEST_DB_ENV_FLAGS_AUTH := $(MIGRATOR_DB_ENV_FLAGS) -e DB_NAME=auth_test
+
+.PHONY: migrate-test
+migrate-test: db-up ## api_test/auth_test テスト用データベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提。開発用 api/auth データベースとは別。role provisioning env は渡さない)
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_TEST_DB_ENV_FLAGS_API) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_TEST_DB_ENV_FLAGS_AUTH) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+
+# Convenience target bundling the full local "run DB-backed tests" flow:
+# start Postgres + provision both test databases (`migrate-test`, which
+# itself depends on `db-up`), then run each stack's own `test` target
+# (app/api|app/auth Makefile -- SPEC-013 T4a/T4b make these connect to
+# `api_test`/`auth_test` by default once that target's testsupport default
+# is updated) against them. REQUIRE_DB=1 is exported as a real *process*
+# environment variable (not a `make`-only command-line override) for both
+# sub-`make` invocations below, following this repo's existing `?=`-default
+# convention (e.g. DB_HOST ?= ... in app/api|app/auth/Makefile): a stack
+# Makefile that declares `REQUIRE_DB ?=` and forwards it into its own
+# container invocation (`-e REQUIRE_DB=$(REQUIRE_DB)`, mirroring DB_HOST's
+# own forwarding) picks this up automatically, with no further plumbing
+# needed here. This is the SPEC-013 plan §1.5 admin ruling's "正規経路":
+# DB tests must fail loudly (t.Fatal) rather than silently t.Skip if the
+# test DB connection is ever unavailable through this path.
+.PHONY: test-db
+test-db: migrate-test ## test DB を用意して api/auth の DB 到達テストを実行する (migrate-test 前提。REQUIRE_DB=1 を注入し黙った skip を防ぐ)
+	REQUIRE_DB=1 $(MAKE) -C app/api test
+	REQUIRE_DB=1 $(MAKE) -C app/auth test
 
 # ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004。2026-07-10 SPEC-009 Phase B:

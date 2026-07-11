@@ -1,15 +1,9 @@
-//go:build integration
-
-// Package postgres_test holds the SPEC-005 integration suite for
-// infra/postgres. It is gated behind the "integration" build tag so
-// the default `make test` (no build tags, no DB required) stays
-// green; run it explicitly via `make test-integration`
-// (docs/plans/SPEC-005-plan.md §0 "Make ターゲット名"), e.g.:
-//
-//	go test -tags=integration ./infra/postgres/...
-//
-// against a live Postgres that already has `app/migrator` applied
-// (this suite does not run migrations itself).
+// Package postgres_test holds the SPEC-005 test suite for
+// infra/postgres. As of SPEC-013 it runs as part of the default
+// `make test` / `make check`, against the dedicated `api_test`
+// database (see infra/postgres/testsupport), which `app/migrator`
+// creates and migrates ahead of time (this suite does not run
+// migrations itself).
 package postgres_test
 
 import (

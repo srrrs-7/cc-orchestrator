@@ -1,18 +1,17 @@
-// Offline (untagged) security regression tests. These tests verify
-// error paths that never reach the repository layer, so they can run
-// without a live DB as part of the default `make test` / `make check`.
-//
-// Test handler rationale:
+// Security regression tests. Both run as part of the default
+// `make test` / `make check` (SPEC-013), but reach the repository
+// layer differently:
 //
 //   - TestUserInfo_ValidSignatureWrongAudOrIssuer_Unauthorized: JWT
 //     validation (iss/aud check) fails before any userRepo access, so
-//     newDiscoveryTestHandler (nil userRepo) is sufficient.
+//     newDiscoveryTestHandler (nil userRepo) is sufficient -- no DB
+//     required.
 //
 //   - TestToken_ErrorResponse_HasNoCacheHeaders: the /token error path
-//     needs a valid client lookup followed by an auth code not-found.
-//     newTokenErrorTestHandler provides a minimal stubClientOnlyRepo
-//     (returns the test client) and alwaysNotFoundAuthCodeRepo (returns
-//     ErrNotFound), without requiring a real DB.
+//     needs a valid client lookup followed by an auth-code not-found.
+//     newTokenErrorTestHandler wires the real Postgres test DB (seeded
+//     demo client, empty authorization_codes table), so submitting a
+//     code that was never issued reproduces the invalid_grant path.
 package route_test
 
 import (
@@ -79,9 +78,10 @@ func TestUserInfo_ValidSignatureWrongAudOrIssuer_Unauthorized(t *testing.T) {
 // Cache-Control: no-store and Pragma: no-cache must be present even
 // when the request is rejected.
 //
-// Uses newTokenErrorTestHandler: the test client exists (stubClientOnlyRepo)
-// and the submitted code "does-not-exist" is never found
-// (alwaysNotFoundAuthCodeRepo → invalid_grant). No live DB required.
+// Uses newTokenErrorTestHandler: the test client exists (seeded into
+// the real Postgres test DB by newTestHandler) and the submitted code
+// "does-not-exist" is never found in the (truncated, empty)
+// authorization_codes table → invalid_grant.
 func TestToken_ErrorResponse_HasNoCacheHeaders(t *testing.T) {
 	h := newTokenErrorTestHandler(t)
 

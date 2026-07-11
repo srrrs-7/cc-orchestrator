@@ -1,11 +1,12 @@
-// Offline (untagged) discovery tests. These tests only exercise the
-// OIDC metadata and JWKS endpoints in ways that never call the
-// authorization or user-info service methods that touch repositories.
-// They run as part of the default `make test` / `make check`.
+// Discovery metadata tests. TestDiscovery_Metadata only exercises the
+// OIDC metadata endpoint in a way that never calls the authorization
+// or user-info service methods that touch repositories, so it uses the
+// nil-repo newDiscoveryTestHandler -- no DB required.
 //
 // TestDiscovery_JWKS -- which does a full authorize+token exchange to
-// verify the JWKS key -- requires a live DB and lives in
-// discovery_integration_test.go (//go:build integration).
+// verify the JWKS key -- requires a real Postgres test DB and lives in
+// discovery_integration_test.go. Both files run as part of the default
+// `make test` / `make check` (SPEC-013); there is no build-tag split.
 package route_test
 
 import (

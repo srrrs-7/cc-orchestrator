@@ -1,5 +1,3 @@
-//go:build integration
-
 package route_test
 
 import (
@@ -43,10 +41,16 @@ func decodeTask(t *testing.T, rec *httptest.ResponseRecorder) taskResponseBody {
 var wireTaskFields = []string{"id", "title", "status", "priority", "created_at", "updated_at"}
 
 // newIntegrationTestHandler opens a real Postgres connection via
-// testsupport.OpenTestDB (skipping when DB_HOST is unset), truncates
+// testsupport.OpenTestDB (against the dedicated api_test database;
+// see testsupport.OpenTestDB's REQUIRE_DB fail-closed policy), truncates
 // the tasks table, and returns an http.Handler backed by
 // postgres.NewTaskRepository. Each call truncates so every test case
-// starts from an empty store. The DB is closed by t.Cleanup.
+// starts from an empty store. The DB is closed by t.Cleanup. It is
+// shared by both this file's success/state-dependent suite and
+// task_handler_test.go's validation/not-found tests (SPEC-013: this
+// package no longer splits into an untagged half and a
+// `//go:build integration` half -- everything here runs together as
+// part of the default `make test`).
 func newIntegrationTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 	db := testsupport.OpenTestDB(t)
@@ -366,12 +370,15 @@ func TestChangePriority_Success(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Wire-contract tests (SPEC-003 T2 / R2) -- integration half.
+// Wire-contract tests (SPEC-003 T2 / R2) -- success/state-dependent half.
 //
 // This half covers success paths and state-dependent error shapes
-// (duplicate, invalid transition) that require a functional Postgres
-// store. Error/validation paths that do not need store state are in
-// task_handler_test.go (untagged).
+// (duplicate, invalid transition) against the real api_test database.
+// Error/validation paths that do not need pre-existing store state are
+// in task_handler_test.go's TestWireContract_ErrorAndValidationShapes,
+// which shares this file's doRequest/decodeMap/assertWireShape
+// helpers -- both halves live in the same untagged route_test package
+// and run together as part of the default `make test` (SPEC-013).
 // ---------------------------------------------------------------------
 
 // wireListEnvelopeFields is the exact field set of

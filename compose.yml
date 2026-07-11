@@ -51,6 +51,38 @@ services:
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
+    # SPEC-013 R6 (revises SPEC-009 R3's "test phases stay fully
+    # offline"): also joins the `dbnet` internal network (declared in this
+    # file's own top-level `networks:` below, and identically in
+    # .devcontainer/compose.tools.yml's own top-level `networks:` so each
+    # file stays independently valid alone -- see that file's `tools-db`
+    # service comment for the full rationale), so the toolbox's `tools-db`
+    # service -- which has no route to the implicit default network / the
+    # public internet, by design -- can still reach `postgres` by service
+    # name for DB-backed test phases (SPEC-013). `default` must be listed
+    # explicitly alongside `dbnet` here: once a service declares an
+    # explicit `networks:` list, Compose no longer auto-attaches it to the
+    # implicit default network, and `api`/`auth` below (plus the `tools`
+    # service, when layered in via the root Makefile's `db-up`/`migrate`/
+    # `migrate-test` targets) still need to keep reaching `postgres` over
+    # that same default network exactly as before -- this must not
+    # regress.
+    networks:
+      - default
+      - dbnet
+    # SPEC-013 R6 review fix (Minor, defense-in-depth): explicitly disable
+    # IP forwarding inside this container's own network namespace. `net.*`
+    # sysctls are namespaced per-container in Linux, so this has no effect
+    # on the host or on any other container -- it only statically forecloses
+    # this specific container from ever being (mis)configured as a router
+    # between its two networks (`default`, which reaches the internet via
+    # `tools`, and `dbnet`, which `tools-db` uses precisely because it does
+    # NOT reach the internet). Postgres does not route traffic today and
+    # this container's image does not set ip_forward=1 on its own, so this
+    # is a static guard against that changing later (image bump, config
+    # drift), not a fix for an active bypass.
+    sysctls:
+      net.ipv4.ip_forward: "0"
 
   api:
     build:
@@ -108,3 +140,19 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  # internal: true -- SPEC-013 R6 (see the `postgres` service's own
+  # comment above and .devcontainer/compose.tools.yml's `tools-db`
+  # service comment for the full rationale: an isolated bridge network
+  # with no default route to the public internet, used only so the
+  # toolbox's `tools-db` service can reach `postgres` by service name for
+  # DB-backed test phases without also granting it internet egress).
+  # Declared here too (identically) so this file stays independently
+  # valid when composed alone (e.g. plain `make up`/`up-d`/`down`/`ps`,
+  # none of which layer .devcontainer/compose.tools.yml on top) --
+  # Compose validates every service's network references against this
+  # file's own top-level `networks:` regardless of which other files are
+  # layered in for a given invocation.
+  dbnet:
+    internal: true

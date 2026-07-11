@@ -1,20 +1,11 @@
-//go:build integration
-
-// reader_writer_pool_integration_test.go is SPEC-010's integration
-// suite for app/auth's infra/postgres writer/reader pool split
-// (docs/plans/SPEC-010-plan.md フェーズ1): postgres.OpenPair's pool-
-// sharing/opening decision, plus proof that authcode.Repository's
+// reader_writer_pool_integration_test.go is SPEC-010's test suite for
+// app/auth's infra/postgres writer/reader pool split: postgres.OpenPair's
+// pool-sharing/opening decision, plus proof that authcode.Repository's
 // single-use-sensitive reads stay fixed to the writer pool regardless
 // of the (would-be-replica) reader pool's lifecycle
-// (SPEC-010-plan.md "auth の correctness-critical read の配置").
-//
-// As of the TDD "red" phase, infra/postgres does not have OpenPair
-// yet: this file is written against its *planned* signature
-// (SPEC-010-plan.md "固定された対象シグネチャ") and therefore
-// intentionally fails to compile with -tags=integration until impl-db
-// lands infra/postgres/db.go's OpenPair. That is expected and does not
-// affect the default (untagged) build/vet/test, which never parses
-// this file.
+// (SPEC-010-plan.md "auth の correctness-critical read の配置"). As of
+// SPEC-013 it runs as part of the default `make test` / `make check`,
+// against the dedicated `auth_test` database.
 //
 // Per the plan's "別ホスト reader の再現" note, both suites below avoid
 // requiring a second live database: OpenPair's sharing test uses a
@@ -30,7 +21,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"os"
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
@@ -43,9 +33,7 @@ import (
 // identical writer/reader Config must not open a second *sql.DB -- the
 // returned reader pointer must be the exact same *sql.DB as writer.
 func TestOpenPair_SharesPoolWhenConfigEqual(t *testing.T) {
-	if os.Getenv("DB_HOST") == "" {
-		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
+	testsupport.RequireDBHost(t)
 	cfg := testsupport.TestConfig()
 	ctx := context.Background()
 
@@ -77,9 +65,7 @@ func TestOpenPair_SharesPoolWhenConfigEqual(t *testing.T) {
 // pool rather than sharing writer's) but names an unreachable host must
 // surface as an error, with no usable *sql.DB handles returned.
 func TestOpenPair_DifferentReaderConfig_FailsWithoutLeakingWriter(t *testing.T) {
-	if os.Getenv("DB_HOST") == "" {
-		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
+	testsupport.RequireDBHost(t)
 	writerCfg := testsupport.TestConfig()
 	readerCfg := writerCfg
 	// "invalid" is an IANA-reserved TLD (RFC 2606) guaranteed never to

@@ -6,14 +6,13 @@
 // implementation can be proven to behave identically without
 // duplicating test logic per-implementation.
 //
-// SPEC-011 完了: infra/memory 削除済み。contract は Postgres
-// (integration)のみで実行される
+// SPEC-011 完了: infra/memory 削除済み。SPEC-013 以降、この contract は
+// default `make test` の一部として実 DB(`api_test`)に対して実行される
 // (see infra/postgres/task_repository_integration_test.go).
 //
-// This file carries no build tag: it must remain compilable by both
-// the default (untagged) and "integration" builds, so it must not
-// depend on anything beyond the standard library and the task domain
-// package.
+// This file carries no build tag: it must remain compilable regardless
+// of build tags, so it must not depend on anything beyond the standard
+// library and the task domain package.
 package repotest
 
 import (

@@ -123,8 +123,8 @@ githooks_any_stack_needed() {
 githooks_print_plan() {
   githooks_log "checks to run:"
   [[ "$NEED_WEB" == 1 ]] && githooks_log "  - web: make install + make check"
-  [[ "$NEED_API" == 1 ]] && githooks_log "  - api: make check"
-  [[ "$NEED_AUTH" == 1 ]] && githooks_log "  - auth: make check"
+  [[ "$NEED_API" == 1 ]] && githooks_log "  - api: fmt-check+lint+vet+build (offline) + test (api_test, no-internet phase, SPEC-013 R6)"
+  [[ "$NEED_AUTH" == 1 ]] && githooks_log "  - auth: fmt-check+lint+vet+build (offline) + test (auth_test, no-internet phase, SPEC-013 R6)"
   [[ "$NEED_IAC" == 1 ]] && githooks_log "  - iac: make check"
   [[ "$NEED_MIGRATOR" == 1 ]] && githooks_log "  - migrator: make check"
   [[ "$NEED_CONTRACT_DRIFT" == 1 ]] && githooks_log "  - contract drift (make openapi + make generate)"

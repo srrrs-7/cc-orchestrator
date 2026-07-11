@@ -1,6 +1,7 @@
-# compose.tools.yml — containerized developer/CI toolchain (SPEC-009).
+# compose.tools.yml — containerized developer/CI toolchain (SPEC-009,
+# revised by SPEC-013 R6 -- see the `tools-db` service below).
 #
-# Two services built from the single polyglot image
+# Three services built from the single polyglot image
 # .devcontainer/toolchain/Dockerfile, whose tool versions all come from
 # versions.env (the single source of truth -- see that file):
 #
@@ -8,21 +9,42 @@
 #                  reach the network: `bun install`/`add`/`remove`/
 #                  `update`, `go mod download`, `terraform init`/
 #                  `tflint --init`, and phases that need to reach the
-#                  sibling compose.yml's `postgres` service (`make
-#                  migrate`, `make test-integration`, `terraform plan`).
+#                  sibling compose.yml's `postgres` service for
+#                  provisioning (`make migrate`, `make migrate-test`,
+#                  `terraform plan`) rather than for test *execution*
+#                  itself (see `tools-db` below for that).
 #   tools-offline  network_mode: none. The default execution service for
-#                  everything else: format/lint/vet/build/test/generate/
+#                  everything else: format/lint/vet/build/generate/
 #                  sqlc/openapi/migrate-create. GOPROXY=off makes any
 #                  accidental network fetch fail loudly (a build/test
 #                  that unexpectedly needs the network fails instead of
 #                  silently succeeding), so a cold/incomplete cache is
 #                  caught immediately instead of masking a real gap.
+#   tools-db       postgres-reachable, internet-egress denied (SPEC-013
+#                  R6, revising SPEC-009 R3's "every check/build/test
+#                  phase stays fully offline"). The default execution
+#                  service for DB-backed test *phases* specifically
+#                  (each stack's own `test`/`check` target, per that
+#                  stack's own Makefile -- this file only defines the
+#                  service *shape*, the same division of concerns as
+#                  `tools`/`tools-offline` above). Attached to the
+#                  `dbnet` internal network (this file's own bottom
+#                  `networks:` key) instead of the implicit default
+#                  network `tools`/`tools-offline` use -- see that
+#                  network's own comment for how it reaches `postgres`
+#                  by name while still having no route to the public
+#                  internet. Always used together with the sibling
+#                  compose.yml (`-f compose.yml -f
+#                  .devcontainer/compose.tools.yml`), same as `tools`
+#                  above when it reaches Postgres -- this service is
+#                  useless alone (no `postgres` to reach without that
+#                  overlay).
 #
-# Neither service mounts host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud
+# No service mounts host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud
 # credentials, etc.) or the Docker socket -- see the shared
 # `x-tools-base` anchor below, which is the *only* place volumes/
-# environment/security options are declared (both services inherit it
-# via YAML merge). The repository is bind-mounted read/write at
+# environment/security options are declared (all three services inherit
+# it via YAML merge). The repository is bind-mounted read/write at
 # /workspace; every tool cache lives on a named volume instead, so nothing
 # a dependency install writes ever lands inside the bind-mounted repo
 # tree as a stray cache directory.
@@ -47,15 +69,25 @@
 # editor), both default to 1000:1000 -- the image's own built-in `tools`
 # user.
 #
-# Phases that need a real Postgres (root Makefile's `migrate`,
-# app/{api,auth,migrator}'s `test-integration`) layer this file on top
-# of the sibling compose.yml (which owns the `postgres` service) instead
-# of using network_mode:none:
+# Phases that need a real Postgres for *provisioning* (root Makefile's
+# `migrate`/`migrate-test`, app/migrator's own `run`/permission-boundary
+# `test-integration`) layer this file on top of the sibling compose.yml
+# (which owns the `postgres` service) and use the network-enabled `tools`
+# service, not `tools-db`:
 #
 #   docker compose --env-file versions.env -f compose.yml -f .devcontainer/compose.tools.yml \
 #     run --rm tools <command reaching DB_HOST=postgres>
 #
-# This file only defines the two service *shapes*; deciding which
+# Phases that need a real Postgres for DB-backed test *execution* only
+# (SPEC-013: each stack's own `test`/`check`, once that stack's Makefile
+# routes it there) use the same file overlay but the `tools-db` service
+# instead, for the tighter no-internet-egress guarantee described in that
+# service's own comment above:
+#
+#   docker compose --env-file versions.env -f compose.yml -f .devcontainer/compose.tools.yml \
+#     run --rm tools-db <command reaching DB_HOST=postgres, no internet>
+#
+# This file only defines the three service *shapes*; deciding which
 # service (and which compose file combination) a given command goes
 # through is each stack's Makefile-wrapper concern, not this file's.
 #
@@ -209,6 +241,32 @@ services:
       # silently succeeding over the network.
       GOPROXY: "off"
 
+  # postgres-reachable, internet-egress denied (SPEC-013 R6) -- the third
+  # network layer, for DB-backed test *execution* phases only (see file
+  # header). Deliberately does NOT list `default` alongside `dbnet` below
+  # (contrast with `tools`/`tools-offline` above, which stay on the
+  # implicit default network by omitting any `networks:` override at
+  # all): once a service declares an explicit `networks:` list, Compose
+  # only attaches it to the networks named there, so leaving `default`
+  # out here is what actually removes this service's route to the public
+  # internet. It can still resolve `postgres` by service name because the
+  # sibling compose.yml's `postgres` service is *also* a member of
+  # `dbnet` (see that file's own comment) -- Docker's embedded per-network
+  # DNS resolves container/service names independently on every network a
+  # container is joined to, `internal: true` or not.
+  tools-db:
+    <<: *tools-base
+    networks:
+      - dbnet
+    environment:
+      <<: *tools-env
+      # Same rationale as tools-offline's own GOPROXY=off above: this
+      # service has no network route to reach a module proxy at all, but
+      # forcing GOPROXY=off here too makes any unexpected fetch attempt
+      # fail with an immediate, clear error instead of a slow DNS/connect
+      # timeout against an unreachable host.
+      GOPROXY: "off"
+
 volumes:
   # Named volumes (never bind-mounted into the repo tree): survive across
   # `run` invocations, are seeded from .devcontainer/toolchain/Dockerfile's own
@@ -219,3 +277,38 @@ volumes:
   gobuild:
   buncache:
   tfplugincache:
+
+networks:
+  # internal: true (SPEC-013 R6) -- an isolated bridge network with no
+  # default route to the public internet, used only by the `tools-db`
+  # service above to reach the sibling compose.yml's `postgres` service
+  # (which is *also* declared a member of this same network, in that
+  # file) by service name, without granting it internet egress the way
+  # the plain default network (which `tools`/`tools-offline` above still
+  # use) would. Declared identically in compose.yml's own top-level
+  # `networks:` key so *each* file stays independently valid when
+  # composed alone: Compose validates every service's `networks:`
+  # references against whichever compose file(s) are actually passed to
+  # a given invocation, and this file alone (e.g. the devcontainer's own
+  # `tools`/`tools-offline` use, or any bare `docker compose -f
+  # .devcontainer/compose.tools.yml ...` invocation, which never layers
+  # compose.yml on top) would otherwise fail to parse `tools-db`'s
+  # reference to `dbnet` with no top-level definition in scope. When both
+  # files ARE layered together (`-f compose.yml -f
+  # .devcontainer/compose.tools.yml`, tools-db's only meaningful use),
+  # Compose merges the two identical declarations without conflict.
+  #
+  # UNVERIFIED (flagged for T7/checker+tester, SPEC-013 plan §6): that
+  # Docker's embedded per-network DNS resolves the `postgres` service name
+  # for a container attached to an `internal: true` network exactly the
+  # way it does on the regular default network has not been exercised
+  # against a live Docker daemon as part of this change -- the mechanism
+  # is Compose/Docker's documented behavior for `internal` networks
+  # (isolated from external routes, but same-network service discovery
+  # still works), but actual connectivity from `tools-db` to `postgres`
+  # should be confirmed by running e.g. `make -C app/api test
+  # REQUIRE_DB=1` (once T3/T4a wire testsupport's default DB_NAME to
+  # api_test and route the DB phase through tools-db) before relying on
+  # it in CI.
+  dbnet:
+    internal: true

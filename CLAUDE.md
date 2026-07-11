@@ -57,8 +57,8 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 - **api ⇄ auth は同一 RDS インスタンス上の別データベース(`api` / `auth`)で分離**(`search_path` は使わず `DB_NAME` を per-service で指定)。Postgres 必須(接続情報なしは起動失敗 = fail-closed。in-memory フォールバックは廃止、SPEC-011)
 - **マイグレーションは `app/migrator`(単一 Go バイナリ / 単一イメージ)が `-target api|auth` で対象 DB を作成 + goose 適用**する。ローカルはルート `make migrate`、本番は ECS init コンテナ
 - **CQRS read/write 分離(SPEC-010)**: `infra/postgres` は writer / reader の 2 プール(`OpenPair`)を持ち、ドメインは `Reader`(query)/ `Writer`(command)/ 合成 `Repository` にポート分割する。接続 env は writer 用 `DB_*` に加え reader 用 `DB_READER_*` を項目ごとに読み、**未設定項目は writer 値へフォールバック**(全項目未設定なら単一プールを共有し二重に開かない)。設計・env 契約・実装 seam の正は `.claude/rules/db.md`。担当はポートが impl-api/auth、2 プール実装が impl-db
-- `infra/repotest` の**共有ふるまい契約テスト**(`Run<集約>RepositoryContract`)を Postgres 実装(`integration` build tag 付き・実 DB)に対して回し、store 差し替え時も同じ contract で振る舞い等価を確認する(テストロジックを実装ごとに二重化しない)
-- sqlc の再生成漏れは CI の `.github/workflows/sqlc-drift.yml` が検出。マイグレーション健全性は `api-integration` / `auth-integration` job(postgres service + migrator)で検査
+- `infra/repotest` の**共有ふるまい契約テスト**(`Run<集約>RepositoryContract`)を Postgres 実装(実 test DB。`integration` build tag は SPEC-013 で廃止し default `make test` に統合)に対して回し、store 差し替え時も同じ contract で振る舞い等価を確認する(テストロジックを実装ごとに二重化しない)
+- sqlc の再生成漏れは CI の `.github/workflows/sqlc-drift.yml` が検出。DB 依存テストとマイグレーション健全性は `api` / `auth` の `check` job(postgres service + `make migrate-test` で `api_test` / `auth_test` を用意し `REQUIRE_DB=1` で実行)で検査する(SPEC-013 で旧 `api-integration` / `auth-integration` job を統合)
 
 ## ルールのロード構造
 
@@ -76,7 +76,7 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 **`terraform apply` は実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
 
-永続化(DB)系ターゲット(各 Go スタックの `make sqlc` / `migrate-create` / `test-integration`、およびルートの `make migrate`= `app/migrator` 実行)は、生成 / DB 作成・マイグレーション / 実 DB 依存のため `make check` には含めない(正は `.claude/rules/db.md`)。**マイグレーション実行は `app/migrator`(`-target api|auth`)に集約**されている(per-stack の `migrate-up/down/status` は廃止)。
+永続化(DB)系の生成・スキーマ操作ターゲット(各 Go スタックの `make sqlc` / `migrate-create`、およびルートの `make migrate` / `make migrate-test`= `app/migrator` 実行)は、生成 / DB 作成・マイグレーションのため `make check` には含めない(正は `.claude/rules/db.md`)。**一方、DB 依存テストは `make test` = `make check` の一部**(SPEC-013。実 test DB `api_test` / `auth_test` を要し、正規経路は `make migrate-test` で用意してから `REQUIRE_DB=1` で実行する)。**マイグレーション実行は `app/migrator`(`-target api|auth`)に集約**されている(per-stack の `migrate-up/down/status` は廃止)。
 
 ## ローカル実行(全スタック)
 
@@ -92,7 +92,7 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 - **手動実行**: `make hook-check`(ステージ済み変更を対象に pre-commit と同じ検証)
 - **スキップ**: `git commit --no-verify` または `SKIP_PRE_COMMIT=1 git commit`
 
-**何を走らせるか**: ステージ済みファイルのパスから `.github/workflows/cicd.yml` / `contract-drift.yml` / `sqlc-drift.yml` と同型の path filter で対象 stack を検出し、該当 stack の `make check`、必要なら contract drift / sqlc drift を実行する。`*-integration` ジョブ(Postgres 必須)は含めない。
+**何を走らせるか**: ステージ済みファイルのパスから `.github/workflows/cicd.yml` / `contract-drift.yml` / `sqlc-drift.yml` と同型の path filter で対象 stack を検出し、該当 stack の `make check`、必要なら contract drift / sqlc drift を実行する。api / auth stack がステージされた場合は check の前段で db-up + `make migrate-test` を行い、DB 依存テストを `REQUIRE_DB=1` で回す(SPEC-013)。migrator 自身の権限境界 integration ジョブ(`migrator-integration`)は含めない。
 
 **実行環境(SPEC-009 準拠)**:
 
@@ -105,7 +105,7 @@ docs-only や `.claude/` のみの変更など CI 対象外のステージはス
 
 CI/CD は 4 つの workflow に分かれる(担当は impl-ci)。上表の `make` 契約をコンテナ内で回すのは以下:
 
-- **`cicd.yml`**(push / PR): メイン CI。先頭の `changes` job(`dorny/paths-filter`)で変更 stack を検出し、**変更のあった stack の job だけを起動**する(web / api / auth / migrator / iac の各 `check` job と、DB 依存の `api-integration` / `auth-integration` / `migrator-integration` job)。「特定 stack の CI が走らない」ときはまずこの path-filter を疑う(workflow 自身の変更は全 job を再実行させる)
+- **`cicd.yml`**(push / PR): メイン CI。先頭の `changes` job(`dorny/paths-filter`)で変更 stack を検出し、**変更のあった stack の job だけを起動**する(web / api / auth / migrator / iac の各 `check` job と、DB 依存の `migrator-integration` job)。api / auth の `check` job は postgres service を起動し `make migrate-test`(`api_test` / `auth_test`)+ `REQUIRE_DB=1` で実 DB テストまで回す(SPEC-013 で旧 `api-integration` / `auth-integration` を `check` に統合)。「特定 stack の CI が走らない」ときはまずこの path-filter を疑う(workflow 自身の変更は全 job を再実行させる)
 - **`contract-drift.yml`**(push / PR): OpenAPI 契約の再生成漏れ検査。**Go + Bun 双方を要する唯一のジョブ**(日常の checker は stack ごとに分離)
 - **`sqlc-drift.yml`**(push / PR): sqlc の再生成漏れ検査(api / auth。自前の path-filter を持つ)
 - **`deploy.yml`**: `workflow_dispatch` 専用の**手動**デプロイ(`build-web` / `push-images` / `deploy-web`)。push / PR では走らない

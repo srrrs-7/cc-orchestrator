@@ -1,10 +1,9 @@
-//go:build integration
-
-// Integration coverage for TestDiscovery_JWKS, which exercises the
-// full authorize → token flow to verify that the JWKS-published key
-// can actually verify a token this server issues. Separated from
-// discovery_test.go because issuing tokens requires a live Postgres
-// DB (newTestHandler, SPEC-011).
+// DB-backed coverage for TestDiscovery_JWKS, which exercises the full
+// authorize → token flow to verify that the JWKS-published key can
+// actually verify a token this server issues. Kept in its own file,
+// separate from discovery_test.go, because issuing tokens requires a
+// real Postgres test DB (newTestHandler) rather than the nil-repo
+// discovery-only handler.
 package route_test
 
 import (
@@ -24,9 +23,10 @@ import (
 // TestDiscovery_JWKS covers traceability #9: the JWK Set shape and
 // that the published key can actually verify a JWT this server issues.
 //
-// This test requires a live DB (it does a full authorize+token exchange
-// to obtain a real JWT), so it carries //go:build integration and is
-// separated from the offline TestDiscovery_Metadata in discovery_test.go.
+// This test requires a real Postgres test DB (it does a full
+// authorize+token exchange to obtain a real JWT), so it is kept
+// separate from the nil-repo TestDiscovery_Metadata in
+// discovery_test.go.
 func TestDiscovery_JWKS(t *testing.T) {
 	h := newTestHandler(t)
 

@@ -15,8 +15,8 @@ import (
 // backed by a clean, empty store, ready for a single subtest.
 //
 // Implementations MUST return a repository whose store is empty every
-// time this is called (a fresh in-memory map for infra/memory; a
-// truncated table for infra/postgres), so that
+// time this is called (a truncated table for infra/postgres, the sole
+// implementation since SPEC-011), so that
 // RunRefreshTokenRepositoryContract's subtests never observe data
 // left behind by another subtest. Mirrors
 // repotest.NewAuthCodeRepository (authcode_contract.go).
@@ -30,7 +30,7 @@ type NewRefreshTokenRepository func(t *testing.T) refreshtoken.Repository
 // mechanism (Rotate, including its ErrReused vs ErrNotFound
 // precedence and behavior under concurrency), family-wide revocation
 // (RevokeFamily), and TTL-based expiry (including lazy eviction) --
-// all behave identically for infra/memory and infra/postgres.
+// all hold for infra/postgres, the sole implementation since SPEC-011.
 //
 // Real-time sleeps are never used to exercise TTL: every
 // expiring/expired fixture is built via refreshtoken.Reconstruct with

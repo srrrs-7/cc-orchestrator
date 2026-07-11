@@ -3,8 +3,8 @@ id: SPEC-009
 title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要・サプライチェーン対策)
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
-updated: 2026-07-10
-issues: [ISSUE-026, ISSUE-027]  # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-11
+issues: [ISSUE-026, ISSUE-027, ISSUE-029]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -40,7 +40,7 @@ supersedes: null # 置き換える旧Spec ID
 
 - [ ] R1: 単一の polyglot「toolchain」イメージ(`docker/toolchain/`)を用意し、go / bun / golangci-lint / terraform / tflint / trivy と `go run` 系ツール(sqlc / goose / swag)を含める。バージョンは単一ソース(`versions.env`。現状 `cicd.yml` env を昇格)から Dockerfile・CI が共有する
 - [ ] R2: `compose.tools.yml` の `tools` サービスを実行の正典にする。repo を `/workspace` に bind-mount、キャッシュは named volume(`gomodcache` / `gobuild` / `buncache`)、`user` = 実行者 UID:GID、**ホスト秘密のマウントなし**、`no-new-privileges` / `cap_drop: [ALL]` / docker socket 非マウント
-- [ ] R3: 2 フェーズ network — deps(install)は network 有効(lockfile + sha512 + `minimumReleaseAge` + go.sum + pin を第一線に維持)、check / build / test / generate / sqlc / openapi は **`--network none`**
+- [ ] R3: 2 フェーズ network — deps(install)は network 有効(lockfile + sha512 + `minimumReleaseAge` + go.sum + pin を第一線に維持)、check / build / test / generate / sqlc / openapi は **`--network none`**(**SPEC-013 改訂**: test フェーズのみ、実 test DB へ到達するため `tools-db`= postgres 到達可・インターネット非到達の `dbnet`(`internal: true`)network で回す。install / fmt-check / lint / vet / build / generate 等は `--network none` のまま不変。供給網防御の意図=非依存取得フェーズはインターネットに出さない、は維持)
 - [ ] R4: コマンド契約は不変。`make check` / `make test` / `make fmt` 等(api/auth/migrator)、`bun run <script>`(web)、`make openapi` / `make sqlc` / `make migrate` / iac の `make fmt|validate|lint|security|plan` の入口を維持し、ホスト呼び出し時に `tools` コンテナへ透過再実行する(`IN_TOOLBOX` マーカーで多重ラップ防止)。`.claude/rules/*` のコマンド表・CLAUDE.md 早見表・各 agent 呼び出しは**変えない**
 - [ ] R5: devcontainer(`.devcontainer/devcontainer.json`)を同一 `tools` サービス参照で用意(非 root remoteUser・秘密マウントなし)。対話開発向けの任意レイヤ
 - [ ] R6: CI(`.github/workflows/*`)を同一 toolchain イメージに寄せる。`setup-go` / `setup-bun` / golangci-lint の curl install を廃し、pinned image(container job もしくは image 実行)を使う。ローカル = CI を成立させる
@@ -152,3 +152,15 @@ supersedes: null # 置き換える旧Spec ID
 ### 2026-07-10(追記: ISSUE-027 起票 — Go 1.26 bump の相互リンク)
 
 - 本 SPEC 所有の `versions.env`(`GO_VERSION`)/ `docker/toolchain/Dockerfile`(`ARG GO_VERSION` / sqlc の `GOTOOLCHAIN=auto` 回避策)を含む、Go 1.24 → 1.26 の横断 bump 課題を **ISSUE-027** として起票。pin が ~8 箇所(`versions.env` / 各 `go.mod` / 各 app `Dockerfile` / toolchain `ARG` 既定値 / dependabot コメント)に分散し横断編集が要る点、最大の不確定要素が golangci-lint 2.12.2 の Go 1.26 対応可否である点を記録。本 SPEC 側は**相互リンクのみ**(bump 実装は ISSUE-027 側で impl-ci / impl-api / impl-auth / impl-db に分担)。
+
+### 2026-07-11(追記: SPEC-013 による R3 network の改訂)
+
+- SPEC-013(テストの実 DB 一本化)により、**R3 の「test を `--network none`」を改訂**。全 DB 依存テストを実 test DB(`api_test` / `auth_test`)に対して回すため、テスト実行フェーズはインターネット非到達のまま postgres へ到達する必要が生じた。
+- 対応: `.devcontainer/compose.tools.yml` に第3層 `tools-db` サービス + `dbnet`(`internal: true`)network を追加。`tools-db` は `dbnet` のみに接続(`default` 網に乗せない)ため internet egress を持たず、`compose.yml` の `postgres`(`[default, dbnet]`)へのみ到達できる。テストフェーズはこの `tools-db` で実行する。install(network 有効)・非テストの check/build 等(`--network none`)は不変で、**供給網防御(非依存フェーズはインターネットに出さない)は維持**。
+- 実装は SPEC-013 の impl-ci が担当(本 SPEC 側は R3 の改訂記録と network 三層化の設計反映のみ)。詳細・背景は `docs/specs/20260711-013-unify-tests-real-db-test-databases.md` を参照。
+
+### 2026-07-11(追記: ISSUE-029 起票 — offline フェーズの network 非対称性)
+
+- SPEC-013 T8 の review-security 再検証で、**R3 のオフライン原則からの部分的後退**を検出し **ISSUE-029** として起票・相互リンク(frontmatter `issues` に追記)。内容: SPEC-013 の Major 修正(pre-commit hook の `go test` フェーズを `tools-db`=internet 非到達へ移して egress Major を解消)後も、**hook 経路の offline フェーズ(api/auth の fmt-check/lint/vet/build)は `tools`(network 有効)で実行される**一方、CI・直接 `make check` は `tools-offline`(`--network none`)で実行する非対称性が残る(R3「非依存フェーズは全てオフライン」からの部分的後退。fmt/lint/vet/build はコード非実行のため悪用可能性は低い)。原因は hook の `go mod download` warm を同一コンテナで済ませる設計妥協。
+- 関連 Info: `app/migrator` の hook 経由 test(SPEC-013 以前からの既存挙動・DB 非依存)が network 有効な `tools` で走る。R6 を「`go test` 全般は internet 非到達」へ広げるなら migrator も `tools-offline` へ寄せる見直し余地。
+- severity low・今回は対応せず、R3/R6 の一貫性強化の将来課題として記録。本 SPEC 側は**相互リンクのみ**(将来対応時は impl-ci)。

@@ -7,14 +7,13 @@
 // implementation can be proven to behave identically without
 // duplicating test logic per-implementation.
 //
-// SPEC-011 完了: infra/memory 削除済み。各 contract は Postgres
-// (integration)のみで実行される
+// SPEC-011 完了: infra/memory 削除済み。SPEC-013 以降、各 contract は
+// default `make test` の一部として実 DB(`auth_test`)に対して実行される
 // (see infra/postgres/*_integration_test.go).
 //
-// These files carry no build tag: they must remain compilable by both
-// the default (untagged) and "integration" builds, so they must not
-// depend on anything beyond the standard library and the relevant
-// domain package.
+// These files carry no build tag: they must remain compilable
+// regardless of build tags, so they must not depend on anything
+// beyond the standard library and the relevant domain package.
 package repotest
 
 import (
@@ -31,7 +30,7 @@ import (
 // client.Repository is read-only (FindByID only; see
 // domain/client/repository.go): seeding is necessarily performed
 // outside the interface, through postgres.SeedClient's idempotent
-// upsert (wrapped by testsupport.SeedClient for integration tests).
+// upsert (wrapped by testsupport.SeedClient for tests).
 // Implementations MUST start from an empty store on every call so
 // subtests never observe data left behind by another subtest. See
 // infra/postgres/client_repository_integration_test.go for the
