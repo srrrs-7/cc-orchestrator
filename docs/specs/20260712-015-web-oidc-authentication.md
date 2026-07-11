@@ -4,7 +4,7 @@ title: app/web OIDC 認証連携(app/auth + app/api Bearer 保護)
 status: done
 created: 2026-07-12
 updated: 2026-07-12
-issues: []
+issues: [ISSUE-005, ISSUE-031, ISSUE-032, ISSUE-033, ISSUE-034, ISSUE-035, ISSUE-036, ISSUE-037, ISSUE-038, ISSUE-039, ISSUE-040]
 supersedes: null
 ---
 
@@ -105,11 +105,17 @@ supersedes: null
 
 ### スコープ外(やらないこと)
 
-- app/auth の **ログイン / 同意 UI**(現状は demo-user 自動承認)
-- **RP-initiated logout / end_session** エンドポイント(auth サーバー側)
+後続実装は [AUTH-002 ロードマップ](../plans/AUTH-002-oauth-oidc-gap-roadmap-plan.md) と Issue に分解済み。
+
+- app/auth の **ログイン / 同意 UI** → [ISSUE-031](../issues/20260712-031-auth-login-ui-idp-session.md)(依存: [ISSUE-005](../issues/20260708-005-demo-user-password-plaintext-hashing.md)) / [ISSUE-032](../issues/20260712-032-auth-consent-ui.md)
+- **RP-initiated logout / end_session** → [ISSUE-033](../issues/20260712-033-auth-rp-initiated-logout-end-session.md)([ISSUE-034](../issues/20260712-034-auth-token-revocation-endpoint.md) と連動)
 - web 側の **refresh token 自動更新**(token 交換 API は実装済みだが、期限切れ前の silent refresh は未配線。期限切れ時は再ログイン)
 - **ユーザー単位のタスク所有権**(API は token の有効性のみ検証。`sub` による row-level 認可は未実装)
-- **ID token のブラウザ内署名検証**(表示名取得の payload decode のみ。API 保護は access token + サーバー側 JWKS 検証)
+- **ID token のブラウザ内署名検証** → [ISSUE-038](../issues/20260712-038-auth-oidc-claims-offline-access.md) 等
+- **RSA 鍵永続化 / JWKS ローテーション** → [ISSUE-036](../issues/20260712-036-auth-rsa-key-persistence-jwks-rotation.md)
+- **access token audience(API 向け aud)** → [ISSUE-037](../issues/20260712-037-auth-resource-server-audience.md)
+- **confidential client / 管理 API** → [ISSUE-035](../issues/20260712-035-auth-confidential-client.md) / [ISSUE-039](../issues/20260712-039-auth-client-user-management.md)
+- **高度 OAuth/OIDC 機能**(introspection / DPoP 等) → [ISSUE-040](../issues/20260712-040-auth-advanced-oauth-oidc-features.md)
 - Vite dev server(`bun run dev`)向けの auth proxy(compose / nginx 本番相当構成が正)
 - AWS 本番 env の `VITE_AUTH_*` 注入(SPEC-004 の web デプロイ手順は別途。本 Spec は契約とローカル compose を正とする)
 
@@ -189,3 +195,4 @@ flowchart TB
 
 - 初版作成。app/web に OIDC RP 連携、app/api に Bearer JWT 保護、ローカル compose の同一オリジン `/auth` proxy を実装済みの状態を Spec 化。SPEC-004 でスコープ外だった「web を auth OIDC client として接続」はローカル E2E について本 Spec で充足。refresh token 自動更新・ユーザー別タスク認可・auth ログアウト API はスコープ外として明記
 - 実装・検証完了。`make -C app/auth check` / `make -C app/api check` / `make -C app/web check`(138 tests) green。status を `done` に更新
+- スコープ外の app/auth OAuth/OIDC ギャップを [AUTH-002 ロードマップ](../plans/AUTH-002-oauth-oidc-gap-roadmap-plan.md) と ISSUE-031〜040 に分解。frontmatter `issues` を更新
