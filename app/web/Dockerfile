@@ -21,6 +21,6 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
-    CMD ["wget", "-q", "-O", "-", "http://localhost:80/"]
+    CMD ["wget", "-q", "-O", "-", "http://127.0.0.1:80/"]
 
 CMD ["nginx", "-g", "daemon off;"]
