@@ -14,7 +14,7 @@ import (
 // user.Repository (SPEC-005 R2). user.Repository is read-only
 // (FindByID / FindByUsername only); population happens through
 // SeedUser, called once at startup by cmd/authz/main.go's persistence
-// wiring when Postgres mode is selected (see SelectMode).
+// wiring (SPEC-011: Postgres is the sole persistence backend).
 type UserRepository struct {
 	q *sqlcgen.Queries
 }

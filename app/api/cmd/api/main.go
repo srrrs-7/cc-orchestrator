@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
-	"github.com/srrrs-7/cc-orchestrator/app/api/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/api/route"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
@@ -54,21 +53,18 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Persistence wiring (SPEC-005): choose infra/memory or
-	// infra/postgres based on the DB_HOST/APP_ENV fail-closed contract
-	// implemented by postgres.SelectMode (infra/postgres/db.go). This
-	// is the only part of main.go's wiring that SPEC-005 touches; the
-	// rest (domain service -> application service -> presentation) is
-	// unchanged.
+	// Persistence wiring (SPEC-005 / SPEC-011): Postgres is the only
+	// backend. validate() enforces fail-closed via Config.Validate
+	// (DB_HOST/DB_NAME/DB_USER/DB_PASSWORD required); the process will
+	// not start if any of those are missing.
 	e := NewEnv()
-	mode, err := e.validate()
-	if err != nil {
+	if err := e.validate(); err != nil {
 		return err
 	}
 
-	taskReader, taskWriter, closeRepo, err := newTaskRepository(ctx, mode, e.writerConfig(), e.readerConfig())
+	taskReader, taskWriter, closeRepo, err := newTaskRepository(ctx, e.writerConfig(), e.readerConfig())
 	if err != nil {
-		return fmt.Errorf("api: wire persistence (mode=%s): %w", mode, err)
+		return fmt.Errorf("api: wire persistence: %w", err)
 	}
 	defer func() {
 		if err := closeRepo(); err != nil {
@@ -130,35 +126,19 @@ func newServer(addr string, h http.Handler) *http.Server {
 	}
 }
 
-// newTaskRepository builds the task.Reader/task.Writer pair selected
-// by mode (postgres.SelectMode's result) and a close function the
-// caller must defer to release the underlying resources (a no-op for
-// infra/memory; the pool(s) postgres.OpenPair opened -- one or two
-// depending on whether readerCfg equals writerCfg -- for
-// infra/postgres). ctx bounds the initial Postgres connectivity check
-// (postgres.OpenPair's Ping(s)); it is the server's long-lived
-// shutdown context, not a separate per-call timeout, since this only
-// runs once at startup.
+// newTaskRepository opens writer and reader connection pools via
+// postgres.OpenPair (SPEC-010 R2) and returns task.Reader/task.Writer
+// backed by those pools, plus a closeFn the caller must defer to
+// release them. ctx bounds the initial connectivity check (Ping).
 //
-// In Postgres mode, reads (task.Reader) and writes (task.Writer) are
-// backed by separate *sql.DB pools (SPEC-010 R2): postgres.OpenPair
-// shares a single pool between them when readerCfg == writerCfg (the
-// default, DB_READER_* unset case) and opens a second, independent
-// pool only when they differ. In memory mode, the same
-// *memory.TaskRepository value is passed for both roles, since
-// infra/memory has no notion of separate pools (SPEC-010 R5).
-func newTaskRepository(ctx context.Context, mode postgres.Mode, writerCfg, readerCfg postgres.Config) (task.Reader, task.Writer, func() error, error) {
-	switch mode {
-	case postgres.ModePostgres:
-		writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		slog.Info("api: persistence selected", "mode", mode, "database", writerCfg.Name)
-		return postgres.NewTaskReader(readerDB), postgres.NewTaskWriter(writerDB), closeFn, nil
-	default:
-		slog.Info("api: persistence selected", "mode", postgres.ModeMemory)
-		mem := memory.NewTaskRepository()
-		return mem, mem, func() error { return nil }, nil
+// When readerCfg equals writerCfg (the default when DB_READER_* is
+// unset), OpenPair shares a single *sql.DB pool; only when they differ
+// does it open a second, independent reader pool.
+func newTaskRepository(ctx context.Context, writerCfg, readerCfg postgres.Config) (task.Reader, task.Writer, func() error, error) {
+	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
+	if err != nil {
+		return nil, nil, nil, err
 	}
+	slog.Info("api: persistence initialized", "database", writerCfg.Name)
+	return postgres.NewTaskReader(readerDB), postgres.NewTaskWriter(writerDB), closeFn, nil
 }

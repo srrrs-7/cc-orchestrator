@@ -1,3 +1,5 @@
+//go:build integration
+
 package route_test
 
 import (

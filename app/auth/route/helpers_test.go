@@ -1,16 +1,31 @@
 // Package route_test exercises the presentation layer end-to-end via
-// httptest, wiring a fresh in-memory repository set (with seeded demo
-// client/user) and a test RSA key behind route.NewRouter for every
-// test case, following the app/api/route/task_handler_test.go
-// pattern.
+// httptest, following the app/api/route/task_handler_test.go pattern.
+//
+// Test organisation (SPEC-011 build-tag split):
+//
+//   - This file (untagged): constants, types, testRSAKey, TestMain,
+//     offline HTTP helpers (doToken, doUserInfo), decodeErrorBody, and
+//     minimal test-local stubs for offline error-injection tests.
+//
+//   - helpers_integration_test.go (//go:build integration): newTestHandler
+//     backed by a real Postgres DB (testsupport.OpenTestDB), plus
+//     integration-only HTTP helpers (doAuthorize, issueAuthCode,
+//     issueTokens, doRefreshToken, decodeTokenResponse, decodeJWTPayload,
+//     tokenResponseBody, userInfoBody, jwtPayload, testClientID2).
+//
+// The offline stubs in this file are NOT a general-purpose in-memory
+// store (that would re-introduce the deleted infra/memory). They are
+// the narrowest possible implementation of the domain port interface
+// that satisfies one specific error-injection scenario -- exactly the
+// "test-local fake" pattern .claude/rules/testing.md endorses.
 package route_test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,10 +33,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
-	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/route"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
@@ -34,17 +50,6 @@ const (
 	testUserID      = "user-sub-1"
 	testUserName    = "Test User"
 	testUserEmail   = "test-user@example.com"
-
-	// testClientID2 is a second registered client, distinct from
-	// testClientID, used by refresh_token tests that need a
-	// legitimately registered (but different) client to exercise
-	// RFC 6749 §6 client binding (SPEC-006 R6): presenting a refresh
-	// token issued to testClientID while authenticating as
-	// testClientID2 must be rejected as invalid_grant, not
-	// invalid_client/unsupported_grant_type -- so testClientID2 also
-	// supports grant_type=refresh_token.
-	testClientID2    = "test-client-2"
-	testRedirectURI2 = "http://localhost:3000/callback2"
 )
 
 // testRSAKey is generated once for the whole route_test package (RSA
@@ -61,16 +66,55 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// newTestHandler builds a fresh, fully wired router backed by empty
-// in-memory repositories seeded with one demo client and one demo
-// user, so every test starts from independent, known state.
-func newTestHandler(t *testing.T) http.Handler {
+// ---------------------------------------------------------------------------
+// Offline handler helpers (no DB required)
+// ---------------------------------------------------------------------------
+
+// newDiscoveryTestHandler builds a router for offline discovery-only
+// tests. The discovery endpoints (/.well-known/openid-configuration and
+// /.well-known/jwks.json) only consult discoverySvc, which only needs
+// the issuer string and keyProvider. authSvc and userInfoSvc are wired
+// with nil repository values; they must never be called in a
+// discovery-only test (if they are, a nil-pointer panic will surface
+// the oversight immediately).
+func newDiscoveryTestHandler(t *testing.T) http.Handler {
 	t.Helper()
 
-	clientRepo := memory.NewClientRepository()
-	userRepo := memory.NewUserRepository()
-	authCodeRepo := memory.NewAuthCodeRepository()
-	refreshTokenRepo := memory.NewRefreshTokenRepository()
+	kid, err := jwt.ComputeKeyID(&testRSAKey.PublicKey)
+	if err != nil {
+		t.Fatalf("setup ComputeKeyID() unexpected error: %v", err)
+	}
+	signer := jwt.NewSigner(testRSAKey, kid)
+	verifier := jwt.NewVerifier(&testRSAKey.PublicKey)
+	keyProvider := jwt.NewKeyProvider(&testRSAKey.PublicKey, kid)
+
+	username, err := user.NewUsername(testUsername)
+	if err != nil {
+		t.Fatalf("setup NewUsername() unexpected error: %v", err)
+	}
+
+	// nil repos: discovery endpoints never call authSvc or userInfoSvc
+	// methods that access the repositories. If a test accidentally
+	// calls a non-discovery endpoint, the nil dereference will
+	// immediately surface the mistake.
+	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer, username)
+	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
+	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
+	return route.NewRouter(authSvc, userInfoSvc, discoverySvc)
+}
+
+// newTokenErrorTestHandler builds a router for offline error-injection
+// tests that exercise the /token error path without requiring a live DB.
+// It wires:
+//   - clientRepo: returns the demo test client for testClientID, and
+//     ErrNotFound for every other ID.
+//   - authCodeRepo: always returns ErrNotFound (simulates a code
+//     "does-not-exist" scenario -- exactly what
+//     TestToken_ErrorResponse_HasNoCacheHeaders exercises).
+//   - userRepo / refreshTokenRepo: panic if called (they must not be
+//     reached on the error paths this helper targets).
+func newTokenErrorTestHandler(t *testing.T) http.Handler {
+	t.Helper()
 
 	cid, err := client.ParseClientID(testClientID)
 	if err != nil {
@@ -87,42 +131,6 @@ func newTestHandler(t *testing.T) http.Handler {
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},
 	)
-	clientRepo.Seed(demoClient)
-
-	// A second, distinct client (also supporting refresh_token) used
-	// by SPEC-006's client-binding tests (R6): see testClientID2's doc
-	// comment above.
-	cid2, err := client.ParseClientID(testClientID2)
-	if err != nil {
-		t.Fatalf("setup ParseClientID() unexpected error: %v", err)
-	}
-	redirectURI2, err := client.NewRedirectURI(testRedirectURI2)
-	if err != nil {
-		t.Fatalf("setup NewRedirectURI() unexpected error: %v", err)
-	}
-	otherClient := client.New(
-		cid2,
-		[]client.RedirectURI{redirectURI2},
-		[]string{"openid", "profile", "email"},
-		[]string{"code"},
-		[]string{"authorization_code", "refresh_token"},
-	)
-	clientRepo.Seed(otherClient)
-
-	uid, err := user.ParseUserID(testUserID)
-	if err != nil {
-		t.Fatalf("setup ParseUserID() unexpected error: %v", err)
-	}
-	username, err := user.NewUsername(testUsername)
-	if err != nil {
-		t.Fatalf("setup NewUsername() unexpected error: %v", err)
-	}
-	profile, err := user.NewProfile(testUserName, testUserEmail)
-	if err != nil {
-		t.Fatalf("setup NewProfile() unexpected error: %v", err)
-	}
-	demoUser := user.New(uid, username, "irrelevant-demo-password", profile)
-	userRepo.Seed(demoUser)
 
 	kid, err := jwt.ComputeKeyID(&testRSAKey.PublicKey)
 	if err != nil {
@@ -132,26 +140,86 @@ func newTestHandler(t *testing.T) http.Handler {
 	verifier := jwt.NewVerifier(&testRSAKey.PublicKey)
 	keyProvider := jwt.NewKeyProvider(&testRSAKey.PublicKey, kid)
 
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer, username)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
-	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
+	username, err := user.NewUsername(testUsername)
+	if err != nil {
+		t.Fatalf("setup NewUsername() unexpected error: %v", err)
+	}
 
+	clientRepo := &stubClientOnlyRepo{c: demoClient}
+	authCodeRepo := alwaysNotFoundAuthCodeRepo{}
+
+	authSvc := service.NewAuthorizationService(clientRepo, nil, authCodeRepo, nil, signer, testIssuer, username)
+	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
+	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 	return route.NewRouter(authSvc, userInfoSvc, discoverySvc)
 }
 
-// pkceChallenge independently computes the RFC 7636 S256 transformation.
-func pkceChallenge(verifier string) string {
-	sum := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+// ---------------------------------------------------------------------------
+// Minimal test-local stubs (NOT general-purpose in-memory stores)
+// ---------------------------------------------------------------------------
+
+// stubClientOnlyRepo is a minimal client.Repository stub that returns
+// a single pre-seeded client for its ID, and ErrNotFound for
+// everything else. It exists solely to satisfy the service layer's
+// client lookup in error-injection tests where the interesting
+// assertion is about what happens *after* the client is found.
+type stubClientOnlyRepo struct{ c *client.Client }
+
+var _ client.Repository = (*stubClientOnlyRepo)(nil)
+
+func (r *stubClientOnlyRepo) FindByID(_ context.Context, id client.ClientID) (*client.Client, error) {
+	if r.c != nil && id == r.c.ID() {
+		return r.c, nil
+	}
+	return nil, fmt.Errorf("stubClientOnlyRepo: %w", client.ErrNotFound)
 }
 
-func doAuthorize(t *testing.T, h http.Handler, query url.Values) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+query.Encode(), nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	return rec
+// alwaysNotFoundAuthCodeRepo is a minimal authcode.Repository stub
+// where every lookup immediately returns ErrNotFound and every write
+// panics. Used for error-injection tests that expect /token to return
+// invalid_grant because the code does not exist.
+type alwaysNotFoundAuthCodeRepo struct{}
+
+var _ authcode.Repository = alwaysNotFoundAuthCodeRepo{}
+
+func (alwaysNotFoundAuthCodeRepo) FindByCode(_ context.Context, _ authcode.Code) (*authcode.AuthorizationCode, error) {
+	return nil, fmt.Errorf("alwaysNotFoundAuthCodeRepo: %w", authcode.ErrNotFound)
 }
+
+func (alwaysNotFoundAuthCodeRepo) Save(_ context.Context, _ *authcode.AuthorizationCode) error {
+	panic("alwaysNotFoundAuthCodeRepo.Save must not be called in error-injection tests")
+}
+
+func (alwaysNotFoundAuthCodeRepo) Consume(_ context.Context, _ authcode.Code) error {
+	panic("alwaysNotFoundAuthCodeRepo.Consume must not be called in error-injection tests")
+}
+
+// panicRefreshTokenRepo implements refreshtoken.Repository and panics
+// on any call. Used to verify that a given error path never reaches
+// the refresh token layer.
+type panicRefreshTokenRepo struct{}
+
+var _ refreshtoken.Repository = panicRefreshTokenRepo{}
+
+func (panicRefreshTokenRepo) FindByTokenHash(_ context.Context, _ refreshtoken.TokenHash) (*refreshtoken.RefreshToken, error) {
+	panic("panicRefreshTokenRepo.FindByTokenHash must not be called")
+}
+
+func (panicRefreshTokenRepo) Save(_ context.Context, _ *refreshtoken.RefreshToken) error {
+	panic("panicRefreshTokenRepo.Save must not be called")
+}
+
+func (panicRefreshTokenRepo) Rotate(_ context.Context, _ refreshtoken.TokenHash, _ *refreshtoken.RefreshToken) error {
+	panic("panicRefreshTokenRepo.Rotate must not be called")
+}
+
+func (panicRefreshTokenRepo) RevokeFamily(_ context.Context, _ refreshtoken.FamilyID) error {
+	panic("panicRefreshTokenRepo.RevokeFamily must not be called")
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helper functions (shared by offline and integration tests)
+// ---------------------------------------------------------------------------
 
 func doToken(t *testing.T, h http.Handler, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
@@ -173,110 +241,9 @@ func doUserInfo(t *testing.T, h http.Handler, bearer string) *httptest.ResponseR
 	return rec
 }
 
-// issueAuthCode drives a successful /authorize request and returns
-// the issued authorization code, for use as setup in /token-focused
-// tests.
-func issueAuthCode(t *testing.T, h http.Handler, challenge, scope, nonce string) string {
-	t.Helper()
-
-	q := url.Values{
-		"response_type":         {"code"},
-		"client_id":             {testClientID},
-		"redirect_uri":          {testRedirectURI},
-		"scope":                 {scope},
-		"state":                 {"setup-state"},
-		"code_challenge":        {challenge},
-		"code_challenge_method": {"S256"},
-	}
-	if nonce != "" {
-		q.Set("nonce", nonce)
-	}
-
-	rec := doAuthorize(t, h, q)
-	if rec.Code != http.StatusFound {
-		t.Fatalf("setup: authorize status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
-	}
-	loc, err := url.Parse(rec.Header().Get("Location"))
-	if err != nil {
-		t.Fatalf("setup: parse Location header: %v", err)
-	}
-	code := loc.Query().Get("code")
-	if code == "" {
-		t.Fatal("setup: redirect code is empty, want non-empty authorization code")
-	}
-	return code
-}
-
-// issueTokens drives a full authorize -> token (grant_type=
-// authorization_code) exchange using a fixed PKCE verifier, and
-// returns the decoded token response -- including the freshly issued
-// refresh_token, since testClientID supports grant_type=refresh_token
-// (SPEC-006 R2). It fails the test (t.Fatalf) on any unexpected
-// status, so callers can treat it as pure setup.
-func issueTokens(t *testing.T, h http.Handler, scope, nonce string) tokenResponseBody {
-	t.Helper()
-
-	verifier := strings.Repeat("A", 43)
-	code := issueAuthCode(t, h, pkceChallenge(verifier), scope, nonce)
-
-	rec := doToken(t, h, url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {testRedirectURI},
-		"client_id":     {testClientID},
-		"code_verifier": {verifier},
-	})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("setup: token exchange status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	return decodeTokenResponse(t, rec)
-}
-
-// doRefreshToken drives a POST /token request with
-// grant_type=refresh_token (SPEC-006 R1). scope is only sent when
-// non-empty, matching the optional scope parameter's semantics (RFC
-// 6749 §6: omitting it means "use the scope originally granted").
-func doRefreshToken(t *testing.T, h http.Handler, refreshToken, clientID, scope string) *httptest.ResponseRecorder {
-	t.Helper()
-
-	form := url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
-		"client_id":     {clientID},
-	}
-	if scope != "" {
-		form.Set("scope", scope)
-	}
-	return doToken(t, h, form)
-}
-
-type tokenResponseBody struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	IDToken      string `json:"id_token"`
-	Scope        string `json:"scope"`
-	RefreshToken string `json:"refresh_token"`
-}
-
 type errorBody struct {
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
-}
-
-type userInfoBody struct {
-	Subject string `json:"sub"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-}
-
-func decodeTokenResponse(t *testing.T, rec *httptest.ResponseRecorder) tokenResponseBody {
-	t.Helper()
-	var got tokenResponseBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("decode token response: %v (body=%q)", err, rec.Body.String())
-	}
-	return got
 }
 
 func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
@@ -286,34 +253,4 @@ func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) errorBody {
 		t.Fatalf("decode error response: %v (body=%q)", err, rec.Body.String())
 	}
 	return got
-}
-
-// jwtPayload is a superset of the registered claims this test suite
-// asserts on, decoded directly from a compact JWT's payload segment
-// (independent of domain/token.Claims, so the test does not simply
-// echo the production type back at itself).
-type jwtPayload struct {
-	Issuer    string `json:"iss"`
-	Subject   string `json:"sub"`
-	Audience  string `json:"aud"`
-	ExpiresAt int64  `json:"exp"`
-	IssuedAt  int64  `json:"iat"`
-	Nonce     string `json:"nonce"`
-}
-
-func decodeJWTPayload(t *testing.T, tokenString string) jwtPayload {
-	t.Helper()
-	parts := strings.Split(tokenString, ".")
-	if len(parts) != 3 {
-		t.Fatalf("token %q is not a compact JWT (want 3 dot-separated segments)", tokenString)
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("decode JWT payload: %v", err)
-	}
-	var claims jwtPayload
-	if err := json.Unmarshal(raw, &claims); err != nil {
-		t.Fatalf("unmarshal JWT payload: %v", err)
-	}
-	return claims
 }

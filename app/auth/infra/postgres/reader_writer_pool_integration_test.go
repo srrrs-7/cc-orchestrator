@@ -35,28 +35,8 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres/testsupport"
 )
-
-// testConfig builds a postgres.Config from the same discrete DB_*
-// environment variables (and defaults) openTestDB/testDSN use, so
-// OpenPair-focused tests below can pass a postgres.Config directly
-// instead of round-tripping through a DSN string.
-func testConfig() postgres.Config {
-	env := func(key, def string) string {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-		return def
-	}
-	return postgres.Config{
-		Host:     env("DB_HOST", "127.0.0.1"),
-		Port:     env("DB_PORT", "5432"),
-		Name:     env("DB_NAME", "auth"),
-		User:     env("DB_USER", "app"),
-		Password: env("DB_PASSWORD", "app"),
-		SSLMode:  env("DB_SSLMODE", "disable"),
-	}
-}
 
 // TestOpenPair_SharesPoolWhenConfigEqual covers SPEC-010 R3 and the
 // non-functional "二重に開かない" requirement: OpenPair called with an
@@ -66,7 +46,7 @@ func TestOpenPair_SharesPoolWhenConfigEqual(t *testing.T) {
 	if os.Getenv("DB_HOST") == "" {
 		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
 	}
-	cfg := testConfig()
+	cfg := testsupport.TestConfig()
 	ctx := context.Background()
 
 	writer, reader, closeFn, err := postgres.OpenPair(ctx, cfg, cfg)
@@ -100,7 +80,7 @@ func TestOpenPair_DifferentReaderConfig_FailsWithoutLeakingWriter(t *testing.T) 
 	if os.Getenv("DB_HOST") == "" {
 		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
 	}
-	writerCfg := testConfig()
+	writerCfg := testsupport.TestConfig()
 	readerCfg := writerCfg
 	// "invalid" is an IANA-reserved TLD (RFC 2606) guaranteed never to
 	// resolve, so this failure is deterministic and independent of the
@@ -174,9 +154,9 @@ func newPoolRoutingAuthCode(t *testing.T) *authcode.AuthorizationCode {
 // pool; this test proves that, once wired that way, closing the
 // reader pool has no effect on it.
 func TestAuthCodeRepository_FixedToWriterPool_UnaffectedByReaderPoolClose(t *testing.T) {
-	writerDB := openTestDB(t)
-	readerDB := openTestDB(t)
-	truncateTable(t, writerDB, "authorization_codes")
+	writerDB := testsupport.OpenTestDB(t)
+	readerDB := testsupport.OpenTestDB(t)
+	testsupport.TruncateTable(t, writerDB, "authorization_codes")
 
 	// Per this Spec's fixed wiring decision, authcode is always
 	// constructed with the writer pool, never the reader pool.

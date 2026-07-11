@@ -1,19 +1,21 @@
 // Package repotest provides shared "behavioral contract" test suites
-// for app/auth's three persisted aggregates (client, user, authcode;
-// SPEC-005 R2). Each domain package's Repository interface
-// (domain/<aggregate>/repository.go) is the single source of truth
-// for what an implementation must do; the Run*RepositoryContract
-// functions in this package exercise those contracts once, so
-// infra/memory and (once implemented) infra/postgres can both be
-// proven to behave identically without duplicating test logic
-// per-implementation.
+// for app/auth's persisted aggregates (client, user, authcode,
+// refreshtoken; SPEC-005 R2). Each domain package's Repository
+// interface (domain/<aggregate>/repository.go) is the single source
+// of truth for what an implementation must do; the Run*RepositoryContract
+// functions in this package exercise those contracts once, so every
+// implementation can be proven to behave identically without
+// duplicating test logic per-implementation.
 //
-// These files carry no build tag: they must compile and be usable
-// both by the default (untagged) build -- exercised today against
-// infra/memory -- and by the "integration" build (see
-// infra/postgres/*_integration_test.go) once infra/postgres exists.
-// They must therefore not depend on anything beyond the standard
-// library and the relevant domain package.
+// As of SPEC-011, infra/memory is being removed: each contract is
+// exercised solely against infra/postgres via the "integration" build
+// (see infra/postgres/*_integration_test.go). The infra/memory
+// bindings will be deleted alongside infra/memory in Phase 2.
+//
+// These files carry no build tag: they must remain compilable by both
+// the default (untagged) and "integration" builds, so they must not
+// depend on anything beyond the standard library and the relevant
+// domain package.
 package repotest
 
 import (
@@ -29,13 +31,12 @@ import (
 //
 // client.Repository is read-only (FindByID only; see
 // domain/client/repository.go): seeding is necessarily performed
-// outside the interface, through whatever mechanism each
-// implementation uses in production (infra/memory.ClientRepository's
-// Seed method; infra/postgres's planned startup idempotent-seed
-// UpsertClient, per docs/plans/SPEC-005-plan.md §2.2). Implementations
-// MUST start from an empty store on every call, the same way
-// memory.NewClientRepository() does, so subtests never observe data
-// left behind by another subtest.
+// outside the interface, through postgres.SeedClient's idempotent
+// upsert (wrapped by testsupport.SeedClient for integration tests).
+// Implementations MUST start from an empty store on every call so
+// subtests never observe data left behind by another subtest. See
+// infra/postgres/client_repository_integration_test.go for the
+// concrete factory (SPEC-011: Postgres is the sole implementation).
 type NewClientRepository func(t *testing.T, seed ...*client.Client) client.Repository
 
 // RunClientRepositoryContract runs the behavioral contract shared by

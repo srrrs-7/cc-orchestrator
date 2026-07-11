@@ -12,28 +12,14 @@ import (
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
-	"github.com/srrrs-7/cc-orchestrator/app/api/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/api/route"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
 )
 
-// newTestHandler wires a fresh in-memory-repository-backed router so
-// each test case starts from an empty store.
-func newTestHandler() http.Handler {
-	repo := memory.NewTaskRepository()
-	dupChk := task.NewDuplicateChecker(repo)
-	// SPEC-010: NewTaskService now takes reader and writer separately
-	// (task.Reader / task.Writer). memory.TaskRepository is a single
-	// struct implementing both (R5), so the same repo value is passed
-	// for each role here.
-	svc := service.NewTaskService(repo, repo, dupChk)
-	return route.NewRouter(svc)
-}
-
 // failingRepository is a task.Repository whose every method returns a
 // generic, non-sentinel error. It exists solely to drive route's
 // default writeError branch (500 errorResponse), a wire-contract
-// scenario the happy-path memory.TaskRepository cannot produce.
+// scenario a functional store cannot produce.
 type failingRepository struct{}
 
 var _ task.Repository = failingRepository{}
@@ -98,14 +84,39 @@ func newDBErrorTestHandler() http.Handler {
 	return route.NewRouter(svc)
 }
 
-type taskResponseBody struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Status    string `json:"status"`
-	Priority  string `json:"priority"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+// notFoundRepository is a task.Repository whose find methods always
+// return *task.NotFoundError (unwrapping to task.ErrNotFound). It
+// drives the route layer's 404 branch without needing a live store or
+// pre-existing data, for tests that only care about the not-found
+// error path. This is a minimal, targeted stub -- not a general-purpose
+// in-memory store -- consistent with SPEC-011's prohibition on
+// re-implementing infra/memory.
+type notFoundRepository struct{}
+
+var _ task.Repository = notFoundRepository{}
+
+func (notFoundRepository) Save(_ context.Context, _ *task.Task) error { return nil }
+func (notFoundRepository) FindByID(_ context.Context, _ task.ID) (*task.Task, error) {
+	return nil, task.NewNotFoundError()
 }
+func (notFoundRepository) FindByTitle(_ context.Context, _ task.Title) (*task.Task, error) {
+	return nil, task.NewNotFoundError()
+}
+func (notFoundRepository) ListPage(_ context.Context, _ task.Page) ([]*task.Task, int, error) {
+	return nil, 0, nil
+}
+
+// newNotFoundTestHandler wires a router backed by notFoundRepository,
+// for wire-contract cases that must observe a 404 errorResponse without
+// requiring any pre-existing store state.
+func newNotFoundTestHandler() http.Handler {
+	repo := notFoundRepository{}
+	dupChk := task.NewDuplicateChecker(repo)
+	svc := service.NewTaskService(repo, repo, dupChk)
+	return route.NewRouter(svc)
+}
+
+// --- shared request/response helpers ------------------------------------
 
 type errorResponseBody struct {
 	Error string `json:"error"`
@@ -142,15 +153,6 @@ func doRawRequest(t *testing.T, h http.Handler, method, target, rawBody string) 
 	return rec
 }
 
-func decodeTask(t *testing.T, rec *httptest.ResponseRecorder) taskResponseBody {
-	t.Helper()
-	var got taskResponseBody
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body: %v (body=%q)", err, rec.Body.String())
-	}
-	return got
-}
-
 func decodeError(t *testing.T, rec *httptest.ResponseRecorder) errorResponseBody {
 	t.Helper()
 	var got errorResponseBody
@@ -160,66 +162,22 @@ func decodeError(t *testing.T, rec *httptest.ResponseRecorder) errorResponseBody
 	return got
 }
 
-func TestCreateTask_Success(t *testing.T) {
-	h := newTestHandler()
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"})
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusCreated, rec.Body.String())
-	}
-
-	got := decodeTask(t, rec)
-	if got.Title != "buy milk" {
-		t.Errorf("Title = %q, want %q", got.Title, "buy milk")
-	}
-	if got.Status != "todo" {
-		t.Errorf("Status = %q, want %q", got.Status, "todo")
-	}
-	// R2: omitting priority in the request body defaults to medium.
-	if got.Priority != "medium" {
-		t.Errorf("Priority = %q, want %q", got.Priority, "medium")
-	}
-	if got.ID == "" {
-		t.Error("ID is empty, want non-empty")
-	}
-}
-
-// TestCreateTask_WithPriority covers R2 (an explicit priority in the
-// request body is honored) and R4 (the created response carries the
-// snake_case priority field with the exact value requested).
-func TestCreateTask_WithPriority(t *testing.T) {
-	tests := []struct {
-		name     string
-		priority string
-	}{
-		{name: "low", priority: "low"},
-		{name: "medium", priority: "medium"},
-		{name: "high", priority: "high"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := newTestHandler()
-
-			rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": tt.priority})
-
-			if rec.Code != http.StatusCreated {
-				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusCreated, rec.Body.String())
-			}
-			got := decodeTask(t, rec)
-			if got.Priority != tt.priority {
-				t.Errorf("Priority = %q, want %q", got.Priority, tt.priority)
-			}
-		})
-	}
-}
+// --- untagged (offline) unit tests: validation + error injection --------
+//
+// These tests exercise paths the route layer can decide without a
+// functional store: input validation that fails before any repository
+// call (invalid priority, empty title, malformed JSON, invalid query
+// params) and error injection via the stub repositories above
+// (failingRepository drives the 500 default branch,
+// dbErrorRepository pins the DBError category, notFoundRepository
+// drives the 404 branch). No real DB or in-memory store is required.
 
 // TestCreateTask_InvalidPriority covers R5: an unknown priority value
-// in the create request must be rejected with 400, not silently
-// defaulted or accepted.
+// in the create request must be rejected with 400.  Priority validation
+// (service.Create -> task.ParsePriority) fires before any store access,
+// so failingRepository's errors are never surfaced.
 func TestCreateTask_InvalidPriority(t *testing.T) {
-	h := newTestHandler()
+	h := newFailingTestHandler()
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "urgent"})
 
@@ -231,43 +189,11 @@ func TestCreateTask_InvalidPriority(t *testing.T) {
 	}
 }
 
-// TestCreateTask_ExplicitNullPriority covers the boundary flagged in
-// the plan's risk section: an explicitly-sent JSON null for priority
-// (as opposed to an omitted field or an explicit "") must decode to
-// Go's zero value for string ("") without a decode error, and
-// therefore also default to medium (R2), exactly like an omitted or
-// empty priority.
-func TestCreateTask_ExplicitNullPriority(t *testing.T) {
-	h := newTestHandler()
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]any{"title": "buy milk", "priority": nil})
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusCreated, rec.Body.String())
-	}
-	got := decodeTask(t, rec)
-	if got.Priority != "medium" {
-		t.Errorf("Priority = %q, want %q", got.Priority, "medium")
-	}
-}
-
-func TestCreateTask_DuplicateTitle(t *testing.T) {
-	h := newTestHandler()
-
-	first := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"})
-	if first.Code != http.StatusCreated {
-		t.Fatalf("setup: status = %d, want %d (body=%q)", first.Code, http.StatusCreated, first.Body.String())
-	}
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"})
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusConflict, rec.Body.String())
-	}
-}
-
+// TestCreateTask_EmptyTitle covers the 異常系: an empty title is
+// rejected with 400 before any store access (service.Create ->
+// task.NewTitle).
 func TestCreateTask_EmptyTitle(t *testing.T) {
-	h := newTestHandler()
+	h := newFailingTestHandler()
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": ""})
 
@@ -279,8 +205,12 @@ func TestCreateTask_EmptyTitle(t *testing.T) {
 	}
 }
 
+// TestGetTask_NotFound covers the not-found path: GET /tasks/{id} for
+// a nonexistent ID must return 404. notFoundRepository returns
+// *task.NotFoundError so the route layer maps it to 404 without a live
+// store or pre-existing data.
 func TestGetTask_NotFound(t *testing.T) {
-	h := newTestHandler()
+	h := newNotFoundTestHandler()
 
 	rec := doRequest(t, h, http.MethodGet, "/tasks/does-not-exist", nil)
 
@@ -292,122 +222,12 @@ func TestGetTask_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetTask_Success(t *testing.T) {
-	h := newTestHandler()
-
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "high"}))
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks/"+created.ID, nil)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	got := decodeTask(t, rec)
-	if got.ID != created.ID {
-		t.Errorf("ID = %q, want %q", got.ID, created.ID)
-	}
-	// R4: priority set at creation survives the GET round trip.
-	if got.Priority != "high" {
-		t.Errorf("Priority = %q, want %q", got.Priority, "high")
-	}
-}
-
-func TestCompleteTask_InvalidTransitionFromTodo(t *testing.T) {
-	h := newTestHandler()
-
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"}))
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusConflict, rec.Body.String())
-	}
-	if body := decodeError(t, rec); body.Error == "" {
-		t.Error("error response body is empty, want a message")
-	}
-}
-
-func TestStartThenCompleteTask_Success(t *testing.T) {
-	h := newTestHandler()
-
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "high"}))
-
-	startRec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
-	if startRec.Code != http.StatusOK {
-		t.Fatalf("start: status = %d, want %d (body=%q)", startRec.Code, http.StatusOK, startRec.Body.String())
-	}
-	if got := decodeTask(t, startRec); got.Status != "doing" {
-		t.Errorf("start: Status = %q, want %q", got.Status, "doing")
-	} else if got.Priority != "high" {
-		// Non-functional requirement: state transitions must not
-		// disturb priority (orthogonality).
-		t.Errorf("start: Priority = %q, want unchanged %q", got.Priority, "high")
-	}
-
-	completeRec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
-	if completeRec.Code != http.StatusOK {
-		t.Fatalf("complete: status = %d, want %d (body=%q)", completeRec.Code, http.StatusOK, completeRec.Body.String())
-	}
-	if got := decodeTask(t, completeRec); got.Status != "done" {
-		t.Errorf("complete: Status = %q, want %q", got.Status, "done")
-	} else if got.Priority != "high" {
-		t.Errorf("complete: Priority = %q, want unchanged %q", got.Priority, "high")
-	}
-}
-
-// taskListResponseBody mirrors route.taskListResponse (SPEC-008's
-// envelope) for decoding in tests.
-type taskListResponseBody struct {
-	Items  []taskResponseBody `json:"items"`
-	Total  int                `json:"total"`
-	Limit  int                `json:"limit"`
-	Offset int                `json:"offset"`
-}
-
-func TestListTasks(t *testing.T) {
-	h := newTestHandler()
-
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "low"})
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "walk dog", "priority": "high"})
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	var got taskListResponseBody
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body: %v", err)
-	}
-	if len(got.Items) != 2 {
-		t.Errorf("len(got.Items) = %d, want 2", len(got.Items))
-	}
-	// R1/R2: an unspecified limit/offset default to 20/0, echoed in
-	// the envelope, and total reflects the store's full count.
-	if got.Total != 2 {
-		t.Errorf("Total = %d, want 2", got.Total)
-	}
-	if got.Limit != 20 {
-		t.Errorf("Limit = %d, want 20", got.Limit)
-	}
-	if got.Offset != 0 {
-		t.Errorf("Offset = %d, want 0", got.Offset)
-	}
-
-	// R4: every item in the list response carries a non-empty
-	// snake_case priority field.
-	for _, item := range got.Items {
-		if item.Priority == "" {
-			t.Errorf("item %q: Priority is empty, want set", item.Title)
-		}
-	}
-}
-
 // TestListTasks_InvalidQueryParams covers R3's validation path: a
 // non-integer limit/offset, or a limit/offset that fails task.Page's
 // domain validation (limit < 1, negative offset), must be rejected
 // with 400 and the existing error envelope {error}, never reaching a
-// 200 response.
+// 200 response. The handler and service validate these before any
+// store call, so failingRepository's errors are never surfaced.
 func TestListTasks_InvalidQueryParams(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -423,7 +243,7 @@ func TestListTasks_InvalidQueryParams(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newTestHandler()
+			h := newFailingTestHandler()
 
 			rec := doRequest(t, h, http.MethodGet, "/tasks"+tt.query, nil)
 
@@ -437,119 +257,15 @@ func TestListTasks_InvalidQueryParams(t *testing.T) {
 	}
 }
 
-// TestListTasks_LimitClampedAboveMax covers R3: a limit above
-// task.MaxLimit (100) is clamped rather than rejected -- the request
-// still succeeds (200), and the envelope's echoed limit reflects the
-// clamp (100), not the raw requested value (1000).
-func TestListTasks_LimitClampedAboveMax(t *testing.T) {
-	h := newTestHandler()
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"})
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks?limit=1000", nil)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	var got taskListResponseBody
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body: %v", err)
-	}
-	if got.Limit != 100 {
-		t.Errorf("Limit = %d, want 100 (clamped)", got.Limit)
-	}
-	if got.Offset != 0 {
-		t.Errorf("Offset = %d, want 0", got.Offset)
-	}
-}
-
-// TestListTasks_ExplicitLimitOffsetWindow covers R1/R2: an explicit
-// limit/offset pair within range is applied to the returned window
-// (not just echoed), and total still reflects the store's full count
-// regardless of the window.
-func TestListTasks_ExplicitLimitOffsetWindow(t *testing.T) {
-	h := newTestHandler()
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task a"})
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task b"})
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task c"})
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks?limit=1&offset=1", nil)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	var got taskListResponseBody
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body: %v", err)
-	}
-	if len(got.Items) != 1 {
-		t.Fatalf("len(Items) = %d, want 1 (limit=1 must cap the window)", len(got.Items))
-	}
-	if got.Total != 3 {
-		t.Errorf("Total = %d, want 3 (total is independent of the limit/offset window)", got.Total)
-	}
-	if got.Limit != 1 {
-		t.Errorf("Limit = %d, want 1", got.Limit)
-	}
-	if got.Offset != 1 {
-		t.Errorf("Offset = %d, want 1", got.Offset)
-	}
-}
-
-// TestListTasks_OffsetBeyondTotal covers the documented boundary
-// (SPEC-008 plan §"検証/クランプ仕様"): an offset at or beyond the
-// store's total yields an empty items slice with 200, not an error,
-// and total still reports the store's full count.
-func TestListTasks_OffsetBeyondTotal(t *testing.T) {
-	h := newTestHandler()
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "task a"})
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks?offset=50", nil)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	var got taskListResponseBody
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response body: %v", err)
-	}
-	if len(got.Items) != 0 {
-		t.Errorf("len(Items) = %d, want 0", len(got.Items))
-	}
-	if got.Total != 1 {
-		t.Errorf("Total = %d, want 1", got.Total)
-	}
-}
-
-// TestChangePriority_Success covers R3: POST /tasks/{id}/priority
-// updates the priority and returns 200 with the full task
-// representation reflecting the new value, without altering status.
-func TestChangePriority_Success(t *testing.T) {
-	h := newTestHandler()
-
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "low"}))
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "high"})
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	got := decodeTask(t, rec)
-	if got.Priority != "high" {
-		t.Errorf("Priority = %q, want %q", got.Priority, "high")
-	}
-	if got.Status != "todo" {
-		t.Errorf("Status = %q, want unchanged %q", got.Status, "todo")
-	}
-}
-
 // TestChangePriority_InvalidPriority covers R5: an unknown priority
 // value sent to POST /tasks/{id}/priority is rejected with 400.
+// service.ChangePriority validates priority (task.ParsePriority) before
+// fetching the task from the store, so no pre-existing task is needed
+// and failingRepository's errors are never surfaced.
 func TestChangePriority_InvalidPriority(t *testing.T) {
-	h := newTestHandler()
+	h := newFailingTestHandler()
 
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk"}))
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "urgent"})
+	rec := doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]string{"priority": "urgent"})
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -560,19 +276,15 @@ func TestChangePriority_InvalidPriority(t *testing.T) {
 }
 
 // TestChangePriority_ExplicitNullPriority covers the boundary flagged
-// in the plan's risk section, for the change-priority endpoint rather
-// than creation: an explicitly-sent JSON null for priority decodes to
-// Go's zero value for string (""). Unlike creation, changing priority
-// has no "unspecified means default" concept (service.ChangePriority
-// calls the strict task.ParsePriority directly), so the empty string
-// must be rejected with 400 (ErrInvalidPriority), not silently
-// defaulted.
+// in the plan's risk section, for the change-priority endpoint: an
+// explicitly-sent JSON null for priority decodes to Go's zero value for
+// string (""). service.ChangePriority calls task.ParsePriority directly
+// (strict) before any store access, so the empty string must be
+// rejected with 400 (ErrInvalidPriority) without needing a live store.
 func TestChangePriority_ExplicitNullPriority(t *testing.T) {
-	h := newTestHandler()
+	h := newFailingTestHandler()
 
-	created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "buy milk", "priority": "low"}))
-
-	rec := doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]any{"priority": nil})
+	rec := doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]any{"priority": nil})
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -583,10 +295,12 @@ func TestChangePriority_ExplicitNullPriority(t *testing.T) {
 }
 
 // TestChangePriority_NotFound covers the boundary shared with
-// start/complete: an unknown task id yields 404, matching the
-// existing action-style endpoints.
+// start/complete: a valid-priority request for an unknown task id yields
+// 404. service.ChangePriority validates priority first (task.ParsePriority),
+// then calls FindByID which notFoundRepository answers with
+// *task.NotFoundError → 404.
 func TestChangePriority_NotFound(t *testing.T) {
-	h := newTestHandler()
+	h := newNotFoundTestHandler()
 
 	rec := doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/priority", map[string]string{"priority": "high"})
 
@@ -658,24 +372,15 @@ func TestDBErrorCategory_MapsTo500(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Wire-contract tests (SPEC-003 T2 / R2).
+// Wire-contract tests (SPEC-003 T2 / R2) -- offline (untagged) half.
 //
-// The tests above pin *behavior* (business-rule correctness: exact
-// field values, transition semantics, duplicate detection, ...). The
-// tests below instead pin the *wire shape* that the generated OpenAPI
-// document must describe for every endpoint: the exact success-body
-// field set and casing (route.taskResponse), the exact error-body
-// shape (route.errorResponse), and the status code the implementation
-// actually produces for each scenario. They deliberately do not
-// re-assert field *values* already covered above.
+// This half covers error paths that do not require functional store
+// state: input validation errors (malformed JSON, empty title, invalid
+// priority), repository injection failures (500), and not-found paths
+// (404 via notFoundRepository). Success paths and state-dependent
+// error paths (duplicate, invalid transition) are in the
+// //go:build integration counterpart (task_handler_integration_test.go).
 // ---------------------------------------------------------------------
-
-// wireTaskFields is the exact, snake_case field set of
-// route.taskResponse. Every field must be a JSON string: in
-// particular created_at/updated_at, since the swag annotations
-// reference taskResponse (all-string) rather than the
-// time.Time-typed service.TaskDTO.
-var wireTaskFields = []string{"id", "title", "status", "priority", "created_at", "updated_at"}
 
 // wireErrorFields is the exact field set of route.errorResponse.
 var wireErrorFields = []string{"error"}
@@ -723,35 +428,23 @@ func assertWireShape(t *testing.T, body map[string]any, wantFields []string) {
 	}
 }
 
-// TestWireContract_TaskAndErrorShapes covers every Task-returning
-// endpoint (create/get/start/complete/changePriority) and its
-// documented 400/404/409/500 failure modes, pinning:
-//   - success bodies are exactly {id,title,status,priority,
-//     created_at,updated_at}, snake_case, all-string (taskResponse);
-//   - failure bodies are exactly {error} (errorResponse);
-//   - the status code produced for each scenario.
-//
-// GET /tasks (a JSON array, not a single object) is covered
-// separately by TestWireContract_ListResponseFields.
-func TestWireContract_TaskAndErrorShapes(t *testing.T) {
+// TestWireContract_ErrorAndValidationShapes covers every error/
+// validation path that does not require functional store state: malformed
+// JSON, empty title, invalid priority (400s), repository failures (500),
+// and not-found paths (404). Success paths and state-dependent error
+// shapes are covered in task_handler_integration_test.go.
+func TestWireContract_ErrorAndValidationShapes(t *testing.T) {
 	tests := []struct {
-		name           string
-		useFailingRepo bool
-		do             func(t *testing.T, h http.Handler) *httptest.ResponseRecorder
-		wantStatus     int
-		wantFields     []string
+		name       string
+		handler    func() http.Handler
+		do         func(t *testing.T, h http.Handler) *httptest.ResponseRecorder
+		wantStatus int
+		wantFields []string
 	}{
 		// POST /tasks
 		{
-			name: "POST /tasks success -> 201 taskResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "high"})
-			},
-			wantStatus: http.StatusCreated,
-			wantFields: wireTaskFields,
-		},
-		{
-			name: "POST /tasks malformed JSON body -> 400 errorResponse",
+			name:    "POST /tasks malformed JSON body -> 400 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRawRequest(t, h, http.MethodPost, "/tasks", "{not-json")
 			},
@@ -759,7 +452,8 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 			wantFields: wireErrorFields,
 		},
 		{
-			name: "POST /tasks empty title -> 400 errorResponse",
+			name:    "POST /tasks empty title -> 400 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": ""})
 			},
@@ -767,7 +461,8 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 			wantFields: wireErrorFields,
 		},
 		{
-			name: "POST /tasks invalid priority -> 400 errorResponse",
+			name:    "POST /tasks invalid priority -> 400 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "urgent"})
 			},
@@ -775,17 +470,8 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 			wantFields: wireErrorFields,
 		},
 		{
-			name: "POST /tasks duplicate title -> 409 errorResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire dup"})
-				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire dup"})
-			},
-			wantStatus: http.StatusConflict,
-			wantFields: wireErrorFields,
-		},
-		{
-			name:           "POST /tasks repository failure -> 500 errorResponse",
-			useFailingRepo: true,
+			name:    "POST /tasks repository failure -> 500 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"})
 			},
@@ -795,16 +481,8 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 
 		// GET /tasks/{id}
 		{
-			name: "GET /tasks/{id} success -> 200 taskResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				return doRequest(t, h, http.MethodGet, "/tasks/"+created.ID, nil)
-			},
-			wantStatus: http.StatusOK,
-			wantFields: wireTaskFields,
-		},
-		{
-			name: "GET /tasks/{id} not found -> 404 errorResponse",
+			name:    "GET /tasks/{id} not found -> 404 errorResponse",
+			handler: newNotFoundTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodGet, "/tasks/does-not-exist", nil)
 			},
@@ -814,92 +492,48 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 
 		// POST /tasks/{id}/start
 		{
-			name: "POST /tasks/{id}/start success -> 200 taskResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
-			},
-			wantStatus: http.StatusOK,
-			wantFields: wireTaskFields,
-		},
-		{
-			name: "POST /tasks/{id}/start not found -> 404 errorResponse",
+			name:    "POST /tasks/{id}/start not found -> 404 errorResponse",
+			handler: newNotFoundTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/start", nil)
 			},
 			wantStatus: http.StatusNotFound,
 			wantFields: wireErrorFields,
 		},
-		{
-			name: "POST /tasks/{id}/start invalid transition -> 409 errorResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
-			},
-			wantStatus: http.StatusConflict,
-			wantFields: wireErrorFields,
-		},
 
 		// POST /tasks/{id}/complete
 		{
-			name: "POST /tasks/{id}/complete success -> 200 taskResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/start", nil)
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
-			},
-			wantStatus: http.StatusOK,
-			wantFields: wireTaskFields,
-		},
-		{
-			name: "POST /tasks/{id}/complete not found -> 404 errorResponse",
+			name:    "POST /tasks/{id}/complete not found -> 404 errorResponse",
+			handler: newNotFoundTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/complete", nil)
 			},
 			wantStatus: http.StatusNotFound,
 			wantFields: wireErrorFields,
 		},
-		{
-			name: "POST /tasks/{id}/complete invalid transition -> 409 errorResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/complete", nil)
-			},
-			wantStatus: http.StatusConflict,
-			wantFields: wireErrorFields,
-		},
 
 		// POST /tasks/{id}/priority
 		{
-			name: "POST /tasks/{id}/priority success -> 200 taskResponse",
+			name:    "POST /tasks/{id}/priority malformed JSON body -> 400 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task", "priority": "low"}))
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "high"})
-			},
-			wantStatus: http.StatusOK,
-			wantFields: wireTaskFields,
-		},
-		{
-			name: "POST /tasks/{id}/priority malformed JSON body -> 400 errorResponse",
-			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				return doRawRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", "{not-json")
+				return doRawRequest(t, h, http.MethodPost, "/tasks/some-id/priority", "{not-json")
 			},
 			wantStatus: http.StatusBadRequest,
 			wantFields: wireErrorFields,
 		},
 		{
-			name: "POST /tasks/{id}/priority invalid priority value -> 400 errorResponse",
+			name:    "POST /tasks/{id}/priority invalid priority value -> 400 errorResponse",
+			handler: newFailingTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
-				created := decodeTask(t, doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire task"}))
-				return doRequest(t, h, http.MethodPost, "/tasks/"+created.ID+"/priority", map[string]string{"priority": "urgent"})
+				return doRequest(t, h, http.MethodPost, "/tasks/some-id/priority", map[string]string{"priority": "urgent"})
 			},
 			wantStatus: http.StatusBadRequest,
 			wantFields: wireErrorFields,
 		},
 		{
-			name: "POST /tasks/{id}/priority not found -> 404 errorResponse",
+			name:    "POST /tasks/{id}/priority not found -> 404 errorResponse",
+			handler: newNotFoundTestHandler,
 			do: func(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
 				return doRequest(t, h, http.MethodPost, "/tasks/does-not-exist/priority", map[string]string{"priority": "high"})
 			},
@@ -910,67 +544,12 @@ func TestWireContract_TaskAndErrorShapes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var h http.Handler
-			if tt.useFailingRepo {
-				h = newFailingTestHandler()
-			} else {
-				h = newTestHandler()
-			}
-
+			h := tt.handler()
 			rec := tt.do(t, h)
-
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, tt.wantStatus, rec.Body.String())
 			}
 			assertWireShape(t, decodeMap(t, rec), tt.wantFields)
 		})
-	}
-}
-
-// wireListEnvelopeFields is the exact field set of
-// route.taskListResponse (SPEC-008's envelope), excluding "items"
-// itself (its element shape is pinned separately via wireTaskFields).
-var wireListEnvelopeFields = []string{"items", "total", "limit", "offset"}
-
-// TestWireContract_ListResponseFields pins GET /tasks's shape
-// (SPEC-008): a JSON envelope object {items,total,limit,offset}
-// whose every items[] element is a taskResponse (the same exact
-// field set and casing pinned above for the single-object
-// endpoints).
-func TestWireContract_ListResponseFields(t *testing.T) {
-	h := newTestHandler()
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire list task 1", "priority": "low"})
-	doRequest(t, h, http.MethodPost, "/tasks", map[string]string{"title": "wire list task 2", "priority": "high"})
-
-	rec := doRequest(t, h, http.MethodGet, "/tasks", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	envelope := decodeMap(t, rec)
-	gotFields := make([]string, 0, len(envelope))
-	for k := range envelope {
-		gotFields = append(gotFields, k)
-	}
-	slices.Sort(gotFields)
-	wantFields := slices.Clone(wireListEnvelopeFields)
-	slices.Sort(wantFields)
-	if !slices.Equal(gotFields, wantFields) {
-		t.Fatalf("envelope field set = %v, want exactly %v", gotFields, wantFields)
-	}
-
-	items, ok := envelope["items"].([]any)
-	if !ok {
-		t.Fatalf("items = %T(%v), want a JSON array", envelope["items"], envelope["items"])
-	}
-	if len(items) != 2 {
-		t.Fatalf("len(items) = %d, want 2", len(items))
-	}
-	for _, item := range items {
-		itemMap, ok := item.(map[string]any)
-		if !ok {
-			t.Fatalf("item = %T(%v), want a JSON object", item, item)
-		}
-		assertWireShape(t, itemMap, wireTaskFields)
 	}
 }

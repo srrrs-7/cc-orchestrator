@@ -25,9 +25,11 @@
 
 - 依存の向きは `route → service → domain` の一方向。`domain` は他のどの層にも依存しない。
 - `domain` はデータの永続化方法を知らない。代わりに `domain/task/repository.go` で
-  `Repository` インターフェースを定義し、`infra/memory` がそれを実装する
+  `Repository` インターフェースを定義し、`infra/postgres` がそれを実装する
   (**依存性逆転の原則 / DIP**)。図の矢印が domain → infra ではなく infra → domain
-  (実装が interface に依存する)方向になっているのはこのため。
+  (実装が interface に依存する)方向になっているのはこのため。永続化を別ストレージ
+  (例: MySQL)に差し替える場合は `infra/postgres` を新実装に置き換え、同じ
+  `Repository` contract テスト(`infra/repotest`)を回して互換性を保証する。
 - `cmd/api` はコンポジションルート。各層の実装を組み立てて配線するだけで、
   ビジネスロジックを一切持たない。
 
@@ -39,7 +41,7 @@
 | 値オブジェクト (Value Object) | 属性の値そのもので同一性が決まる、不変なオブジェクト | `domain/task/id.go` の `ID`、`title.go` の `Title`、`status.go` の `Status` |
 | 集約 (Aggregate) / 集約ルート (Aggregate Root) | 不変条件を守る単位としてまとめられたオブジェクト群。外部からは集約ルート経由でのみ操作する | `Task` が集約ルート。フィールドはすべて非公開で、`Start()` / `Complete()` / `Rename()` などの振る舞いメソッドを通してのみ状態が変わる |
 | ファクトリ (Factory) | 複雑な生成ロジック・不変条件の充足をカプセル化する生成手段 | `task.New(title)`(新規生成、必ず `StatusTodo` から開始)、`task.Reconstruct(...)`(永続化層からの再構築専用) |
-| リポジトリ (Repository) | 集約の永続化・再構築をコレクションのように抽象化するインターフェース | `domain/task/repository.go` の `Repository`(定義はドメイン層、実装は `infra/memory`) |
+| リポジトリ (Repository) | 集約の永続化・再構築をコレクションのように抽象化するインターフェース | `domain/task/repository.go` の `Repository`(定義はドメイン層、実装は `infra/postgres`) |
 | ドメインサービス (Domain Service) | 単一のエンティティ・値オブジェクトに自然に属さない、複数集約にまたがる知識・処理 | `domain/task/service.go` の `DuplicateChecker`(タイトル重複の判定は特定の `Task` 一つに属さない知識のためドメインサービスに配置) |
 | アプリケーションサービス (Application Service) | ユースケースを実現するために、ドメインオブジェクトを協調させる薄い層。ビジネスルール自体は持たない | `service/task_service.go` の `TaskService`(`Create` / `Get` / `List` / `Start` / `Complete`) |
 
@@ -68,8 +70,8 @@ app/api/
 ├── service/                 アプリケーション層
 │   ├── dto.go                 TaskDTO と変換関数
 │   └── task_service.go        ユースケース(Create/Get/List/Start/Complete)
-├── infra/memory/             インフラ層
-│   └── task_repository.go     in-memory Repository 実装
+├── infra/postgres/           インフラ層(Postgres 実装)
+│   └── task_repository.go     Postgres Repository 実装
 └── route/                    プレゼンテーション層
     ├── router.go               ルーティング定義
     ├── task_handler.go         HTTP ハンドラ

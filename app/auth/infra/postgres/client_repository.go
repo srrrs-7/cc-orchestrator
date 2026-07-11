@@ -14,8 +14,8 @@ import (
 // ClientRepository is a Postgres-backed implementation of
 // client.Repository (SPEC-005 R2). client.Repository is read-only
 // (FindByID only); population happens through SeedClient, called once
-// at startup by cmd/authz/main.go's persistence wiring when Postgres
-// mode is selected (see SelectMode).
+// at startup by cmd/authz/main.go's persistence wiring (SPEC-011:
+// Postgres is the sole persistence backend).
 type ClientRepository struct {
 	q *sqlcgen.Queries
 }

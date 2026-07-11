@@ -28,13 +28,14 @@ const (
 // environment. It is constructed once by NewEnv and passed downstream
 // by value.
 //
-// Env has no DBSchema field (removed by the 2026-07-09 refactor,
-// SPEC-005 plan §RF.2.3): auth now connects to its own dedicated
-// Postgres database (DBName) instead of a shared database selected via
-// connection search_path, so there is no DB_SCHEMA left to read.
+// Env has no AppEnv field (removed by SPEC-011: infra/memory is
+// deleted; Postgres is the sole persistence backend and APP_ENV is
+// no longer consulted for mode selection). Env has no DBSchema field
+// (removed by the 2026-07-09 refactor, SPEC-005 plan §RF.2.3): auth
+// now connects to its own dedicated Postgres database (DBName) instead
+// of a shared database selected via connection search_path.
 type Env struct {
 	Port   string
-	AppEnv string
 	Issuer string
 
 	DBHost     string
@@ -73,11 +74,10 @@ type DBReaderEnv struct {
 // NewEnv reads every environment variable app/auth depends on and
 // applies defaults where applicable. It performs no validation --
 // callers MUST call Env.validate before using DB_* values (see its
-// doc comment for the fail-closed mode-dependent contract).
+// doc comment for the fail-closed contract).
 func NewEnv() Env {
 	e := Env{
 		Port:   orDefault(os.Getenv("PORT"), defaultPort),
-		AppEnv: os.Getenv("APP_ENV"),
 		Issuer: orDefault(os.Getenv("ISSUER"), defaultIssuer),
 
 		DBHost:     os.Getenv("DB_HOST"),
@@ -136,42 +136,30 @@ func (e Env) readerConfig() postgres.Config {
 	}
 }
 
-// validate resolves e's persistence mode and, only when that mode is
-// Postgres, validates that the DB_* values required to connect are
-// present for both the writer and reader configs -- DB_* is therefore
-// required in Postgres mode and unconstrained otherwise (see
-// postgres.SelectMode's fail-closed mode-selection contract).
+// validate checks that the DB_* values required to open Postgres
+// connections are present for both the writer and reader configs.
+// Postgres is the sole persistence backend (SPEC-011): fail-closed is
+// enforced here via Config.Validate, which requires DB_HOST / DB_NAME
+// / DB_USER / DB_PASSWORD to be set. APP_ENV is no longer consulted
+// (removed by SPEC-011 together with infra/memory).
+//
 // Validating the reader config too is mostly redundant once the
 // writer config is valid, since NewEnv already fell every unset
 // DB_READER_* item back to the (about-to-be-validated) writer value --
 // but it still catches a partial, invalid override supplied via a
-// hand-built Env literal (e.g. in a test). It returns the resolved
-// Mode alongside any error so callers never need to call
-// postgres.SelectMode a second time. SelectMode (and therefore the
-// resolved Mode) is a function of the writer's own DB_HOST/APP_ENV
-// only: DB_READER_* never influences which mode is selected.
+// hand-built Env literal (e.g. in a test).
 //
 // The returned error never contains DB_PASSWORD's or
 // DBReader.Password's value (only var names may appear, via
-// postgres.Config.Validate), and the %w chain preserves
-// errors.Is(err, postgres.ErrPersistenceNotConfigured) so callers can
-// distinguish "not configured" from other failures.
-func (e Env) validate() (postgres.Mode, error) {
-	mode, err := postgres.SelectMode(e.DBHost, e.AppEnv)
-	if err != nil {
-		return "", fmt.Errorf("authz: validate env: %w", err)
+// postgres.Config.Validate).
+func (e Env) validate() error {
+	if err := e.writerConfig().Validate(); err != nil {
+		return fmt.Errorf("authz: validate env: %w", err)
 	}
-
-	if mode == postgres.ModePostgres {
-		if err := e.writerConfig().Validate(); err != nil {
-			return "", fmt.Errorf("authz: validate env: %w", err)
-		}
-		if err := e.readerConfig().Validate(); err != nil {
-			return "", fmt.Errorf("authz: validate env: %w", err)
-		}
+	if err := e.readerConfig().Validate(); err != nil {
+		return fmt.Errorf("authz: validate env: %w", err)
 	}
-
-	return mode, nil
+	return nil
 }
 
 // orDefault returns v, or def if v is empty.

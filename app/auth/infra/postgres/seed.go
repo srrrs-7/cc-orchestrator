@@ -19,9 +19,8 @@ import (
 // client.Repository itself is read-only (FindByID only; see
 // domain/client/repository.go), so this seed path necessarily lives
 // outside that interface. Production wiring is cmd/authz/main.go's
-// persistence block, which calls this once at startup when Postgres
-// mode is selected (see SelectMode) -- mirroring what
-// infra/memory.ClientRepository.Seed does for the in-memory path.
+// persistence block, which calls this once at startup (SPEC-011:
+// Postgres is the sole persistence backend).
 func SeedClient(ctx context.Context, db *sql.DB, c *client.Client) error {
 	redirectURIs := make([]string, 0, len(c.RedirectURIs()))
 	for _, uri := range c.RedirectURIs() {

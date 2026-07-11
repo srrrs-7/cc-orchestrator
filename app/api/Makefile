@@ -200,8 +200,8 @@ migrate-create-native: ## 新しいマイグレーションファイルを作成
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
 
 .PHONY: test-integration-native
-test-integration-native: ## infra/postgres の実 DB 統合テストを実行する (build tag integration。事前に app/migrator で DB 作成 + up 適用が必要。DB_* env で接続先を指定)
-	go test -tags=integration ./infra/postgres/...
+test-integration-native: ## infra/postgres + route の実 DB 統合テストを実行する (build tag integration。事前に app/migrator で DB 作成 + up 適用が必要。DB_* env で接続先を指定)
+	go test -tags=integration ./infra/postgres/... ./route/...
 
 else
 # =============================================================================
@@ -255,7 +255,7 @@ migrate-create: ## 新しいマイグレーションファイルを作成する 
 	$(OFFLINE) make migrate-create-native name=$(name)
 
 .PHONY: test-integration
-test-integration: ## infra/postgres の実 DB 統合テストを実行する (offline 不可。tools サービス + compose.yml の postgres へ接続。事前に app/migrator で DB 作成 + up 適用が必要)
+test-integration: ## infra/postgres + route の実 DB 統合テストを実行する (offline 不可。tools サービス + compose.yml の postgres へ接続。事前に app/migrator で DB 作成 + up 適用が必要)
 	$(DB_ONLINE) \
 		-e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
 		-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \

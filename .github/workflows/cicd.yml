@@ -14,7 +14,8 @@
 # module with its own `migrator` job (make check), and is also the tool the
 # api-integration / auth-integration jobs below invoke to create each
 # stack's dedicated Postgres database and apply its migrations — see those
-# jobs' comments for why plain unit-test jobs (`api`/`auth`, memory-backed)
+# jobs' comments for why plain unit-test jobs (`api`/`auth`, offline —
+# SPEC-011: untagged error-injection/validation route tests, no DB)
 # do not need to know about it. migrator-integration additionally exercises
 # app/migrator's own least-privilege runtime role provisioning (ISSUE-016
 # R-c) against a real Postgres instance.

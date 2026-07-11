@@ -24,7 +24,6 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
-	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/route"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
@@ -72,8 +71,7 @@ func run() error {
 	defer stop()
 
 	e := NewEnv()
-	mode, err := e.validate()
-	if err != nil {
+	if err := e.validate(); err != nil {
 		return err // already wrapped "authz: validate env: ..."
 	}
 	// OIDC Discovery 1.0 requires a production issuer to use https;
@@ -97,14 +95,12 @@ func run() error {
 	verifier := jwt.NewVerifier(&privateKey.PublicKey)
 	keyProvider := jwt.NewKeyProvider(&privateKey.PublicKey, kid)
 
-	// Repositories + demo seed data (SPEC-005: Postgres or in-memory,
-	// chosen by setupPersistence based on DB_HOST/APP_ENV -- see its
-	// doc comment for the fail-closed selection contract). SPEC-010:
-	// in Postgres mode, setupPersistence opens a writer/reader pool
-	// pair via postgres.OpenPair and wires each repository to the
-	// pool the "auth の correctness-critical read の配置" table
-	// (docs/plans/SPEC-010-plan.md) assigns it.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, err := setupPersistence(ctx, mode, e.writerConfig(), e.readerConfig())
+	// Repositories + demo seed data (SPEC-011: Postgres is the sole
+	// persistence backend). SPEC-010: setupPersistence opens a
+	// writer/reader pool pair via postgres.OpenPair and wires each
+	// repository to the pool the "auth の correctness-critical read の
+	// 配置" table (docs/plans/SPEC-010-plan.md) assigns it.
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig())
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -166,93 +162,55 @@ func run() error {
 	return nil
 }
 
-// setupPersistence is SPEC-005's persistence composition block: it
-// wires infra/postgres or infra/memory depending on the mode/cfg the
-// caller provides. mode is resolved once, up front, by Env.validate
-// (env.go) via postgres.SelectMode's fail-closed contract --
+// setupPersistence is the persistence composition block (SPEC-011:
+// Postgres is the sole backend). It opens a writer/reader pool pair
+// via postgres.OpenPair and wires each repository according to
+// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
+// 配置" table:
 //
-//   - DB_HOST set        -> Postgres, regardless of APP_ENV
-//   - DB_HOST unset,
-//     APP_ENV=local|test -> in-memory (this sample's original behavior)
-//   - DB_HOST unset,
-//     any other APP_ENV  -> a wrapped error (no silent memory
-//     fallback; this includes an unset APP_ENV and
-//     APP_ENV=production)
-//
-// so a production deployment that forgot to configure DB_HOST fails
-// to start instead of silently running on non-durable, single-instance
-// in-memory storage (docs/plans/SPEC-005-plan.md §0 "切替の env / DSN
-// / 本番必須強制").
+//   - client/user (seeded once at startup, never written at runtime)
+//     → reader pool
+//   - authcode/refreshtoken (single-use tokens whose read-after-write
+//     correctness must not be exposed to replica lag) → writer pool
+//     for both reads and writes
 //
 // writerCfg/readerCfg are Env.writerConfig()/Env.readerConfig()
-// (SPEC-010): in Postgres mode they are passed to postgres.OpenPair,
-// which opens a single shared *sql.DB when readerCfg == writerCfg
-// (the DB_READER_* -unset default) or two independent pools
-// otherwise. Repository construction then follows
-// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
-// 配置" table: client/user (seeded once at startup, never written at
-// runtime) are wired to the reader pool, while authcode/refreshtoken
-// (single-use tokens whose read-after-write correctness must not be
-// exposed to replica lag) stay pinned to the writer pool for both
-// reads and writes.
+// (SPEC-010): postgres.OpenPair opens a single shared *sql.DB when
+// readerCfg == writerCfg (the DB_READER_* -unset default) or two
+// independent pools otherwise.
 //
-// It returns the four repositories as their domain-declared
-// interfaces (client.Repository / user.Repository /
-// authcode.Repository / refreshtoken.Repository -- the last added by
-// SPEC-006) -- the rest of run() never needs to know which backend is
-// in play -- plus a closePersistence func the caller MUST defer-call
-// during shutdown to release any pooled Postgres connections (a no-op
-// for the in-memory backend, per infra/postgres.Open's
-// ctx-bound-ping-only lifecycle contract).
-func setupPersistence(ctx context.Context, mode postgres.Mode, writerCfg, readerCfg postgres.Config) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, error) {
+// It returns the four repositories as their domain-declared interfaces
+// plus a closePersistence func the caller MUST defer-call during
+// shutdown to release pooled connections.
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, error) {
 	noopClose := func() error { return nil }
 
-	switch mode {
-	case postgres.ModeMemory:
-		clientRepo := memory.NewClientRepository()
-		userRepo := memory.NewUserRepository()
-		authCodeRepo := memory.NewAuthCodeRepository()
-		refreshTokenRepo := memory.NewRefreshTokenRepository()
-		if err := seedMemory(clientRepo, userRepo); err != nil {
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (memory): %w", err)
-		}
-		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, noopClose, nil
-
-	case postgres.ModePostgres:
-		writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
-		if err != nil {
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("postgres open pair: %w", err)
-		}
-		// Seed writes go through the writer pool (seedPostgres is an
-		// idempotent upsert -- see its doc comment -- so it must never
-		// run against a lagging replica).
-		if err := seedPostgres(ctx, writerDB); err != nil {
-			_ = closeFn()
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
-		}
-		// Reader pool: seeded, read-only-at-runtime aggregates.
-		clientRepo := postgres.NewClientRepository(readerDB)
-		userRepo := postgres.NewUserRepository(readerDB)
-		// Writer pool: single-use token aggregates, pinned for both
-		// reads and writes (see func doc comment).
-		authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
-		refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
-		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, nil
-
-	default:
-		// Unreachable: SelectMode only ever returns ModeMemory,
-		// ModePostgres, or a non-nil error.
-		return nil, nil, nil, nil, noopClose, fmt.Errorf("select persistence mode: unexpected mode %q", mode)
+	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
+	if err != nil {
+		return nil, nil, nil, nil, noopClose, fmt.Errorf("postgres open pair: %w", err)
 	}
+	// Seed writes go through the writer pool (seedPostgres is an
+	// idempotent upsert -- see its doc comment -- so it must never
+	// run against a lagging replica).
+	if err := seedPostgres(ctx, writerDB); err != nil {
+		_ = closeFn()
+		return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
+	}
+	// Reader pool: seeded, read-only-at-runtime aggregates.
+	clientRepo := postgres.NewClientRepository(readerDB)
+	userRepo := postgres.NewUserRepository(readerDB)
+	// Writer pool: single-use token aggregates, pinned for both
+	// reads and writes (see func doc comment).
+	authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
+	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
+	slog.Info("authz: persistence configured", "mode", "postgres")
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo
 // OAuth client (see the demoClientID/demoRedirectURI package
-// constants). It is shared by both persistence backends' seed paths
-// (seedMemory / seedPostgres) so the demo data itself is defined
-// exactly once.
+// constants). It is shared by seedPostgres so the demo data itself is
+// defined exactly once.
 func buildDemoClient() (*client.Client, error) {
 	clientID, err := client.ParseClientID(demoClientID)
 	if err != nil {
@@ -277,8 +235,7 @@ func buildDemoClient() (*client.Client, error) {
 // checks it (see service.AuthorizationService.resolveOwner: there is
 // no login UI, so User.VerifyPassword is never called in the current
 // request flow). It exists so the aggregate's shape matches a real
-// IdP and can be wired to an actual login handler later. Shared by
-// both persistence backends' seed paths.
+// IdP and can be wired to an actual login handler later.
 func buildDemoUser() (*user.User, error) {
 	userID, err := user.ParseUserID(demoUserID)
 	if err != nil {
@@ -299,35 +256,12 @@ func buildDemoUser() (*user.User, error) {
 	return user.New(userID, username, password, profile), nil
 }
 
-// seedMemory registers this sample authorization server's demo client
-// and demo user into in-memory repositories. It runs once, at
-// startup; there is no admin API to register additional
-// clients/users (out of scope for this DDD layering sample -- see
-// README.md). This is the original (pre-SPEC-005) seed behavior,
-// preserved unchanged for the in-memory persistence path.
-func seedMemory(clientRepo *memory.ClientRepository, userRepo *memory.UserRepository) error {
-	demoClient, err := buildDemoClient()
-	if err != nil {
-		return fmt.Errorf("seed client: %w", err)
-	}
-	clientRepo.Seed(demoClient)
-
-	demoUser, err := buildDemoUser()
-	if err != nil {
-		return fmt.Errorf("seed user: %w", err)
-	}
-	userRepo.Seed(demoUser)
-
-	return nil
-}
-
-// seedPostgres idempotently upserts the same demo client/user data
-// seedMemory registers, via postgres.SeedClient/SeedUser
-// (docs/plans/SPEC-005-plan.md §1.2 "seed": a startup idempotent
-// upsert -- not a migration-embedded seed, so the demo user's
-// freshly-generated password is never committed to a SQL file, and
-// repeated process starts converge on the same demo row instead of
-// erroring on the second run).
+// seedPostgres idempotently upserts the demo client/user data via
+// postgres.SeedClient/SeedUser (docs/plans/SPEC-005-plan.md §1.2
+// "seed": a startup idempotent upsert -- not a migration-embedded
+// seed, so the demo user's freshly-generated password is never
+// committed to a SQL file, and repeated process starts converge on
+// the same demo row instead of erroring on the second run).
 func seedPostgres(ctx context.Context, db *sql.DB) error {
 	demoClient, err := buildDemoClient()
 	if err != nil {
