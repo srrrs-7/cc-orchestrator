@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/jwt"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/api/route"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
@@ -42,6 +43,11 @@ const (
 // @description  Task management sample API (Go, DDD-layered). This spec is generated from swag
 // @description  annotations on the route package and is the contract of record for app/web codegen.
 // @BasePath     /
+//
+// @securityDefinitions.apikey  BearerAuth
+// @in                          header
+// @name                        Authorization
+// @description                 RS256 JWT access token issued by the auth server. Format: "Bearer <token>".
 func main() {
 	if err := run(); err != nil {
 		slog.Error("api: fatal error", "error", err)
@@ -74,9 +80,27 @@ func run() error {
 
 	dupChk := task.NewDuplicateChecker(taskReader)
 	svc := service.NewTaskService(taskReader, taskWriter, dupChk)
-	handler := route.NewRouter(svc)
+	taskHandler := route.NewRouter(svc)
 
-	srv := newServer(":"+e.Port, handler)
+	// Wire Bearer JWT auth middleware when both AUTH_ISSUER and
+	// AUTH_JWKS_URL are set. When they are unset (e.g. local dev
+	// without an auth server) the middleware is skipped and all
+	// requests pass through unauthenticated.
+	var apiHandler = taskHandler
+	if e.authEnabled() {
+		slog.Info("api: JWT auth enabled", "issuer", e.AuthIssuer, "jwks_url", e.AuthJWKSURL)
+		verifier := jwt.NewVerifier(e.AuthJWKSURL, e.AuthIssuer)
+		apiHandler = route.AuthMiddleware(verifier, taskHandler)
+	} else {
+		slog.Warn("api: JWT auth disabled (AUTH_ISSUER and AUTH_JWKS_URL not set)")
+	}
+
+	// GET /health is mounted outside auth middleware for liveness probes.
+	rootMux := http.NewServeMux()
+	route.RegisterHealthRoute(rootMux)
+	rootMux.Handle("/", apiHandler)
+
+	srv := newServer(":"+e.Port, rootMux)
 
 	serveErr := make(chan error, 1)
 	go func() {

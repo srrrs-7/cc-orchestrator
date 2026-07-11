@@ -104,10 +104,12 @@ func parseQueryInt(r *http.Request, name string) (*int, error) {
 // @Summary      Create a task
 // @Description  Creates a new task with the given title and an optional priority. An omitted or empty priority defaults to medium.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        request  body      createTaskRequest  true  "Task to create"
 // @Success      201      {object}  taskResponse
 // @Failure      400      {object}  errorResponse  "invalid body, empty title, title too long, or invalid priority"
+// @Failure      401      {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      409      {object}  errorResponse  "a task with the same title already exists"
 // @Failure      500      {object}  errorResponse
 // @Router       /tasks [post]
@@ -132,11 +134,13 @@ func (h *taskHandler) create(w http.ResponseWriter, r *http.Request) {
 // @Summary      List tasks
 // @Description  Returns a page of tasks ordered by creation time (created_at, id ascending). limit defaults to 20 and is clamped to a maximum of 100; offset defaults to 0.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        limit   query     int  false  "Maximum number of tasks to return (default 20, max 100; values above 100 are clamped)"
 // @Param        offset  query     int  false  "Number of tasks to skip (default 0)"
 // @Success      200  {object}  taskListResponse
 // @Failure      400  {object}  errorResponse  "limit or offset is not an integer, limit is less than 1, or offset is negative"
+// @Failure      401  {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      500  {object}  errorResponse
 // @Router       /tasks [get]
 func (h *taskHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -165,9 +169,11 @@ func (h *taskHandler) list(w http.ResponseWriter, r *http.Request) {
 // @Summary      Get a task
 // @Description  Returns a single task by id.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        id   path      string  true  "Task ID"
 // @Success      200  {object}  taskResponse
+// @Failure      401  {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      404  {object}  errorResponse  "task does not exist"
 // @Failure      500  {object}  errorResponse
 // @Router       /tasks/{id} [get]
@@ -188,9 +194,11 @@ func (h *taskHandler) get(w http.ResponseWriter, r *http.Request) {
 // @Summary      Start a task
 // @Description  Transitions a task from todo to doing.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        id   path      string  true  "Task ID"
 // @Success      200  {object}  taskResponse
+// @Failure      401  {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      404  {object}  errorResponse  "task does not exist"
 // @Failure      409  {object}  errorResponse  "task is not in a state that can transition to doing"
 // @Failure      500  {object}  errorResponse
@@ -212,9 +220,11 @@ func (h *taskHandler) start(w http.ResponseWriter, r *http.Request) {
 // @Summary      Complete a task
 // @Description  Transitions a task from doing to done.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        id   path      string  true  "Task ID"
 // @Success      200  {object}  taskResponse
+// @Failure      401  {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      404  {object}  errorResponse  "task does not exist"
 // @Failure      409  {object}  errorResponse  "task is not in a state that can transition to done"
 // @Failure      500  {object}  errorResponse
@@ -236,11 +246,13 @@ func (h *taskHandler) complete(w http.ResponseWriter, r *http.Request) {
 // @Summary      Change a task's priority
 // @Description  Updates a task's priority (low, medium, or high) without altering its status.
 // @Tags         tasks
+// @Security     BearerAuth
 // @Produce      json
 // @Param        id       path      string                 true  "Task ID"
 // @Param        request  body      changePriorityRequest  true  "New priority"
 // @Success      200      {object}  taskResponse
 // @Failure      400      {object}  errorResponse  "invalid body or invalid priority"
+// @Failure      401      {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      404      {object}  errorResponse  "task does not exist"
 // @Failure      500      {object}  errorResponse
 // @Router       /tasks/{id}/priority [post]

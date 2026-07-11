@@ -4,6 +4,33 @@ import type { TaskDto } from "../features/tasks/api/schema";
 import { DEFAULT_LIMIT, MAX_LIMIT } from "../features/tasks/domain/pagination";
 import { TASK_PRIORITIES } from "../features/tasks/domain/task";
 
+// ---------------------------------------------------------------------------
+// OIDC mock handlers (development only — the real auth server is used in
+// production via the /auth/ nginx proxy). These allow the app to run without
+// the auth service container for UI development and Storybook-style work.
+// ---------------------------------------------------------------------------
+
+/** Minimal base64url-encoded JWT payload for the demo user. */
+function makeDemoIdToken(): string {
+  const header = btoa(JSON.stringify({ alg: "RS256", typ: "JWT" }))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+  const payload = btoa(
+    JSON.stringify({
+      sub: "demo-user",
+      name: "Demo User",
+      email: "demo@example.com",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      iat: Math.floor(Date.now() / 1000),
+    }),
+  )
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+  return `${header}.${payload}.fake-signature`;
+}
+
 // Request bodies are external data too (they arrive as JSON over the
 // wire, even in this in-memory mock), so they go through zod just
 // like the real API client does.
@@ -126,6 +153,35 @@ let tasks: TaskDto[] = [
 ];
 
 let nextId = tasks.length + 1;
+
+export const oidcHandlers = [
+  http.get("/auth/.well-known/openid-configuration", () => {
+    return HttpResponse.json({
+      issuer: "http://localhost:8080/auth",
+      authorization_endpoint: "http://localhost:8080/auth/authorize",
+      token_endpoint: "http://localhost:8080/auth/token",
+      userinfo_endpoint: "http://localhost:8080/auth/userinfo",
+      jwks_uri: "http://localhost:8080/auth/.well-known/jwks.json",
+    });
+  }),
+
+  http.post("/auth/token", () => {
+    return HttpResponse.json({
+      access_token: "mock-access-token",
+      id_token: makeDemoIdToken(),
+      token_type: "Bearer",
+      expires_in: 3600,
+    });
+  }),
+
+  http.get("/auth/userinfo", () => {
+    return HttpResponse.json({
+      sub: "demo-user",
+      name: "Demo User",
+      email: "demo@example.com",
+    });
+  }),
+];
 
 export const handlers = [
   http.get("/api/tasks", ({ request }) => {

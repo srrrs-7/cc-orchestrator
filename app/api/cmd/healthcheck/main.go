@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	defaultURL = "http://localhost:8080/tasks"
+	defaultURL = "http://localhost:8080/health"
 	timeout    = 3 * time.Second
 )
 

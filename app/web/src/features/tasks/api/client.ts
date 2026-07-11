@@ -1,5 +1,6 @@
 import { ZodError } from "zod";
 import type { z } from "zod";
+import { clearAllAuthStorage, getCurrentAccessToken } from "../../auth/domain/session";
 import { ApiError } from "../../../shared/api/errors";
 import type { Task } from "../domain/task";
 import {
@@ -36,6 +37,15 @@ function resolveBaseUrl(): string {
 
 client.setConfig({ baseUrl: resolveBaseUrl() });
 
+// Inject the Bearer token on every outgoing request when a valid session exists.
+client.interceptors.request.use((request: Request) => {
+  const token = getCurrentAccessToken();
+  if (token === null) return request;
+  const headers = new Headers(request.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return new Request(request, { headers });
+});
+
 function hasErrorMessage(value: object): value is { error: unknown } {
   return "error" in value;
 }
@@ -58,6 +68,12 @@ function messageFrom(error: unknown): string | undefined {
  * below for the equivalent boundary around successful-response parsing).
  */
 client.interceptors.error.use((error, response) => {
+  // On 401, the session is no longer valid. Clear auth storage and send the
+  // user to the login page so they can re-authenticate.
+  if (response?.status === 401) {
+    clearAllAuthStorage();
+    window.location.href = "/login";
+  }
   return new ApiError(messageFrom(error) ?? `Request failed with status ${response?.status ?? 0}`, {
     status: response?.status ?? 0,
     cause: error,

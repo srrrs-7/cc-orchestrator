@@ -97,6 +97,8 @@ services:
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
+      AUTH_ISSUER: http://localhost:8080/auth
+      AUTH_JWKS_URL: http://auth:8080/.well-known/jwks.json
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
@@ -111,7 +113,7 @@ services:
     ports:
       - "127.0.0.1:8082:8080"
     environment:
-      ISSUER: http://localhost:8082
+      ISSUER: http://localhost:8080/auth
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: auth
@@ -136,6 +138,8 @@ services:
     restart: unless-stopped
     depends_on:
       api:
+        condition: service_healthy
+      auth:
         condition: service_healthy
 
 volumes:

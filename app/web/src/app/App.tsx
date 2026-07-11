@@ -1,8 +1,13 @@
 import { Link, Outlet } from "@tanstack/react-router";
+import { LoginButton } from "../features/auth/components/LoginButton";
+import { UserMenu } from "../features/auth/components/UserMenu";
+import { useAuth } from "../features/auth/hooks/AuthProvider";
 import { DEFAULT_LIMIT } from "../features/tasks/domain/pagination";
 
 /** Shared layout: header + content outlet. Used as the root route's component. */
 export function App() {
+  const { isAuthenticated } = useAuth();
+
   return (
     <div className="min-h-screen bg-surface-muted text-gray-900">
       <header className="sticky top-0 z-10 border-b border-border-subtle bg-surface/95 shadow-sm backdrop-blur-sm">
@@ -17,6 +22,7 @@ export function App() {
               Organize and track your work
             </span>
           </Link>
+          <div className="shrink-0">{isAuthenticated ? <UserMenu /> : <LoginButton />}</div>
         </div>
       </header>
       <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6">

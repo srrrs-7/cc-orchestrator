@@ -3,9 +3,21 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
+  useNavigate,
   useParams,
+  useSearch,
 } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
 import { z } from "zod";
+import { useAuth } from "../features/auth/hooks/AuthProvider";
+import { LoginButton } from "../features/auth/components/LoginButton";
+import {
+  isAuthenticated,
+  setReturnTo,
+  clearReturnTo,
+  getReturnTo,
+} from "../features/auth/domain/session";
 import { Alert } from "../shared/ui/Alert";
 import { CreateTaskForm } from "../features/tasks/components/CreateTaskForm";
 import { TaskDetailSkeleton } from "../features/tasks/components/TaskDetailSkeleton";
@@ -17,6 +29,10 @@ import { DEFAULT_LIMIT, MAX_LIMIT } from "../features/tasks/domain/pagination";
 import { TASK_STATUSES } from "../features/tasks/domain/task";
 import { useTaskQuery } from "../features/tasks/hooks/useTasks";
 import { App } from "./App";
+
+// ---------------------------------------------------------------------------
+// Task list / detail schemas (unchanged)
+// ---------------------------------------------------------------------------
 
 // The `status`/`limit`/`offset` search params on `/` are external data
 // (come from the URL), so they are validated with zod before being
@@ -46,9 +62,17 @@ const taskDetailParamsSchema = z.object({
   taskId: z.string().min(1),
 });
 
+// ---------------------------------------------------------------------------
+// Root route
+// ---------------------------------------------------------------------------
+
 const rootRoute = createRootRoute({
   component: App,
 });
+
+// ---------------------------------------------------------------------------
+// Page components
+// ---------------------------------------------------------------------------
 
 function TaskListPage() {
   return (
@@ -106,11 +130,111 @@ function TaskDetailPage() {
   );
 }
 
+/**
+ * Standalone login page shown when an unauthenticated user tries to access
+ * a protected route. Wraps `LoginButton` in a centered card.
+ */
+function LoginPage() {
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-6 px-4 text-center">
+      <div className="flex flex-col gap-2">
+        <h1 className="text-2xl font-semibold text-gray-900">Sign in to Task Manager</h1>
+        <p className="text-sm text-gray-500">You need to sign in to view and manage your tasks.</p>
+      </div>
+      <LoginButton />
+    </div>
+  );
+}
+
+// Search params accepted on the /callback route.
+const callbackSearchSchema = z.object({
+  // Present on successful OIDC redirects.
+  code: z.string().optional().catch(undefined),
+  state: z.string().optional().catch(undefined),
+  // Present when the auth server reports an error.
+  error: z.string().optional().catch(undefined),
+  error_description: z.string().optional().catch(undefined),
+});
+
+type CallbackSearch = z.infer<typeof callbackSearchSchema>;
+
+/**
+ * OAuth callback page. Exchanges the authorization code for tokens and
+ * redirects to the stored return-to path (or "/" as fallback).
+ *
+ * StrictMode runs effects twice in development. The second invocation sees
+ * that a valid session already exists (set by the first) and bails out
+ * immediately to avoid a double code exchange.
+ */
+function CallbackPage() {
+  const search = useSearch({ from: "/callback" });
+  const { handleCallback } = useAuth();
+  const navigate = useNavigate();
+  const [callbackError, setCallbackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Already authenticated (e.g., StrictMode second run after first succeeded).
+    if (isAuthenticated()) {
+      void navigate({ to: "/", search: { status: "all", limit: DEFAULT_LIMIT, offset: 0 } });
+      return;
+    }
+
+    if (search.error) {
+      setCallbackError(search.error_description ?? search.error ?? "Authorization failed");
+      return;
+    }
+
+    const code = search.code;
+    const state = search.state;
+
+    if (!code || !state) {
+      setCallbackError("Missing code or state in callback URL");
+      return;
+    }
+
+    handleCallback(code, state)
+      .then(() => {
+        const returnTo = getReturnTo();
+        clearReturnTo();
+        // Use replace so the /callback URL doesn't remain in the browser history.
+        window.location.replace(returnTo);
+      })
+      .catch((err: unknown) => {
+        setCallbackError(err instanceof Error ? err.message : "Authentication failed");
+      });
+  }, [search.code, search.state, search.error, search.error_description, handleCallback, navigate]);
+
+  if (callbackError) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-4 text-center">
+        <Alert>Sign-in failed: {callbackError}</Alert>
+        <LoginButton />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <p className="text-sm text-gray-500">Completing sign in…</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Route definitions
+// ---------------------------------------------------------------------------
+
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   validateSearch: (search: Record<string, unknown>): TaskListSearch =>
     taskListSearchSchema.parse(search),
+  beforeLoad: ({ location }) => {
+    if (!isAuthenticated()) {
+      setReturnTo(location.href);
+      throw redirect({ to: "/login" });
+    }
+  },
   component: TaskListPage,
 });
 
@@ -120,10 +244,35 @@ const taskDetailRoute = createRoute({
   params: {
     parse: (rawParams) => taskDetailParamsSchema.parse(rawParams),
   },
+  beforeLoad: ({ location }) => {
+    if (!isAuthenticated()) {
+      setReturnTo(location.href);
+      throw redirect({ to: "/login" });
+    }
+  },
   component: TaskDetailPage,
 });
 
-const routeTree = rootRoute.addChildren([indexRoute, taskDetailRoute]);
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  beforeLoad: () => {
+    if (isAuthenticated()) {
+      throw redirect({ to: "/", search: { status: "all", limit: DEFAULT_LIMIT, offset: 0 } });
+    }
+  },
+  component: LoginPage,
+});
+
+const callbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/callback",
+  validateSearch: (search: Record<string, unknown>): CallbackSearch =>
+    callbackSearchSchema.parse(search),
+  component: CallbackPage,
+});
+
+const routeTree = rootRoute.addChildren([indexRoute, taskDetailRoute, loginRoute, callbackRoute]);
 
 export const router = createRouter({ routeTree });
 

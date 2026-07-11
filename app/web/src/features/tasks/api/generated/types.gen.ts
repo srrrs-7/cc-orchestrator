@@ -59,6 +59,10 @@ export type GetTasksErrors = {
    */
   400: RouteErrorResponse;
   /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
+  /**
    * Internal Server Error
    */
   500: RouteErrorResponse;
@@ -90,6 +94,10 @@ export type PostTasksErrors = {
    * invalid body, empty title, title too long, or invalid priority
    */
   400: RouteErrorResponse;
+  /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
   /**
    * a task with the same title already exists
    */
@@ -125,6 +133,10 @@ export type GetTasksByIdData = {
 
 export type GetTasksByIdErrors = {
   /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
+  /**
    * task does not exist
    */
   404: RouteErrorResponse;
@@ -158,6 +170,10 @@ export type PostTasksByIdCompleteData = {
 };
 
 export type PostTasksByIdCompleteErrors = {
+  /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
   /**
    * task does not exist
    */
@@ -204,6 +220,10 @@ export type PostTasksByIdPriorityErrors = {
    */
   400: RouteErrorResponse;
   /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
+  /**
    * task does not exist
    */
   404: RouteErrorResponse;
@@ -237,6 +257,10 @@ export type PostTasksByIdStartData = {
 };
 
 export type PostTasksByIdStartErrors = {
+  /**
+   * missing or invalid Authorization header
+   */
+  401: RouteErrorResponse;
   /**
    * task does not exist
    */

@@ -20,6 +20,7 @@ var envVars = []string{
 	"PORT",
 	"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE",
 	"DB_READER_HOST", "DB_READER_PORT", "DB_READER_NAME", "DB_READER_USER", "DB_READER_PASSWORD", "DB_READER_SSLMODE",
+	"AUTH_ISSUER", "AUTH_JWKS_URL",
 }
 
 // readerFallbackVars lists just the DB_READER_* variables SPEC-010
@@ -377,6 +378,119 @@ func TestNewEnv_ReaderFallback_PerField(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// --- Auth env vars -------------------------------------------------------
+
+// TestNewEnv_ReadsAuthVars confirms that AUTH_ISSUER and AUTH_JWKS_URL
+// are threaded through to the corresponding Env fields unchanged.
+func TestNewEnv_ReadsAuthVars(t *testing.T) {
+	t.Setenv("AUTH_ISSUER", "https://auth.example.com")
+	t.Setenv("AUTH_JWKS_URL", "https://auth.example.com/.well-known/jwks.json")
+
+	e := NewEnv()
+
+	if e.AuthIssuer != "https://auth.example.com" {
+		t.Errorf("Env.AuthIssuer = %q, want %q", e.AuthIssuer, "https://auth.example.com")
+	}
+	if e.AuthJWKSURL != "https://auth.example.com/.well-known/jwks.json" {
+		t.Errorf("Env.AuthJWKSURL = %q, want %q", e.AuthJWKSURL, "https://auth.example.com/.well-known/jwks.json")
+	}
+}
+
+// TestNewEnv_AuthVars_DefaultToEmpty confirms that AUTH_ISSUER and
+// AUTH_JWKS_URL default to empty when unset (auth middleware disabled).
+func TestNewEnv_AuthVars_DefaultToEmpty(t *testing.T) {
+	t.Setenv("AUTH_ISSUER", "")
+	t.Setenv("AUTH_JWKS_URL", "")
+
+	e := NewEnv()
+
+	if e.AuthIssuer != "" {
+		t.Errorf("Env.AuthIssuer = %q, want empty", e.AuthIssuer)
+	}
+	if e.AuthJWKSURL != "" {
+		t.Errorf("Env.AuthJWKSURL = %q, want empty", e.AuthJWKSURL)
+	}
+}
+
+// TestAuthEnabled confirms (Env).authEnabled only returns true when
+// both AUTH_ISSUER and AUTH_JWKS_URL are set.
+func TestAuthEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		issuer  string
+		jwksURL string
+		want    bool
+	}{
+		{name: "both set", issuer: "https://auth.example.com", jwksURL: "https://auth.example.com/jwks", want: true},
+		{name: "neither set", issuer: "", jwksURL: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := Env{
+				DBHost: "db", DBName: "db", DBUser: "u", DBPassword: "p",
+				AuthIssuer: tt.issuer, AuthJWKSURL: tt.jwksURL,
+			}
+			e.DBReader.Host = e.DBHost
+			e.DBReader.Name = e.DBName
+			e.DBReader.User = e.DBUser
+			e.DBReader.Password = e.DBPassword
+
+			if got := e.authEnabled(); got != tt.want {
+				t.Errorf("authEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidate_PartialAuthConfig confirms that setting only one of
+// AUTH_ISSUER / AUTH_JWKS_URL is rejected by validate().
+func TestValidate_PartialAuthConfig(t *testing.T) {
+	base := Env{DBHost: "db", DBName: "db", DBUser: "u", DBPassword: "p"}
+	base.DBReader.Host = base.DBHost
+	base.DBReader.Name = base.DBName
+	base.DBReader.User = base.DBUser
+	base.DBReader.Password = base.DBPassword
+
+	tests := []struct {
+		name    string
+		issuer  string
+		jwksURL string
+	}{
+		{name: "issuer only", issuer: "https://auth.example.com", jwksURL: ""},
+		{name: "jwks_url only", issuer: "", jwksURL: "https://auth.example.com/jwks"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := base
+			e.AuthIssuer = tt.issuer
+			e.AuthJWKSURL = tt.jwksURL
+			if err := e.validate(); err == nil {
+				t.Fatal("validate() = nil, want error for partial auth config")
+			}
+		})
+	}
+}
+
+// TestValidate_FullAuthConfig_Passes confirms that a fully-configured
+// auth env (both AUTH_ISSUER and AUTH_JWKS_URL set) passes validate().
+func TestValidate_FullAuthConfig_Passes(t *testing.T) {
+	e := Env{
+		DBHost:      "db",
+		DBName:      "db",
+		DBUser:      "u",
+		DBPassword:  "p",
+		AuthIssuer:  "https://auth.example.com",
+		AuthJWKSURL: "https://auth.example.com/jwks",
+	}
+	e.DBReader.Host = e.DBHost
+	e.DBReader.Name = e.DBName
+	e.DBReader.User = e.DBUser
+	e.DBReader.Password = e.DBPassword
+	if err := e.validate(); err != nil {
+		t.Fatalf("validate() unexpected error: %v", err)
 	}
 }
 

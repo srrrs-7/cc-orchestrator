@@ -41,6 +41,16 @@ type Env struct {
 	DBPassword string
 	DBSSLMode  string
 
+	// AuthIssuer and AuthJWKSURL configure Bearer JWT authentication.
+	// When both are set, the API validates incoming JWTs against the
+	// auth server's JWKS. When either is unset, auth middleware is
+	// disabled (useful for local development without an auth server).
+	// In production both must be set:
+	//   AUTH_ISSUER   — expected iss/aud value in access tokens
+	//   AUTH_JWKS_URL — URL of the auth server's JWKS endpoint
+	AuthIssuer  string
+	AuthJWKSURL string
+
 	// DBReader holds the reader-pool connection settings SPEC-010
 	// adds (docs/plans/SPEC-010-plan.md). Each field already carries
 	// its *effective* value by the time NewEnv returns: NewEnv falls
@@ -71,13 +81,15 @@ type DBReaderEnv struct {
 // Env.validate to check the result.
 func NewEnv() Env {
 	e := Env{
-		Port:       orDefault(os.Getenv("PORT"), defaultPort),
-		DBHost:     os.Getenv("DB_HOST"),
-		DBPort:     orDefault(os.Getenv("DB_PORT"), defaultDBPort),
-		DBName:     os.Getenv("DB_NAME"),
-		DBUser:     os.Getenv("DB_USER"),
-		DBPassword: os.Getenv("DB_PASSWORD"),
-		DBSSLMode:  orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
+		Port:        orDefault(os.Getenv("PORT"), defaultPort),
+		DBHost:      os.Getenv("DB_HOST"),
+		DBPort:      orDefault(os.Getenv("DB_PORT"), defaultDBPort),
+		DBName:      os.Getenv("DB_NAME"),
+		DBUser:      os.Getenv("DB_USER"),
+		DBPassword:  os.Getenv("DB_PASSWORD"),
+		DBSSLMode:   orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
+		AuthIssuer:  os.Getenv("AUTH_ISSUER"),
+		AuthJWKSURL: os.Getenv("AUTH_JWKS_URL"),
 	}
 
 	// SPEC-010 R3/R4: each DB_READER_* item falls back individually to
@@ -130,6 +142,8 @@ func (e Env) readerConfig() postgres.Config {
 // validate checks that the required DB_* variables are present for
 // both the writer and reader configs (SPEC-011: Postgres is the only
 // persistence backend; fail-closed is enforced by Config.Validate).
+// It also enforces that AUTH_ISSUER and AUTH_JWKS_URL are either both
+// set or both unset (partial auth config is a misconfiguration).
 // The writer and reader configs are validated independently so that a
 // partial DB_READER_* override (e.g. DB_READER_USER set to an empty
 // string via a future non-Getenv-backed Env literal) is still caught.
@@ -142,7 +156,17 @@ func (e Env) validate() error {
 	if err := e.readerConfig().Validate(); err != nil {
 		return fmt.Errorf("api: validate env: %w", err)
 	}
+	if (e.AuthIssuer == "") != (e.AuthJWKSURL == "") {
+		return fmt.Errorf("api: validate env: AUTH_ISSUER and AUTH_JWKS_URL must both be set or both be unset")
+	}
 	return nil
+}
+
+// authEnabled reports whether JWT auth middleware should be activated.
+// Both AUTH_ISSUER and AUTH_JWKS_URL must be non-empty (validate
+// guarantees they are set together or not at all).
+func (e Env) authEnabled() bool {
+	return e.AuthIssuer != "" && e.AuthJWKSURL != ""
 }
 
 // orDefault returns v, or def when v is empty.

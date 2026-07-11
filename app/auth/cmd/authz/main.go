@@ -51,12 +51,13 @@ const (
 	// 2.1/2.2). They are documented in README.md. The RSA signing key
 	// and the demo user's password *are* secrets and are generated
 	// fresh at process startup instead (see run() / buildDemoUser()).
-	demoClientID    = "demo-client"
-	demoRedirectURI = "http://localhost:3000/callback"
-	demoUsername    = "demo-user"
-	demoUserID      = "demo-user-id"
-	demoUserName    = "Demo User"
-	demoUserEmail   = "demo-user@example.com"
+	demoClientID           = "demo-client"
+	demoRedirectURI        = "http://localhost:3000/callback"
+	demoRedirectURICompose = "http://localhost:8080/callback"
+	demoUsername           = "demo-user"
+	demoUserID             = "demo-user-id"
+	demoUserName           = "Demo User"
+	demoUserEmail          = "demo-user@example.com"
 )
 
 func main() {
@@ -220,9 +221,13 @@ func buildDemoClient() (*client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build demo client: %w", err)
 	}
+	redirectURICompose, err := client.NewRedirectURI(demoRedirectURICompose)
+	if err != nil {
+		return nil, fmt.Errorf("build demo client: %w", err)
+	}
 	return client.New(
 		clientID,
-		[]client.RedirectURI{redirectURI},
+		[]client.RedirectURI{redirectURI, redirectURICompose},
 		[]string{"openid", "profile", "email"},
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},

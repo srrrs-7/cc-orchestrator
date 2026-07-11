@@ -85,7 +85,7 @@ api はこの制約を受けないため複数タスク可。
 
 ### ヘルスチェックパスはサービスごとに呼び出し側が変数で渡す
 
-- api: `GET /tasks`(`app/api` に専用ヘルスチェックエンドポイントがまだ無いため。ISSUE-001 参照)
+- api: `GET /health`(認証不要の liveness プローブ。task API は SPEC-015 以降 Bearer JWT 必須)
 - auth: `GET /.well-known/openid-configuration`(discovery エンドポイント。`app/auth` はルート
   直下に実装しているため、CloudFront の strip 後に ALB → ターゲットへ直接届くこのパスで判定できる。
   ALB のヘルスチェックは CloudFront/リスナールールを経由せず ALB→ターゲットへ直接行われるため、
