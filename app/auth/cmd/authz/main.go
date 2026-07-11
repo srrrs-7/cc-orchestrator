@@ -21,6 +21,7 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/consent"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
@@ -102,7 +103,7 @@ func run() error {
 	// writer/reader pool pair via postgres.OpenPair and wires each
 	// repository to the pool the "auth の correctness-critical read の
 	// 配置" table (docs/plans/SPEC-010-plan.md) assigns it.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -120,9 +121,10 @@ func run() error {
 	// Wiring: infra -> application service -> presentation.
 	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer)
 	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
+	consentSvc := service.NewConsentService(consentRepo)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
 	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
-	handler := route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{
+	handler := route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{
 		Issuer:        e.Issuer,
 		SecureCookies: route.SecureCookiesFromIssuer(e.Issuer),
 	})
@@ -188,17 +190,17 @@ func run() error {
 // It returns the four repositories as their domain-declared interfaces
 // plus a closePersistence func the caller MUST defer-call during
 // shutdown to release pooled connections.
-func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, string, error) {
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, func() error, string, error) {
 	noopClose := func() error { return nil }
 
 	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
 	if err != nil {
-		return nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
+		return nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
 	}
 	seededPassword, err := seedPostgres(ctx, writerDB, demoPassword)
 	if err != nil {
 		_ = closeFn()
-		return nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
+		return nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
 	}
 	// Reader pool: seeded, read-only-at-runtime aggregates.
 	clientRepo := postgres.NewClientRepository(readerDB)
@@ -207,8 +209,9 @@ func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config,
 	// reads and writes (see func doc comment).
 	authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
+	consentRepo := postgres.NewConsentRepository(writerDB)
 	slog.Info("authz: persistence configured", "mode", "postgres")
-	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, closeFn, seededPassword, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo

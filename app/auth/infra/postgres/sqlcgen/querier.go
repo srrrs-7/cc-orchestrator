@@ -96,6 +96,8 @@ type Querier interface {
 	// when absent; infra/postgres/user_repository.go maps that to
 	// user.ErrNotFound.
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	// ISSUE-032: sqlc input for consents (schema/migrations/000004_create_consents.sql).
+	HasConsent(ctx context.Context, arg HasConsentParams) (bool, error)
 	// SPEC-005 R2/R4: sqlc input for the authorization_codes table
 	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
@@ -129,6 +131,7 @@ type Querier interface {
 	// already exists, so repeated process starts converge on the same
 	// seed data rather than erroring on the second run.
 	UpsertClient(ctx context.Context, arg UpsertClientParams) error
+	UpsertConsent(ctx context.Context, arg UpsertConsentParams) error
 	// Backs the startup idempotent seed (infra/postgres/seed.go's
 	// SeedUser), not user.Repository itself (which is read-only). Inserts
 	// a new row, or overwrites every column in place when id already

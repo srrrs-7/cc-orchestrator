@@ -35,5 +35,6 @@ type Store interface {
 	DeleteSession(ctx context.Context, id string) error
 
 	SavePendingAuthorize(ctx context.Context, rawQuery string, ttl time.Duration) (PendingAuthorize, error)
+	FindPendingAuthorize(ctx context.Context, id string) (PendingAuthorize, error)
 	ConsumePendingAuthorize(ctx context.Context, id string) (PendingAuthorize, error)
 }

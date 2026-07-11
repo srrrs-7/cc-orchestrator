@@ -78,6 +78,15 @@ func (s *AuthenticationService) SavePendingAuthorize(ctx context.Context, rawQue
 	return p.ID, nil
 }
 
+// PeekPendingAuthorize returns a pending authorize query without deleting it.
+func (s *AuthenticationService) PeekPendingAuthorize(ctx context.Context, id string) (string, error) {
+	p, err := s.sessions.FindPendingAuthorize(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return p.RawQuery, nil
+}
+
 // ConsumePendingAuthorize loads and deletes a pending authorize record.
 func (s *AuthenticationService) ConsumePendingAuthorize(ctx context.Context, id string) (string, error) {
 	p, err := s.sessions.ConsumePendingAuthorize(ctx, id)

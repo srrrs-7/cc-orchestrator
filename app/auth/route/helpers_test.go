@@ -114,11 +114,12 @@ func newDiscoveryTestHandler(t *testing.T) http.Handler {
 
 	sessionStore := memory.NewIdPSessionStore()
 	authnSvc := service.NewAuthenticationService(nil, sessionStore)
+	consentSvc := service.NewConsentService(nil)
 	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer)
 	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 	_ = username
-	return route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // newTokenErrorTestHandler builds a router for /token error-injection
@@ -166,6 +167,7 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	// starting with token tables is the safest conventional order.
 	testsupport.TruncateTable(t, db, "refresh_tokens")
 	testsupport.TruncateTable(t, db, "authorization_codes")
+	testsupport.TruncateTable(t, db, "consents")
 	testsupport.TruncateTable(t, db, "users")
 	testsupport.TruncateTable(t, db, "clients")
 
@@ -237,14 +239,16 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	userRepo := postgres.NewUserRepository(db)
 	authCodeRepo := postgres.NewAuthCodeRepository(db)
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(db)
+	consentRepo := postgres.NewConsentRepository(db)
 	sessionStore := memory.NewIdPSessionStore()
 
 	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer)
 	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
+	consentSvc := service.NewConsentService(consentRepo)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
-	return route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +277,42 @@ func doUserInfo(t *testing.T, h http.Handler, bearer string) *httptest.ResponseR
 
 func doAuthorize(t *testing.T, h http.Handler, query url.Values) *httptest.ResponseRecorder {
 	t.Helper()
-	return doAuthorizeWithSession(t, h, query, loginSession(t, h))
+	session := loginSession(t, h)
+	return completeAuthorizeWithSession(t, h, query, session)
+}
+
+func completeAuthorizeWithSession(t *testing.T, h http.Handler, query url.Values, session *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := doAuthorizeWithSession(t, h, query, session)
+	if rec.Code == http.StatusFound && strings.HasSuffix(rec.Header().Get("Location"), "/consent") {
+		acceptConsent(t, h, session, rec)
+		rec = doAuthorizeWithSession(t, h, query, session)
+	}
+	return rec
+}
+
+func acceptConsent(t *testing.T, h http.Handler, session *http.Cookie, authorizeRec *httptest.ResponseRecorder) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/consent", strings.NewReader("action=accept"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(session)
+	if pending := cookieFromResponse(authorizeRec, "idp_pending"); pending != nil {
+		req.AddCookie(pending)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("consent accept status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+}
+
+func cookieFromResponse(rec *httptest.ResponseRecorder, name string) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }
 
 func doAuthorizeWithSession(t *testing.T, h http.Handler, query url.Values, session *http.Cookie) *httptest.ResponseRecorder {

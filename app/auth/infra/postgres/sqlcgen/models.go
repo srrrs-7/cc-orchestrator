@@ -32,6 +32,13 @@ type Client struct {
 	GrantTypes    json.RawMessage
 }
 
+type Consent struct {
+	UserID    string
+	ClientID  string
+	Scope     string
+	GrantedAt time.Time
+}
+
 type RefreshToken struct {
 	TokenHash string
 	FamilyID  string

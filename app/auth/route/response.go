@@ -112,6 +112,8 @@ func authorizeErrorCode(err error) (code, description string) {
 		return "invalid_request", "code_challenge_method must be S256"
 	case errors.Is(err, authcode.ErrInvalidCodeVerifier):
 		return "invalid_request", "code_challenge is missing or malformed"
+	case errors.Is(err, service.ErrAccessDenied):
+		return "access_denied", "resource owner denied the request"
 	default:
 		return "", ""
 	}

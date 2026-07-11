@@ -93,6 +93,20 @@ func (s *IdPSessionStore) SavePendingAuthorize(ctx context.Context, rawQuery str
 	return p, nil
 }
 
+func (s *IdPSessionStore) FindPendingAuthorize(ctx context.Context, id string) (idpsession.PendingAuthorize, error) {
+	if err := ctx.Err(); err != nil {
+		return idpsession.PendingAuthorize{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.pending[id]
+	if !ok || time.Now().After(p.ExpiresAt) {
+		delete(s.pending, id)
+		return idpsession.PendingAuthorize{}, fmt.Errorf("memory idp pending: %w", idpsession.ErrNotFound)
+	}
+	return p, nil
+}
+
 func (s *IdPSessionStore) ConsumePendingAuthorize(ctx context.Context, id string) (idpsession.PendingAuthorize, error) {
 	if err := ctx.Err(); err != nil {
 		return idpsession.PendingAuthorize{}, err

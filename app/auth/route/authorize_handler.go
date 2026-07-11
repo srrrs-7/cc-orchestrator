@@ -15,6 +15,7 @@ import (
 type authorizeHandler struct {
 	svc           *service.AuthorizationService
 	authn         *service.AuthenticationService
+	consent       *service.ConsentService
 	issuer        string
 	secureCookies bool
 }
@@ -62,6 +63,24 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Error("route: authorize: session lookup", "error", err)
 		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
+		return
+	}
+
+	hasConsent, err := h.consent.HasGrant(r.Context(), owner.ID(), req.ClientID, req.Scope)
+	if err != nil {
+		slog.Error("route: authorize: consent lookup", "error", err)
+		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
+		return
+	}
+	if !hasConsent {
+		pendingID, saveErr := h.authn.SavePendingAuthorize(r.Context(), r.URL.RawQuery)
+		if saveErr != nil {
+			slog.Error("route: authorize: save pending consent", "error", saveErr)
+			writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
+			return
+		}
+		setPendingCookie(w, pendingID, h.secureCookies)
+		http.Redirect(w, r, issuerPath(h.issuer, "/consent"), http.StatusFound)
 		return
 	}
 

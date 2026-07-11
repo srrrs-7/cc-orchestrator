@@ -25,12 +25,14 @@ type RouterConfig struct {
 func NewRouter(
 	authSvc *service.AuthorizationService,
 	authnSvc *service.AuthenticationService,
+	consentSvc *service.ConsentService,
 	userInfoSvc *service.UserInfoService,
 	discoverySvc *service.DiscoveryService,
 	cfg RouterConfig,
 ) http.Handler {
-	authorize := &authorizeHandler{svc: authSvc, authn: authnSvc, issuer: cfg.Issuer, secureCookies: cfg.SecureCookies}
+	authorize := &authorizeHandler{svc: authSvc, authn: authnSvc, consent: consentSvc, issuer: cfg.Issuer, secureCookies: cfg.SecureCookies}
 	login := newLoginHandler(authnSvc, cfg.Issuer, cfg.SecureCookies)
+	consent := newConsentHandler(authSvc, authnSvc, consentSvc, cfg.Issuer, cfg.SecureCookies)
 	tok := &tokenHandler{svc: authSvc}
 	userInfo := &userInfoHandler{svc: userInfoSvc}
 	discovery := &discoveryHandler{svc: discoverySvc}
@@ -39,6 +41,8 @@ func NewRouter(
 	mux.HandleFunc("GET /authorize", authorize.handle)
 	mux.HandleFunc("GET /login", login.handleGet)
 	mux.HandleFunc("POST /login", login.handlePost)
+	mux.HandleFunc("GET /consent", consent.handleGet)
+	mux.HandleFunc("POST /consent", consent.handlePost)
 	mux.HandleFunc("POST /token", tok.handle)
 	mux.HandleFunc("GET /userinfo", userInfo.handle)
 	mux.HandleFunc("GET /.well-known/openid-configuration", discovery.metadata)
