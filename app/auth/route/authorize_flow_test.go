@@ -9,6 +9,28 @@ import (
 	"testing"
 )
 
+// TestAuthorize_Unauthenticated_RedirectsToLogin ensures /authorize
+// sends unauthenticated users to the IdP login page (ISSUE-031).
+func TestAuthorize_Unauthenticated_RedirectsToLogin(t *testing.T) {
+	h := newTestHandler(t)
+	verifier := strings.Repeat("A", 43)
+
+	rec := doAuthorizeWithSession(t, h, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {testClientID},
+		"redirect_uri":          {testRedirectURI},
+		"scope":                 {"openid"},
+		"code_challenge":        {pkceChallenge(verifier)},
+		"code_challenge_method": {"S256"},
+	}, nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	if got := rec.Header().Get("Location"); got != testIssuer+"/login" {
+		t.Errorf("Location = %q, want %q", got, testIssuer+"/login")
+	}
+}
+
 // TestAuthorizeTokenUserInfoFlow_Success drives authorize -> token ->
 // userinfo end-to-end. It covers traceability #1 (authorization
 // request), #2 (opaque single-use code), #3 (PKCE S256 success), #4

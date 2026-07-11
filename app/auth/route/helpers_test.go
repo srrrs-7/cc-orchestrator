@@ -41,6 +41,7 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres/testsupport"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/route"
@@ -48,13 +49,14 @@ import (
 )
 
 const (
-	testIssuer      = "https://issuer.example"
-	testClientID    = "test-client"
-	testRedirectURI = "http://localhost:3000/callback"
-	testUsername    = "test-user"
-	testUserID      = "user-sub-1"
-	testUserName    = "Test User"
-	testUserEmail   = "test-user@example.com"
+	testIssuer       = "https://issuer.example"
+	testClientID     = "test-client"
+	testRedirectURI  = "http://localhost:3000/callback"
+	testUsername     = "test-user"
+	testUserID       = "user-sub-1"
+	testUserName     = "Test User"
+	testUserEmail    = "test-user@example.com"
+	testDemoPassword = "test-password-123"
 )
 
 // testClientID2 is a second registered client, distinct from
@@ -110,14 +112,13 @@ func newDiscoveryTestHandler(t *testing.T) http.Handler {
 		t.Fatalf("setup NewUsername() unexpected error: %v", err)
 	}
 
-	// nil repos: discovery endpoints never call authSvc or userInfoSvc
-	// methods that access the repositories. If a test accidentally
-	// calls a non-discovery endpoint, the nil dereference will
-	// immediately surface the mistake.
-	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer, username)
+	sessionStore := memory.NewIdPSessionStore()
+	authnSvc := service.NewAuthenticationService(nil, sessionStore)
+	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer)
 	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
-	return route.NewRouter(authSvc, userInfoSvc, discoverySvc)
+	_ = username
+	return route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // newTokenErrorTestHandler builds a router for /token error-injection
@@ -218,7 +219,7 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	if err != nil {
 		t.Fatalf("setup NewProfile() unexpected error: %v", err)
 	}
-	demoUser, err := user.New(uid, username, "irrelevant-demo-password", profile)
+	demoUser, err := user.New(uid, username, testDemoPassword, profile)
 	if err != nil {
 		t.Fatalf("setup user.New() unexpected error: %v", err)
 	}
@@ -232,18 +233,18 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	verifier := jwt.NewVerifier(&testRSAKey.PublicKey)
 	keyProvider := jwt.NewKeyProvider(&testRSAKey.PublicKey, kid)
 
-	// SPEC-010 wiring: client/user → reader, authcode/refreshtoken →
-	// writer. In test runs, reader == writer == db (single pool).
 	clientRepo := postgres.NewClientRepository(db)
 	userRepo := postgres.NewUserRepository(db)
 	authCodeRepo := postgres.NewAuthCodeRepository(db)
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(db)
+	sessionStore := memory.NewIdPSessionStore()
 
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer, username)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer)
+	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
-	return route.NewRouter(authSvc, userInfoSvc, discoverySvc)
+	return route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
 }
 
 // ---------------------------------------------------------------------------
@@ -272,10 +273,39 @@ func doUserInfo(t *testing.T, h http.Handler, bearer string) *httptest.ResponseR
 
 func doAuthorize(t *testing.T, h http.Handler, query url.Values) *httptest.ResponseRecorder {
 	t.Helper()
+	return doAuthorizeWithSession(t, h, query, loginSession(t, h))
+}
+
+func doAuthorizeWithSession(t *testing.T, h http.Handler, query url.Values, session *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/authorize?"+query.Encode(), nil)
+	if session != nil {
+		req.AddCookie(session)
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func loginSession(t *testing.T, h http.Handler) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(url.Values{
+		"username": {testUsername},
+		"password": {testDemoPassword},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "idp_session" {
+			return c
+		}
+	}
+	t.Fatal("login did not set idp_session cookie")
+	return nil
 }
 
 // issueAuthCode drives a successful /authorize request and returns

@@ -45,12 +45,6 @@ type AuthorizationService struct {
 	refreshTokens refreshtoken.Repository
 	signer        token.Signer
 	issuer        string
-
-	// defaultUsername is the resource owner assigned to an /authorize
-	// request when no login_hint is given (or the given login_hint
-	// does not match a known user). See Authorize / resolveOwner for
-	// the "where a real login/consent screen belongs" note.
-	defaultUsername user.Username
 }
 
 // NewAuthorizationService builds an AuthorizationService.
@@ -61,40 +55,77 @@ func NewAuthorizationService(
 	refreshTokens refreshtoken.Repository,
 	signer token.Signer,
 	issuer string,
-	defaultUsername user.Username,
 ) *AuthorizationService {
 	return &AuthorizationService{
-		clients:         clients,
-		users:           users,
-		authCodes:       authCodes,
-		refreshTokens:   refreshTokens,
-		signer:          signer,
-		issuer:          issuer,
-		defaultUsername: defaultUsername,
+		clients:       clients,
+		users:         users,
+		authCodes:     authCodes,
+		refreshTokens: refreshTokens,
+		signer:        signer,
+		issuer:        issuer,
 	}
 }
 
+// ValidateAuthorize performs every /authorize check except resource owner
+// resolution. It returns a verified AuthorizeResult (RedirectURI set)
+// when client_id and redirect_uri are confirmed, so callers can safely
+// redirect unauthenticated users to login without becoming an open
+// redirector (ISSUE-031).
+func (s *AuthorizationService) ValidateAuthorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
+	return s.validateAuthorize(ctx, req)
+}
+
 // Authorize implements the authorization request of RFC 6749 4.1.1 /
-// OIDC Core 3.1.2.1, restricted to response_type=code with mandatory
-// PKCE (S256 only).
-//
-// Validation is deliberately ordered so that client_id and
-// redirect_uri are confirmed *first*: RFC 6749 4.1.2.1 requires that
-// if the client or the redirect_uri cannot be verified, the error
-// MUST be shown to the resource owner directly rather than via
-// redirect, since redirecting to an unverified/unregistered URI would
-// make this endpoint an open redirector. This is enforced by data
-// flow, not just by ordering: the returned AuthorizeResult.RedirectURI
-// is the zero value ("") for every error above this point, and is
-// only ever populated (with the exact string ValidateRedirectURI just
-// confirmed) once client_id/redirect_uri are verified -- see `verified`
-// below. route/authorize_handler.go's error path redirects only using
-// this returned value (never the raw, unvalidated request
-// redirect_uri), so an unverified error cannot carry a non-empty
-// redirect target regardless of ordering mistakes made in the future
-// (ISSUE-004; route/response.go's isUnverifiedAuthorizeError remains a
-// second, independent check on top of this).
-func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
+// OIDC Core 3.1.2.1 for an already-authenticated resource owner.
+func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeRequest, owner *user.User) (AuthorizeResult, error) {
+	if owner == nil {
+		return AuthorizeResult{}, fmt.Errorf("service: authorize: authenticated resource owner required")
+	}
+	verified, err := s.validateAuthorize(ctx, req)
+	if err != nil {
+		return verified, err
+	}
+
+	cid, err := client.ParseClientID(req.ClientID)
+	if err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+	scope, err := authcode.ParseScope(req.Scope)
+	if err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+	method, err := authcode.ParseCodeChallengeMethod(req.CodeChallengeMethod)
+	if err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+	challenge, err := authcode.NewCodeChallenge(req.CodeChallenge, method)
+	if err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+
+	ac, err := authcode.New(
+		authcode.NewClientID(cid.String()),
+		authcode.NewUserID(owner.ID().String()),
+		authcode.NewRedirectURI(verified.RedirectURI),
+		scope,
+		authcode.NewNonce(req.Nonce),
+		challenge,
+	)
+	if err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+	if err := s.authCodes.Save(ctx, ac); err != nil {
+		return verified, fmt.Errorf("service: authorize: %w", err)
+	}
+
+	return AuthorizeResult{
+		RedirectURI: verified.RedirectURI,
+		Code:        ac.Code().String(),
+		State:       req.State,
+	}, nil
+}
+
+func (s *AuthorizationService) validateAuthorize(ctx context.Context, req AuthorizeRequest) (AuthorizeResult, error) {
 	cid, err := client.ParseClientID(req.ClientID)
 	if err != nil {
 		return AuthorizeResult{}, fmt.Errorf("service: authorize: %w", err)
@@ -148,65 +179,11 @@ func (s *AuthorizationService) Authorize(ctx context.Context, req AuthorizeReque
 	if err != nil {
 		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
-	challenge, err := authcode.NewCodeChallenge(req.CodeChallenge, method)
-	if err != nil {
+	if _, err := authcode.NewCodeChallenge(req.CodeChallenge, method); err != nil {
 		return verified, fmt.Errorf("service: authorize: %w", err)
 	}
 
-	owner, err := s.resolveOwner(ctx, req.LoginHint)
-	if err != nil {
-		return verified, fmt.Errorf("service: authorize: %w", err)
-	}
-
-	ac, err := authcode.New(
-		authcode.NewClientID(c.ID().String()),
-		authcode.NewUserID(owner.ID().String()),
-		authcode.NewRedirectURI(redirectURI.String()),
-		scope,
-		authcode.NewNonce(req.Nonce),
-		challenge,
-	)
-	if err != nil {
-		return verified, fmt.Errorf("service: authorize: %w", err)
-	}
-	if err := s.authCodes.Save(ctx, ac); err != nil {
-		return verified, fmt.Errorf("service: authorize: %w", err)
-	}
-
-	return AuthorizeResult{
-		RedirectURI: redirectURI.String(),
-		Code:        ac.Code().String(),
-		State:       req.State,
-	}, nil
-}
-
-// resolveOwner decides which User is the resource owner for an
-// /authorize request.
-//
-// *** This is the simplification point where a real authorization
-// server would show a login screen (to authenticate the resource
-// owner) followed by a consent screen (to let them approve the
-// requested scope), and only proceed once the owner has done both.
-// This sample skips both: if loginHint names a known user it is used
-// as-is (no password check), otherwise the seeded default user is
-// used automatically. See README.md "認証/同意画面を差し込む箇所"
-// for where to wire in a real implementation. ***
-func (s *AuthorizationService) resolveOwner(ctx context.Context, loginHint string) (*user.User, error) {
-	if loginHint != "" {
-		username, err := user.NewUsername(loginHint)
-		if err == nil {
-			if u, findErr := s.users.FindByUsername(ctx, username); findErr == nil {
-				return u, nil
-			} else if !errors.Is(findErr, user.ErrNotFound) {
-				return nil, findErr
-			}
-			// login_hint did not resolve to a known user: fall through
-			// to the default user below rather than failing the
-			// request, consistent with this sample's "no real login
-			// UI" simplification.
-		}
-	}
-	return s.users.FindByUsername(ctx, s.defaultUsername)
+	return verified, nil
 }
 
 // Token implements the token request of RFC 6749 4.1.3/6, dispatching

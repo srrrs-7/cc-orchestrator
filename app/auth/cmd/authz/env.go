@@ -38,6 +38,8 @@ type Env struct {
 	Port   string
 	Issuer string
 
+	DemoPassword string
+
 	DBHost     string
 	DBPort     string
 	DBName     string
@@ -77,8 +79,9 @@ type DBReaderEnv struct {
 // doc comment for the fail-closed contract).
 func NewEnv() Env {
 	e := Env{
-		Port:   orDefault(os.Getenv("PORT"), defaultPort),
-		Issuer: orDefault(os.Getenv("ISSUER"), defaultIssuer),
+		Port:         orDefault(os.Getenv("PORT"), defaultPort),
+		Issuer:       orDefault(os.Getenv("ISSUER"), defaultIssuer),
+		DemoPassword: os.Getenv("DEMO_PASSWORD"),
 
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     orDefault(os.Getenv("DB_PORT"), defaultDBPort),

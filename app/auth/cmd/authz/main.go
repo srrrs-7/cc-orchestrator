@@ -24,6 +24,7 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/route"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
@@ -101,7 +102,7 @@ func run() error {
 	// writer/reader pool pair via postgres.OpenPair and wires each
 	// repository to the pool the "auth の correctness-critical read の
 	// 配置" table (docs/plans/SPEC-010-plan.md) assigns it.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig())
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -110,17 +111,21 @@ func run() error {
 			slog.Error("authz: close persistence", "error", err)
 		}
 	}()
-
-	defaultUsername, err := user.NewUsername(demoUsername)
-	if err != nil {
-		return fmt.Errorf("authz: build default username: %w", err)
+	if e.DemoPassword != "" || os.Getenv("DEMO_LOG_PASSWORD") == "1" {
+		slog.Info("authz: demo user password", "username", demoUsername, "password", demoPassword)
 	}
 
+	sessionStore := memory.NewIdPSessionStore()
+
 	// Wiring: infra -> application service -> presentation.
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, defaultUsername)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer)
+	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
 	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
-	handler := route.NewRouter(authSvc, userInfoSvc, discoverySvc)
+	handler := route.NewRouter(authSvc, authnSvc, userInfoSvc, discoverySvc, route.RouterConfig{
+		Issuer:        e.Issuer,
+		SecureCookies: route.SecureCookiesFromIssuer(e.Issuer),
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + e.Port,
@@ -183,19 +188,17 @@ func run() error {
 // It returns the four repositories as their domain-declared interfaces
 // plus a closePersistence func the caller MUST defer-call during
 // shutdown to release pooled connections.
-func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, error) {
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, string, error) {
 	noopClose := func() error { return nil }
 
 	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
 	if err != nil {
-		return nil, nil, nil, nil, noopClose, fmt.Errorf("postgres open pair: %w", err)
+		return nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
 	}
-	// Seed writes go through the writer pool (seedPostgres is an
-	// idempotent upsert -- see its doc comment -- so it must never
-	// run against a lagging replica).
-	if err := seedPostgres(ctx, writerDB); err != nil {
+	seededPassword, err := seedPostgres(ctx, writerDB, demoPassword)
+	if err != nil {
 		_ = closeFn()
-		return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
+		return nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
 	}
 	// Reader pool: seeded, read-only-at-runtime aggregates.
 	clientRepo := postgres.NewClientRepository(readerDB)
@@ -205,7 +208,7 @@ func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config)
 	authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
 	slog.Info("authz: persistence configured", "mode", "postgres")
-	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, nil
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo
@@ -234,57 +237,56 @@ func buildDemoClient() (*client.Client, error) {
 	), nil
 }
 
-// buildDemoUser constructs this authorization server's single demo
-// user. The demo user's password is generated fresh on every call
-// rather than hardcoded, even though this sample's wiring never
-// checks it (see service.AuthorizationService.resolveOwner: there is
-// no login UI, so User.VerifyPassword is never called in the current
-// request flow). It exists so the aggregate's shape matches a real
-// IdP and can be wired to an actual login handler later.
-func buildDemoUser() (*user.User, error) {
+// buildDemoUser constructs this authorization server's single demo user.
+// When plaintextPassword is empty a random secret is generated.
+func buildDemoUser(plaintextPassword string) (*user.User, string, error) {
 	userID, err := user.ParseUserID(demoUserID)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
 	username, err := user.NewUsername(demoUsername)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
 	profile, err := user.NewProfile(demoUserName, demoUserEmail)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
-	password, err := randomSecret(32)
+	password := plaintextPassword
+	if password == "" {
+		password, err = randomSecret(32)
+		if err != nil {
+			return nil, "", fmt.Errorf("build demo user: %w", err)
+		}
+	}
+	u, err := user.New(userID, username, password, profile)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
-	return user.New(userID, username, password, profile)
+	return u, password, nil
 }
 
 // seedPostgres idempotently upserts the demo client/user data via
-// postgres.SeedClient/SeedUser (docs/plans/SPEC-005-plan.md §1.2
-// "seed": a startup idempotent upsert -- not a migration-embedded
-// seed, so the demo user's freshly-generated password is never
-// committed to a SQL file, and repeated process starts converge on
-// the same demo row instead of erroring on the second run).
-func seedPostgres(ctx context.Context, db *sql.DB) error {
+// postgres.SeedClient/SeedUser. It returns the plaintext demo password
+// used for optional startup logging.
+func seedPostgres(ctx context.Context, db *sql.DB, demoPassword string) (string, error) {
 	demoClient, err := buildDemoClient()
 	if err != nil {
-		return fmt.Errorf("seed client: %w", err)
+		return "", fmt.Errorf("seed client: %w", err)
 	}
 	if err := postgres.SeedClient(ctx, db, demoClient); err != nil {
-		return fmt.Errorf("seed client: %w", err)
+		return "", fmt.Errorf("seed client: %w", err)
 	}
 
-	demoUser, err := buildDemoUser()
+	demoUser, plaintext, err := buildDemoUser(demoPassword)
 	if err != nil {
-		return fmt.Errorf("seed user: %w", err)
+		return "", fmt.Errorf("seed user: %w", err)
 	}
 	if err := postgres.SeedUser(ctx, db, demoUser); err != nil {
-		return fmt.Errorf("seed user: %w", err)
+		return "", fmt.Errorf("seed user: %w", err)
 	}
 
-	return nil
+	return plaintext, nil
 }
 
 // randomSecret generates a cryptographically random, base64url-encoded

@@ -1,39 +1,27 @@
 package route
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
 
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/idpsession"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
 
 // authorizeHandler serves GET /authorize (RFC 6749 4.1.1, OIDC Core
 // 3.1.2.1).
 type authorizeHandler struct {
-	svc *service.AuthorizationService
+	svc           *service.AuthorizationService
+	authn         *service.AuthenticationService
+	issuer        string
+	secureCookies bool
 }
 
-// handle parses the authorization request's query parameters,
-// delegates to AuthorizationService.Authorize, and redirects the
-// user-agent back to the client's redirect_uri with the issued
-// authorization code (RFC 6749 4.1.2), or with an OAuth error (see
-// response.go's writeAuthorizeError for the open-redirect-safe error
-// handling contract).
-//
-// *** This authorization server does not implement a login/consent
-// UI. A real implementation would, at this point, redirect an
-// unauthenticated user-agent to a login page, then a consent page,
-// and only call AuthorizationService.Authorize once the resource
-// owner has authenticated and approved the requested scope. This
-// sample instead resolves the resource owner automatically inside
-// AuthorizationService.Authorize (see resolveOwner there); this is
-// the exact spot in the request flow where that real UI would be
-// inserted. ***
-func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
+func parseAuthorizeRequest(r *http.Request) service.AuthorizeRequest {
 	q := r.URL.Query()
-
-	req := service.AuthorizeRequest{
+	return service.AuthorizeRequest{
 		ResponseType:        q.Get("response_type"),
 		ClientID:            q.Get("client_id"),
 		RedirectURI:         q.Get("redirect_uri"),
@@ -44,25 +32,47 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		CodeChallengeMethod: q.Get("code_challenge_method"),
 		LoginHint:           q.Get("login_hint"),
 	}
+}
 
-	result, err := h.svc.Authorize(r.Context(), req)
+// handle parses the authorization request's query parameters,
+// ensures the resource owner is authenticated at the IdP (redirecting
+// to /login when not), delegates to AuthorizationService.Authorize,
+// and redirects the user-agent back to the client's redirect_uri.
+func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
+	req := parseAuthorizeRequest(r)
+
+	verified, err := h.svc.ValidateAuthorize(r.Context(), req)
 	if err != nil {
-		// result.RedirectURI (not the raw req.RedirectURI) is used here:
-		// AuthorizationService.Authorize only ever populates it once it
-		// has itself confirmed redirect_uri is registered for a known
-		// client, and leaves it empty for every error that occurs before
-		// that point (see that function's ordering contract and its
-		// verified value). writeAuthorizeError additionally still gates
-		// on isUnverifiedAuthorizeError(err) as a second, independent
-		// check.
+		writeAuthorizeError(w, r, verified.RedirectURI, req.State, err)
+		return
+	}
+
+	owner, err := h.authn.UserFromSession(r.Context(), readSessionCookie(r))
+	if err != nil {
+		if errors.Is(err, idpsession.ErrNotFound) {
+			pendingID, saveErr := h.authn.SavePendingAuthorize(r.Context(), r.URL.RawQuery)
+			if saveErr != nil {
+				slog.Error("route: authorize: save pending", "error", saveErr)
+				writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
+				return
+			}
+			setPendingCookie(w, pendingID, h.secureCookies)
+			http.Redirect(w, r, issuerPath(h.issuer, "/login"), http.StatusFound)
+			return
+		}
+		slog.Error("route: authorize: session lookup", "error", err)
+		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
+		return
+	}
+
+	result, err := h.svc.Authorize(r.Context(), req, owner)
+	if err != nil {
 		writeAuthorizeError(w, r, result.RedirectURI, req.State, err)
 		return
 	}
 
 	u, err := url.Parse(result.RedirectURI)
 	if err != nil {
-		// Should not happen: result.RedirectURI was already validated
-		// by the service layer.
 		slog.Error("route: authorize: parse validated redirect uri", "error", err)
 		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
 		return

@@ -114,6 +114,8 @@ services:
       - "127.0.0.1:8082:8080"
     environment:
       ISSUER: http://localhost:8080/auth
+      DEMO_PASSWORD: demo
+      DEMO_LOG_PASSWORD: "1"
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: auth
