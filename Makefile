@@ -75,7 +75,7 @@ clean: ## 停止・コンテナ・volume を削除する
 # api・auth は同一 Postgres インスタンス上の別データベース("api"/"auth")に
 # 分離されている(旧: 単一 database + search_path 別スキーマ)。`migrate` は
 # 共通の `app/migrator`(`app/migrator/cmd/migrator/main.go`)を `-target` 違いで
-# 2 回実行し、各データベースを(未存在なら)作成した上で当該スタックの db/migrations を
+# 2 回実行し、各データベースを(未存在なら)作成した上で当該スタックの schema/migrations を
 # 適用する。DB_NAME は migrator の既定(-target と同名: api/auth)に任せ、
 # 接続先(host/port/user/password/sslmode)だけをローカル compose の postgres
 # に合わせて明示する(app/api・app/auth Makefile の DB_* 既定と同じ値)。
@@ -204,8 +204,8 @@ MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e D
 # has changed). `-migrations-dir` is therefore rooted at /workspace (the
 # container's bind-mounted view of this repo, per compose.tools.yml),
 # not $(CURDIR) (the host's view) -- app/api's and app/auth's
-# db/migrations directories are bind-mounted at exactly
-# /workspace/app/{api,auth}/db/migrations. DB_HOST=postgres (a compose
+# schema/migrations directories are bind-mounted at exactly
+# /workspace/app/{api,auth}/infra/postgres/schema/migrations. DB_HOST=postgres (a compose
 # service *name*, not 127.0.0.1) because this container joins the
 # postgres service's own compose network via the `-f compose.yml -f
 # compose.tools.yml` file overlay above, rather than reaching it through
@@ -213,8 +213,8 @@ MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e D
 # host-side `go run` used.
 .PHONY: migrate
 migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行。toolchain コンテナ内で go を実行し、postgres へは compose ネットワーク越しに到達する)
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/db/migrations
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/db/migrations
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
+	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
 
 # ---------------------------------------------------------------------------
 # AWS デプロイ(build-push)ツーリング(SPEC-004。2026-07-10 SPEC-009 Phase B:

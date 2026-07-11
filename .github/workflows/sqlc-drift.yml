@@ -2,8 +2,8 @@
 #
 # Same idea as contract-drift.yml (SPEC-003) applied to app/api's and
 # app/auth's sqlc-generated Go code: regenerate infra/postgres/sqlcgen from
-# db/queries + db/migrations via `make sqlc`, then fail if the regenerated
-# output differs from what's committed (i.e. "db/queries or db/migrations
+# infra/postgres/schema/queries + schema/migrations via `make sqlc`, then fail if the regenerated
+# output differs from what's committed (i.e. "schema/queries or schema/migrations
 # changed but `make sqlc` wasn't re-run and committed").
 #
 # Unlike contract-drift.yml, this is Go-only per stack (no Bun involved), so
@@ -61,18 +61,18 @@ jobs:
           # generation, apply).
           filters: |
             api:
-              - 'app/api/db/**'
+              - 'app/api/infra/postgres/schema/**'
               - 'app/api/infra/postgres/**'
-              - 'app/api/sqlc.yaml'
+              - 'app/api/infra/postgres/sqlc.yaml'
               - '.devcontainer/versions.env'
               - '.devcontainer/toolchain/**'
               - '.devcontainer/compose.tools.yml'
               - '.github/actions/build-toolchain-image/**'
               - '.github/workflows/sqlc-drift.yml'
             auth:
-              - 'app/auth/db/**'
+              - 'app/auth/infra/postgres/schema/**'
               - 'app/auth/infra/postgres/**'
-              - 'app/auth/sqlc.yaml'
+              - 'app/auth/infra/postgres/sqlc.yaml'
               - '.devcontainer/versions.env'
               - '.devcontainer/toolchain/**'
               - '.devcontainer/compose.tools.yml'
@@ -83,7 +83,7 @@ jobs:
   # api — regenerate infra/postgres/sqlcgen from db/queries + db/migrations.
   # ---------------------------------------------------------------------------
   api:
-    name: api sqlc drift (db/queries -> infra/postgres/sqlcgen)
+    name: api sqlc drift (schema/queries -> infra/postgres/sqlcgen)
     needs: changes
     if: ${{ needs.changes.outputs.api == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -109,15 +109,15 @@ jobs:
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/api tools go mod download
 
-      # Regenerates infra/postgres/sqlcgen from db/queries/*.sql +
-      # db/migrations/*.sql (sqlc version pinned in .devcontainer/versions.env, the
+      # Regenerates infra/postgres/sqlcgen from schema/queries/*.sql +
+      # schema/migrations/*.sql (sqlc version pinned in .devcontainer/versions.env, the
       # single source of truth per docs/plans/SPEC-005-plan.md §0 /
       # SPEC-009's .devcontainer/versions.env consolidation). Contract: .claude/rules/db.md.
       - name: Regenerate sqlc output (app/api)
         run: make sqlc
 
       # Fail if regenerating produced a diff, i.e. someone changed
-      # db/queries or db/migrations without re-running `make sqlc` and
+      # schema/queries or schema/migrations without re-running `make sqlc` and
       # committing the result. `git add -N` (--intent-to-add) also catches
       # a brand-new generated file that was never committed (plain `git
       # diff --exit-code` is blind to untracked paths). Runs directly on
@@ -130,7 +130,7 @@ jobs:
 
           if ! git diff --exit-code -- infra/postgres/sqlcgen; then
             echo
-            echo "::error::sqlc drift detected in app/api — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/api/db/queries and app/api/db/migrations. Run 'make sqlc' in app/api locally, then commit the result."
+            echo "::error::sqlc drift detected in app/api — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/api/infra/postgres/schema/queries and app/api/infra/postgres/schema/migrations. Run 'make sqlc' in app/api locally, then commit the result."
             echo
             echo "----- git status (watched path) -----"
             git status -- infra/postgres/sqlcgen
@@ -141,7 +141,7 @@ jobs:
   # auth — identical shape to the api job above, own stack/db/schema.
   # ---------------------------------------------------------------------------
   auth:
-    name: auth sqlc drift (db/queries -> infra/postgres/sqlcgen)
+    name: auth sqlc drift (schema/queries -> infra/postgres/sqlcgen)
     needs: changes
     if: ${{ needs.changes.outputs.auth == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -168,7 +168,7 @@ jobs:
 
           if ! git diff --exit-code -- infra/postgres/sqlcgen; then
             echo
-            echo "::error::sqlc drift detected in app/auth — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/auth/db/queries and app/auth/db/migrations. Run 'make sqlc' in app/auth locally, then commit the result."
+            echo "::error::sqlc drift detected in app/auth — the diff above (new/changed files marked '+') was produced by regenerating infra/postgres/sqlcgen from app/auth/infra/postgres/schema/queries and app/auth/infra/postgres/schema/migrations. Run 'make sqlc' in app/auth locally, then commit the result."
             echo
             echo "----- git status (watched path) -----"
             git status -- infra/postgres/sqlcgen

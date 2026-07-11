@@ -5,7 +5,7 @@ services:
   # split by schema/search_path. app/migrator (run via the root
   # Makefile's `migrate` target, a prerequisite of `up`/`up-d` below)
   # creates each database (if missing) and applies that stack's
-  # db/migrations against it -- there is no compose init script step
+  # schema/migrations against it -- there is no compose init script step
   # for this anymore (schema/database bootstrap moved from
   # docker-entrypoint-initdb.d into app/migrator so local/CI/prod share
   # one creation path). POSTGRES_DB below is only the Postgres image's

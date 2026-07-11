@@ -11,7 +11,7 @@ import (
 )
 
 // SeedClient idempotently inserts (or overwrites, keyed by ID) c into
-// the clients table via an upsert (db/queries/clients.sql's
+// the clients table via an upsert (schema/queries/clients.sql's
 // UpsertClient: INSERT ... ON CONFLICT (id) DO UPDATE), so calling it
 // again with the same demo data (e.g. on every process start) MUST
 // converge on the same row rather than erroring on the second run.
@@ -58,7 +58,7 @@ func SeedClient(ctx context.Context, db *sql.DB, c *client.Client) error {
 }
 
 // SeedUser idempotently inserts (or overwrites, keyed by ID) u into
-// the users table via an upsert (db/queries/users.sql's UpsertUser:
+// the users table via an upsert (schema/queries/users.sql's UpsertUser:
 // INSERT ... ON CONFLICT (id) DO UPDATE); see SeedClient's doc
 // comment for the rationale (user.Repository is also read-only).
 //

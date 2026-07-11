@@ -65,7 +65,7 @@ type Querier interface {
 	// authcode.ErrNotFound.
 	GetActiveAuthCode(ctx context.Context, code string) (GetActiveAuthCodeRow, error)
 	// SPEC-005 R2/R4: sqlc input for the clients table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs client.Repository.FindByID. Returns sql.ErrNoRows when
@@ -85,7 +85,7 @@ type Querier interface {
 	// evicting an expired row, if any).
 	GetRefreshToken(ctx context.Context, tokenHash string) (GetRefreshTokenRow, error)
 	// SPEC-005 R2/R4: sqlc input for the users table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs user.Repository.FindByID. Returns sql.ErrNoRows when absent;
@@ -97,7 +97,7 @@ type Querier interface {
 	// user.ErrNotFound.
 	GetUserByUsername(ctx context.Context, username string) (User, error)
 	// SPEC-005 R2/R4: sqlc input for the authorization_codes table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs authcode.Repository.Save: authorization codes are
@@ -106,7 +106,7 @@ type Querier interface {
 	// broken random generator, not a legitimate re-save).
 	InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) error
 	// SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
-	// (db/migrations/000002_create_refresh_tokens.sql). `make sqlc`
+	// (schema/migrations/000002_create_refresh_tokens.sql). `make sqlc`
 	// regenerates infra/postgres/sqlcgen from this file; keep both in the
 	// same commit (no drift).
 	// Backs refreshtoken.Repository.Save (the initial refresh token minted

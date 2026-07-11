@@ -116,7 +116,7 @@ type InsertRefreshTokenParams struct {
 }
 
 // SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
-// (db/migrations/000002_create_refresh_tokens.sql). `make sqlc`
+// (schema/migrations/000002_create_refresh_tokens.sql). `make sqlc`
 // regenerates infra/postgres/sqlcgen from this file; keep both in the
 // same commit (no drift).
 // Backs refreshtoken.Repository.Save (the initial refresh token minted

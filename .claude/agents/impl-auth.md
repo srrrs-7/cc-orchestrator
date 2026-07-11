@@ -27,7 +27,7 @@ color: green
 ## してはいけないこと
 
 - `app/auth` 以外のコード変更(api・web・iac に問題を見つけたら報告する)
-- `app/auth/infra/postgres` / `db/migrations` / `db/queries` / sqlc / DB 接続配線の変更(impl-db 担当)。`infra/memory` の実装も原則触らず、必要が生じたら impl-db に申し送る
+- `app/auth/infra/postgres` / `infra/postgres/schema/*` / sqlc / DB 接続配線の変更(impl-db 担当)。`infra/memory` の実装も原則触らず、必要が生じたら impl-db に申し送る
 - テストの新規作成(tester の担当)。ただし自分の変更で既存テストが落ちた場合の対応は行い、内容を報告する
 - vet / build が通らない状態での完了報告
 - セキュリティ規約に反する実装(秘密の埋め込み・`alg:none` 受理・検証の省略)

@@ -1,11 +1,9 @@
 ---
 paths:
-  - "app/api/db/**"
-  - "app/auth/db/**"
+  - "app/api/infra/postgres/schema/**"
+  - "app/auth/infra/postgres/schema/**"
   - "app/api/infra/postgres/**"
   - "app/auth/infra/postgres/**"
-  - "app/api/sqlc.yaml"
-  - "app/auth/sqlc.yaml"
   - "app/migrator/**"
 ---
 
@@ -22,7 +20,7 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 ## ツール
 
 - **マイグレーション: goose(pressly/goose)** — プレーン SQL の up/down。レビュー可能な差分として commit する。実行(適用)は `app/migrator` が **library** として使う(後述)。`app/api`・`app/auth` の Makefile は `migrate-create`(新規マイグレーションファイルの scaffold。DB 接続なし)にのみ goose の `go run` CLI を使う
-- **クエリ→型安全 Go 生成: sqlc** — `db/queries/**` の SQL から Go を生成する。OpenAPI 契約(SPEC-003)と同じ「単一ソースから生成」方針を DB クエリにも適用する。`app/api`・`app/auth` それぞれの Makefile が `go run <pkg>@<version>` の CLI として実行する
+- **クエリ→型安全 Go 生成: sqlc** — `infra/postgres/schema/queries/**` の SQL から Go を生成する。OpenAPI 契約(SPEC-003)と同じ「単一ソースから生成」方針を DB クエリにも適用する。`app/api`・`app/auth` それぞれの Makefile が `go run <pkg>@<version>` の CLI として実行する
 - **goose の閉じ込め**: goose を library として require するのは `app/migrator/go.mod` だけ。`app/api`・`app/auth` の go.mod は goose を require しない(migrate-create は `go run pkg@version` の CLI 実行のため go.mod に現れない)。両スタックの新規 runtime 依存は Postgres ドライバ(pgx)のみを保つ
 
 ## コマンド
@@ -31,7 +29,7 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 
 | 目的 | 実行場所 | コマンド |
 |---|---|---|
-| sqlc 生成(`db/queries` → `infra/postgres/sqlcgen`) | `app/api` または `app/auth` | `make sqlc` |
+| sqlc 生成(`schema/queries` → `infra/postgres/sqlcgen`) | `app/api` または `app/auth` | `make sqlc` |
 | マイグレーションファイルの新規作成 | `app/api` または `app/auth` | `make migrate-create name=<slug>`(DB 接続なし。ファイル生成のみ) |
 | 実 DB 統合テスト | `app/api` または `app/auth` | `make test-integration`(= `go test -tags=integration ./infra/postgres/...`。事前に接続先データベースへマイグレーション適用済みであること) |
 | マイグレーション適用(api・auth 両方、ローカル) | リポジトリルート | `make migrate`(`db-up` を前提ターゲットとし、`app/migrator` を `-target api` / `-target auth` で 2 回実行する) |
@@ -46,11 +44,11 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 
 ## レイアウト
 
-各 Go スタック(`app/api` / `app/auth`)配下:
+各 Go スタック(`app/api` / `app/auth`)の `infra/postgres` 配下:
 
-- `db/migrations/` — goose のマイグレーション SQL(up/down 対、非修飾 DDL。各スタックは自分専用の database に接続するため、スキーマ名・database 名を DDL に書かない。デフォルトの `public` スキーマに作成される)
-- `db/queries/` — sqlc の入力クエリ SQL
-- `sqlc.yaml` — `sql_package: database/sql` / `package: sqlcgen` / `out: infra/postgres/sqlcgen`
+- `infra/postgres/schema/migrations/` — goose のマイグレーション SQL(up/down 対、非修飾 DDL。各スタックは自分専用の database に接続するため、スキーマ名・database 名を DDL に書かない。デフォルトの `public` スキーマに作成される)
+- `infra/postgres/schema/queries/` — sqlc の入力クエリ SQL
+- `infra/postgres/sqlc.yaml` — `sql_package: database/sql` / `package: sqlcgen` / `out: sqlcgen`(相対パス。生成先は `infra/postgres/sqlcgen/`)
 - `infra/postgres/sqlcgen/` — sqlc 生成コード(commit 対象。手で編集しない)
 - `infra/postgres/<集約>_repository.go` — ドメインの `Repository` interface を sqlcgen 越しに満たす実装(auth は `user_repository.go` / `client_repository.go` / `authcode_repository.go` / `refreshtoken_repository.go`)。**例外(SPEC-010)**: api の task のみ `Reader`/`Writer` を別プールへ振り分けるため実装も分割されており、`task_reader.go`(`TaskReader`)/ `task_writer.go`(`TaskWriter`)/ `task_repository.go`(共有ヘルパ + 互換合成 `TaskRepository`)の 3 ファイルに分かれる。詳細は下記「Reader/Writer 分割と 2 プール(SPEC-010)」
 - `infra/postgres/db.go` — `Config` / `Open` / `OpenPair`(接続プールの上限と ping タイムアウトを持つ。`OpenPair` は下記「Reader/Writer 分割と 2 プール(SPEC-010)」参照)。**環境変数を直接読まない**(下記「接続 env 契約」参照)。`SelectMode` / `Mode` は SPEC-011 で削除済み
@@ -65,7 +63,7 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
   - `service/migrate.go` — `Database` の `EnsureExists` → `Runner` の `Run` を協調させる薄い application 層。domain のみに依存
   - `infra/postgres/` — `Database` ポートの実装(`EnsureExister`。`pg_database` 存在確認 + `CREATE DATABASE` 冪等・`42P04`/`23505` 分類・再確認)+ 接続 `Open`/`Config.DSN`(pgx stdlib)
   - `infra/goose/` — `Runner` ポートの実装。goose library(`SetDialect` + `RunContext`)。実行タイムアウト(`MIGRATOR_TIMEOUT`)の適用
-  - `Dockerfile`(ビルドコンテキストはリポジトリルート。`app/{api,auth}/db/migrations` を COPY するため。ビルド対象は `./cmd/migrator`)
+  - `Dockerfile`(ビルドコンテキストはリポジトリルート。`app/{api,auth}/infra/postgres/schema/migrations` を COPY するため。ビルド対象は `./cmd/migrator`)
 
 ## 接続 env 契約
 
@@ -130,11 +128,11 @@ migrator -target api|auth [-command up|down|status] [-migrations-dir <path>]
 - 実行フロー: (1) `DB_MAINTENANCE_NAME` への接続で対象データベースを `ensureDatabase` により作成(未存在時のみ)、(2) 対象データベースへ接続し直し、`goose.RunContext` を `-command` で実行。goose 実行本体には接続確認(`pingTimeout`。5 秒)とは別に `defaultMigrationTimeout`(既定 5 分。`MIGRATOR_TIMEOUT` 環境変数で上書き可)の deadline を設けており、ハング(ロック待ち等)時に無期限待機せず fail-fast する
 
 - **ローカル**: リポジトリルートの `make migrate`(`db-up` を前提ターゲットとし、`app/migrator` を `-target api` → `-target auth` の順に実行する)。ルートの `make up` / `make up-d` は `migrate` を前提ターゲットに持つため、compose 起動時に自動適用される
-- **本番**: ECS の init コンテナとして `app/migrator` イメージ(`app/migrator/Dockerfile`。ビルドコンテキストはリポジトリルート)を `-target api` または `-target auth` で実行する。両スタックの `db/migrations` を 1 つの共有イメージにバンドルし、`-target` で選択する(RF-b)。`dependsOn: SUCCESS` でアプリ本体コンテナの起動をゲートする
+- **本番**: ECS の init コンテナとして `app/migrator` イメージ(`app/migrator/Dockerfile`。ビルドコンテキストはリポジトリルート)を `-target api` または `-target auth` で実行する。両スタックの `infra/postgres/schema/migrations` を 1 つの共有イメージにバンドルし、`-target` で選択する(RF-b)。`dependsOn: SUCCESS` でアプリ本体コンテナの起動をゲートする
 
 ## CI
 
-- `.github/workflows/sqlc-drift.yml` — `db/queries` / `db/migrations` / `sqlc.yaml` の変更を検知し、`make sqlc` を再実行して `infra/postgres/sqlcgen` に diff がないか検査する(api / auth 独立ジョブ)
+- `.github/workflows/sqlc-drift.yml` — `schema/queries` / `schema/migrations` / `infra/postgres/sqlc.yaml` の変更を検知し、`make sqlc` を再実行して `infra/postgres/sqlcgen` に diff がないか検査する(api / auth 独立ジョブ)
 - `.github/workflows/cicd.yml` の `migrator` ジョブ — `app/migrator` 自身の `make check`(独立 go.mod のため専用レーン)
 - `.github/workflows/cicd.yml` の `api-integration` / `auth-integration` ジョブ — pinned な postgres service container を起動し、`app/migrator` の `-target` / `-command` 経由でデータベース作成 + up → down → up の健全性確認を行った上で、対象スタックの `make test-integration` を実行する
 

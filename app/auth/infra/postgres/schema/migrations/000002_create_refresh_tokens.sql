@@ -20,7 +20,7 @@
 -- instead of a sequential one.
 --
 -- consumed defaults to false and is flipped to true (never deleted) by
--- a successful Repository.Rotate (db/queries/refresh_tokens.sql's
+-- a successful Repository.Rotate (schema/queries/refresh_tokens.sql's
 -- ConsumeRefreshToken): unlike authorization_codes, refresh tokens
 -- are NOT delete-based on redemption, because a consumed-but-
 -- unexpired row must remain readable (see FindByTokenHash's contract)
@@ -42,7 +42,7 @@ CREATE TABLE refresh_tokens (
 );
 
 -- Supports RevokeFamily's `DELETE FROM refresh_tokens WHERE family_id
--- = $1` (db/queries/refresh_tokens.sql) as an index scan rather than a
+-- = $1` (schema/queries/refresh_tokens.sql) as an index scan rather than a
 -- sequential scan over the whole table.
 CREATE INDEX idx_refresh_tokens_family_id ON refresh_tokens (family_id);
 

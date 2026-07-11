@@ -302,7 +302,7 @@ jobs:
       - name: Start Postgres (root make db-up)
         run: make db-up
 
-      # Creates the "api" database, applies app/api/db/migrations, and --
+      # Creates the "api" database, applies app/api/infra/postgres/schema/migrations, and --
       # because APP_DB_USER/APP_DB_PASSWORD are set above and forwarded
       # below (`-e APP_DB_USER` / `-e APP_DB_PASSWORD` with no `=value`
       # forwards each from this step's own process environment, i.e. this
@@ -319,7 +319,7 @@ jobs:
             run --rm -w /workspace/app/migrator \
             -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
             -e APP_DB_USER -e APP_DB_PASSWORD \
-            tools go run ./cmd/migrator -target api -command up -migrations-dir /workspace/app/api/db/migrations
+            tools go run ./cmd/migrator -target api -command up -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
 
       - name: Permission boundary integration tests (build tag "integration")
         run: |
@@ -364,7 +364,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # api (Go) — Postgres integration tests (SPEC-005, 2026-07-09 refactor plan
   # §RF.3 RC2). Delegates both "create the api database if missing" and
-  # "apply app/api/db/migrations" to app/migrator, then runs an
+  # "apply app/api/infra/postgres/schema/migrations" to app/migrator, then runs an
   # up->down->up health check, then the `integration`-tagged suite via
   # app/api's own Makefile. Contract: .claude/rules/db.md + app/migrator's
   # CLI (`-target`/`-command`/`-migrations-dir`) + app/api's Makefile
@@ -399,13 +399,13 @@ jobs:
         run: make db-up
 
       # Delegates "create the api database if missing" + "apply
-      # app/api/db/migrations" to app/migrator's own `make run` target
+      # app/api/infra/postgres/schema/migrations" to app/migrator's own `make run` target
       # (tools + compose.yml, DB_HOST=postgres — see app/migrator/Makefile's
       # ONLINE_DB) — the same binary the root Makefile's `migrate` target
       # and the prod init container use, so CI, local, and prod all
       # create/migrate through one code path.
       - name: Create database + migrate up (app/migrator)
-        run: make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/db/migrations"
+        run: make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/infra/postgres/schema/migrations"
 
       # Migration health check (R8): prove the down migration is also
       # sound, not just up. Only one migration file exists today
@@ -415,8 +415,8 @@ jobs:
       # "create if missing" step here is a no-op.
       - name: Migration health check (up -> down -> up)
         run: |
-          make -C app/migrator run ARGS="-target api -command down -migrations-dir /workspace/app/api/db/migrations"
-          make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/db/migrations"
+          make -C app/migrator run ARGS="-target api -command down -migrations-dir /workspace/app/api/infra/postgres/schema/migrations"
+          make -C app/migrator run ARGS="-target api -command up -migrations-dir /workspace/app/api/infra/postgres/schema/migrations"
 
       - name: Integration tests (build tag "integration")
         working-directory: app/api
@@ -469,15 +469,15 @@ jobs:
         run: make db-up
 
       - name: Create database + migrate up (app/migrator)
-        run: make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/db/migrations"
+        run: make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations"
 
       # Migration health check (R8): only one migration file exists today
       # (000001_create_auth.sql), so `-command down` fully unwinds the
       # database before `-command up` reapplies it.
       - name: Migration health check (up -> down -> up)
         run: |
-          make -C app/migrator run ARGS="-target auth -command down -migrations-dir /workspace/app/auth/db/migrations"
-          make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/db/migrations"
+          make -C app/migrator run ARGS="-target auth -command down -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations"
+          make -C app/migrator run ARGS="-target auth -command up -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations"
 
       - name: Integration tests (build tag "integration")
         working-directory: app/auth

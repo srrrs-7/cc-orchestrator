@@ -13,7 +13,7 @@ import (
 
 // AuthCodeRepository is a Postgres-backed implementation of
 // authcode.Repository (SPEC-005 R2): single-use redemption and TTL
-// expiry are enforced by the SQL itself (db/queries/authcodes.sql),
+// expiry are enforced by the SQL itself (schema/queries/authcodes.sql),
 // not by application-level locking, so the guarantees hold across
 // every process/instance sharing the same database -- the concrete
 // gap this Spec closes relative to infra/memory's single-instance
@@ -49,7 +49,7 @@ func NewAuthCodeRepository(db *sql.DB) *AuthCodeRepository {
 }
 
 // Save inserts ac as a new row. Authorization codes are issue-once
-// (see db/queries/authcodes.sql's InsertAuthCode doc comment): a
+// (see schema/queries/authcodes.sql's InsertAuthCode doc comment): a
 // primary-key collision here would indicate a broken random
 // generator, not a legitimate re-save, so this is a plain INSERT, not
 // an upsert.
@@ -104,7 +104,7 @@ func (r *AuthCodeRepository) FindByCode(ctx context.Context, code authcode.Code)
 }
 
 // Consume atomically claims code for one-time use via a single
-// DELETE ... RETURNING statement (db/queries/authcodes.sql's
+// DELETE ... RETURNING statement (schema/queries/authcodes.sql's
 // ConsumeAuthCode): Postgres's own row-level locking guarantees that
 // when two callers race to consume the same code, exactly one DELETE
 // removes the row and every other caller's statement affects zero

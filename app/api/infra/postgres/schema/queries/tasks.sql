@@ -1,4 +1,4 @@
--- SPEC-005 R1/R4: sqlc input for the tasks table (db/migrations/000001_create_tasks.sql).
+-- SPEC-005 R1/R4: sqlc input for the tasks table (schema/migrations/000001_create_tasks.sql).
 -- `make sqlc` regenerates infra/postgres/sqlcgen from this file; keep
 -- both in the same commit (no drift).
 

@@ -68,7 +68,7 @@ func (r *RefreshTokenRepository) Save(ctx context.Context, rt *refreshtoken.Refr
 }
 
 // FindByTokenHash returns the RefreshToken stored under hash. A
-// consumed-but-unexpired row is returned on purpose (db/queries's
+// consumed-but-unexpired row is returned on purpose (schema/queries's
 // GetRefreshToken query is not filtered by consumed), so callers can
 // detect a reuse of an already-rotated token before it even reaches
 // Rotate. It returns a wrapped refreshtoken.ErrNotFound when no row

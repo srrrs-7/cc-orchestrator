@@ -84,9 +84,9 @@ githooks_detect_stacks() {
 
     # sqlc-drift.yml paths
     if githooks_matches_any "$file" \
-      app/api/db/ \
+      app/api/infra/postgres/schema/ \
       app/api/infra/postgres/ \
-      app/api/sqlc.yaml \
+      app/api/infra/postgres/sqlc.yaml \
       .devcontainer/versions.env \
       .devcontainer/toolchain/ \
       .devcontainer/compose.tools.yml \
@@ -95,9 +95,9 @@ githooks_detect_stacks() {
       NEED_SQLC_API=1
     fi
     if githooks_matches_any "$file" \
-      app/auth/db/ \
+      app/auth/infra/postgres/schema/ \
       app/auth/infra/postgres/ \
-      app/auth/sqlc.yaml \
+      app/auth/infra/postgres/sqlc.yaml \
       .devcontainer/versions.env \
       .devcontainer/toolchain/ \
       .devcontainer/compose.tools.yml \

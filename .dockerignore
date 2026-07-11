@@ -7,7 +7,8 @@
 #
 # app/migrator/Dockerfile is the one exception: its build context is the
 # *repository root* (see that Dockerfile's header comment), because it also
-# COPYs app/api/db/migrations and app/auth/db/migrations, which live outside
+# COPYs app/api/infra/postgres/schema/migrations and
+# app/auth/infra/postgres/schema/migrations, which live outside
 # app/migrator's own directory tree:
 #
 #   docker build -f app/migrator/Dockerfile .
@@ -16,7 +17,7 @@
 # .git/ (packfile history) and app/iac/envs/dev/.terraform/ (provider
 # binaries) -- to the Docker daemon as build context on every invocation,
 # even though the Dockerfile's own COPY instructions only ever read
-# app/migrator/** and app/{api,auth}/db/migrations/**. None of the patterns
+# app/migrator/** and app/{api,auth}/infra/postgres/schema/migrations/**. None of the patterns
 # below match those two needed paths.
 
 # Version control metadata (never needed to build any image)

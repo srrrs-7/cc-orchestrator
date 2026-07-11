@@ -18,7 +18,7 @@ Do not change code outside the stack you are working in.
 ## Commands (per stack — do not invent others)
 
 - **web** (`app/web`): `make install`, `make format-check` / `format` / `lint` / `typecheck` / `test` / `build` / `generate` / `check`.
-- **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`. Postgres persistence (SPEC-005, not part of `make check`): `make sqlc` (generate `infra/postgres/sqlcgen` from `db/queries`; commit the output), `make migrate-up` / `migrate-down` / `migrate-status` / `migrate-create name=<slug>` (goose, `db/migrations`), `make test-integration` (build tag `integration`, requires a migrated Postgres reachable via `DB_*` env vars).
+- **api / auth** (`app/api`, `app/auth`): `make check` (= `fmt-check` + `lint` + `vet` + `build` + `test`); individual targets `make fmt` / `lint` / `vet` / `build` / `test` / `test-race`. Postgres persistence (SPEC-005, not part of `make check`): `make sqlc` (generate `infra/postgres/sqlcgen` from `infra/postgres/schema/queries`; commit the output), `make migrate-create name=<slug>` (goose, `infra/postgres/schema/migrations`), `make test-integration` (build tag `integration`, requires a migrated Postgres reachable via `DB_*` env vars).
 - **iac** (`app/iac`): `make check ENV=dev` (= `fmt-check` + `validate` + `lint` + `security`). Never run `terraform apply`.
 
 ## Git hooks (pre-commit)

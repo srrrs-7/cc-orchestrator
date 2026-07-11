@@ -1,6 +1,6 @@
 -- +goose Up
 -- SPEC-008 R7 (ISSUE-008 P1): task.Repository.ListPage (SPEC-008 R1/R2/R5)
--- orders every page by `ORDER BY created_at, id` (db/queries/tasks.sql:
+-- orders every page by `ORDER BY created_at, id` (schema/queries/tasks.sql:
 -- ListTasksPage). Without a matching index, Postgres must sort the
 -- entire table on every call, and a deep OFFSET additionally has to
 -- scan and discard every preceding row -- both get worse as the table

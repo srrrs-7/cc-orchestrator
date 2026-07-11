@@ -123,7 +123,7 @@ type InsertAuthCodeParams struct {
 }
 
 // SPEC-005 R2/R4: sqlc input for the authorization_codes table
-// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 // infra/postgres/sqlcgen from this file; keep both in the same commit
 // (no drift).
 // Backs authcode.Repository.Save: authorization codes are

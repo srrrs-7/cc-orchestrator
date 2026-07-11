@@ -10,7 +10,7 @@
 
 -- clients backs domain/client.Repository (FindByID only; read-only
 -- port -- rows are populated by the startup idempotent seed, see
--- infra/postgres/seed.go's SeedClient / db/queries/clients.sql's
+-- infra/postgres/seed.go's SeedClient / schema/queries/clients.sql's
 -- UpsertClient). Client's four multi-valued attributes
 -- (redirect_uris / allowed_scopes / response_types / grant_types) are
 -- stored as jsonb arrays of strings and round-tripped via
@@ -50,9 +50,9 @@ CREATE TABLE users (
 -- store cannot support more than one authz server instance).
 --
 -- consumed defaults to false and is set only by callers that read a
--- row back before it is deleted (see db/queries/authcodes.sql's
+-- row back before it is deleted (see schema/queries/authcodes.sql's
 -- GetActiveAuthCode); it is not the single-use enforcement mechanism.
--- Consume (db/queries/authcodes.sql's ConsumeAuthCode) is
+-- Consume (schema/queries/authcodes.sql's ConsumeAuthCode) is
 -- delete-based: a successful redemption removes the row outright, the
 -- same "delete, don't flag" contract infra/memory.AuthCodeRepository
 -- implements (plan §0 "authcode 単回使用/TTL"), so a repeated /token

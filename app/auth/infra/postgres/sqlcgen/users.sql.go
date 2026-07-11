@@ -17,7 +17,7 @@ WHERE id = $1
 `
 
 // SPEC-005 R2/R4: sqlc input for the users table
-// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 // infra/postgres/sqlcgen from this file; keep both in the same commit
 // (no drift).
 // Backs user.Repository.FindByID. Returns sql.ErrNoRows when absent;

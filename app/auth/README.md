@@ -110,16 +110,18 @@ app/auth/
 │   ├── userinfo_handler.go
 │   ├── discovery_handler.go
 │   └── response.go
-├── db/
-│   ├── migrations/                goose マイグレーション SQL(up/down)
-│   └── queries/                   sqlc の入力クエリ SQL
-├── sqlc.yaml                    sqlc 設定(`db/queries` → `infra/postgres/sqlcgen` を生成)
+├── infra/postgres/
+│   ├── schema/
+│   │   ├── migrations/            goose マイグレーション SQL(up/down)
+│   │   └── queries/               sqlc の入力クエリ SQL
+│   ├── sqlc.yaml                  sqlc 設定(`schema/queries` → `sqlcgen` を生成)
+│   └── sqlcgen/                   sqlc 生成コード(commit 対象)
 ├── Makefile                     開発コマンド(下記「開発コマンド」参照)
 ├── Dockerfile                   コンテナイメージ定義
 └── .golangci.yml                lint 設定
 ```
 
-永続化(`infra/postgres` / `db/*` / `sqlc.yaml` / マイグレーション適用)の規約・接続 env・
+永続化(`infra/postgres` / `schema/*` / `sqlc.yaml` / マイグレーション適用)の規約・接続 env・
 CQRS reader/writer 分離の詳細は `.claude/rules/db.md` が正で、本 README では重複させない
 (担当は impl-db)。
 
