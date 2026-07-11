@@ -1,9 +1,9 @@
 ---
 id: SPEC-011
 title: 永続化を Postgres 一本化し infra/memory を完全削除(テストも Postgres 化・DI 差し替え耐性の検証)
-status: approved
+status: done
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-11
 issues: []
 supersedes: null
 ---
@@ -46,11 +46,11 @@ supersedes: null
 
 ### 機能要件
 
-- [ ] R1: `infra/memory` パッケージ(app/api・app/auth)を**完全削除**する。実行時合成(`cmd/*/main.go`)・`SelectMode` の memory 分岐・memory を参照する全テストから除去する
-- [ ] R2: 永続化選択を Postgres 一本化する。`SelectMode` / `Mode` / `ModeMemory` を整理し、`DB_HOST` 未設定 + `APP_ENV=local/test` の in-memory フォールバックを廃止して **Postgres 必須(fail-closed)** にする。ローカルは compose の Postgres 経路を前提とする
-- [ ] R3: テストを Postgres に一本化する。**テスト用 Postgres コンテナを立て、リポジトリ / route / service のテストの向き先をその実 DB に切り替える**。従来 `infra/memory` をテストダブルにしていた route テストは実 DB 経路へ移す。振る舞い契約テスト(`Run<集約>RepositoryContract`)は Postgres 実装のみで回す
-- [ ] R4: 永続化層の DI が store 差し替え(postgres→mysql 等)に対して `service` 層を壊さないことを検証する。store 固有の seam(`sql.ErrNoRows` 翻訳・unique 違反判定・DSN スキーム・`*sql.Tx`)が `infra/postgres` 内に閉じていることを確認し、漏れがあれば閉じ直す。`service` / `route` / `domain` が domain ポート / domain エラーのみに依存する状態を保証・文書化する
-- [ ] R5: 削除可能なコードを削除する。memory の実装・テスト・compile assertion(`var _ Port = ...`)・doc コメント参照、および不要になった `Mode` / `ModeMemory` 等の分岐を除去する
+- [x] R1: `infra/memory` パッケージ(app/api・app/auth)を**完全削除**する。実行時合成(`cmd/*/main.go`)・`SelectMode` の memory 分岐・memory を参照する全テストから除去する
+- [x] R2: 永続化選択を Postgres 一本化する。`SelectMode` / `Mode` / `ModeMemory` を整理し、`DB_HOST` 未設定 + `APP_ENV=local/test` の in-memory フォールバックを廃止して **Postgres 必須(fail-closed)** にする。ローカルは compose の Postgres 経路を前提とする
+- [x] R3: テストを Postgres に一本化する。**テスト用 Postgres コンテナを立て、リポジトリ / route / service のテストの向き先をその実 DB に切り替える**。従来 `infra/memory` をテストダブルにしていた route テストは実 DB 経路へ移す。振る舞い契約テスト(`Run<集約>RepositoryContract`)は Postgres 実装のみで回す
+- [x] R4: 永続化層の DI が store 差し替え(postgres→mysql 等)に対して `service` 層を壊さないことを検証する。store 固有の seam(`sql.ErrNoRows` 翻訳・unique 違反判定・DSN スキーム・`*sql.Tx`)が `infra/postgres` 内に閉じていることを確認し、漏れがあれば閉じ直す。`service` / `route` / `domain` が domain ポート / domain エラーのみに依存する状態を保証・文書化する
+- [x] R5: 削除可能なコードを削除する。memory の実装・テスト・compile assertion(`var _ Port = ...`)・doc コメント参照、および不要になった `Mode` / `ModeMemory` 等の分岐を除去する
 
 ### 非機能要件
 
@@ -115,14 +115,14 @@ supersedes: null
 
 詳細は `docs/plans/SPEC-011-plan.md`(planner が作成)に置く。概略の作業順:
 
-- [ ] T1: planner が本 Spec から実装計画を作成(テスト用 Postgres コンテナの立て方・build tag / CI ジョブ再編・削除対象と error injection の扱いを確定)
-- [ ] T2: tester がベースライン(特性化)確認 — 既存 contract / integration テストが現状緑であることを確認
-- [ ] T3: impl-db が `infra/postgres` の seam 確認・整理、テスト用 DB 接続基盤の整備、memory 削除に伴う Postgres 側テスト受け皿の整備
-- [ ] T4: impl-api / impl-auth が `cmd/*/main.go` の memory 分岐削除・`SelectMode` 簡素化・route テストの Postgres 切替、domain ポートが store 非依存であることの保証
-- [ ] T5: impl-ci が CI(`cicd.yml`)の unit / integration ジョブ再編とテスト用 Postgres コンテナの配線、SPEC-009 オフライン方針との整合
-- [ ] T6: tester がテスト実行(実 DB)、checker が fmt / lint / type check、review-security / review-performance / review-spec がレビュー(特に review-spec で挙動・契約不変を確認)
-- [ ] T7: `.claude/rules/{db,testing}.md` と `app/api/README.md`・`app/auth/README.md` の memory 記述を現実に合わせて更新
-- [ ] T8: 価値の検証方法の 3 条件を確認し、本 Spec を done 化
+- [x] T1: planner が本 Spec から実装計画を作成(テスト用 Postgres コンテナの立て方・build tag / CI ジョブ再編・削除対象と error injection の扱いを確定) — `docs/plans/SPEC-011-plan.md`
+- [x] T2: tester がベースライン(特性化)確認 — 既存 contract / integration テストが現状緑であることを確認
+- [x] T3: impl-db が `infra/postgres` の seam 確認・整理、テスト用 DB 接続基盤の整備、memory 削除に伴う Postgres 側テスト受け皿の整備
+- [x] T4: impl-api / impl-auth が `cmd/*/main.go` の memory 分岐削除・`SelectMode` 簡素化・route テストの Postgres 切替、domain ポートが store 非依存であることの保証
+- [x] T5: impl-ci が CI(`cicd.yml`)の unit / integration ジョブ再編とテスト用 Postgres コンテナの配線、SPEC-009 オフライン方針との整合
+- [x] T6: tester がテスト実行(実 DB)、checker が fmt / lint / type check、review-security / review-performance / review-spec がレビュー(特に review-spec で挙動・契約不変を確認)
+- [x] T7: `.claude/rules/{db,testing}.md` と `app/api/README.md`・`app/auth/README.md` の memory 記述を現実に合わせて更新
+- [x] T8: 価値の検証方法の 3 条件を確認し、本 Spec を done 化
 
 ## 6. 経緯(時系列・追記のみ)
 
@@ -133,3 +133,10 @@ supersedes: null
 - テスト方針をユーザーと確定: **完全削除の上でテストも Postgres 一本化。テスト用 Postgres コンテナを立て、テスト時は向き先をそれに切り替える**。CI の unit job を丸ごと Postgres 化して SPEC-009 のオフライン `make check` を崩す案は不採用とし、DB 依存テストは integration フェーズに集約する。
 - スコープ確定: 本 Spec は「memory 削除 + Postgres 一本化 + テストの Postgres 化 + DI 差し替え耐性の検証 / seam 閉じ直し」。Go 1.26 bump は ISSUE-027 で別管理。`.env` → compose 移行は実質完了済み(app 設定は既に compose.yml に inline、`.env` は既に git-ignore)のため対応不要と判断しスコープ外とした。
 - status を approved として planner フェーズに進める(ユーザーが方針の主要分岐を承認済み)。
+
+### 2026-07-11
+
+- 実装完了。`infra/memory`(api 3 ファイル / auth 12 ファイル)を完全削除し、`cmd/*/main.go` を Postgres 一本化(`APP_ENV` / `SelectMode` / `ModeMemory` 除去)。route テストを untagged(エラー注入)と `//go:build integration`(実 DB)の 2 層に再編。共有 test-DB ヘルパ `infra/postgres/testsupport` を api/auth に整備。
+- 検証: api/auth 双方で `make check`(オフライン)・`make test-integration`(実 DB)・checker 全 stack 緑。review-spec(R1–R5 満たす) / review-security(fail-closed 維持、Blocker 0) / review-performance(SPEC-010 維持)完了。
+- 価値の検証方法 3 条件を確認: (1) `infra/memory` 消滅・Postgres 経路のみ、(2) 外部契約不変・contract テスト緑、(3) service/route/domain が driver 非依存・seam は `infra/postgres` 内に文書化。
+- status を `done` に更新。

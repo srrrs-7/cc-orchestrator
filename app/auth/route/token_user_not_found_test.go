@@ -45,7 +45,7 @@ func TestRefreshToken_UserNotFound_InvalidGrant(t *testing.T) {
 	// Simulate the owner disappearing after the grant was issued:
 	// DELETE the user row directly via the shared DB handle.
 	_, err := db.ExecContext(context.Background(),
-		"DELETE FROM users WHERE user_id = $1", testUserID)
+		"DELETE FROM users WHERE id = $1", testUserID)
 	if err != nil {
 		t.Fatalf("DELETE user: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestToken_AuthorizationCode_UserNotFound_InvalidGrant(t *testing.T) {
 	// Simulate the owner disappearing after the code was issued but
 	// before it is exchanged.
 	_, err := db.ExecContext(context.Background(),
-		"DELETE FROM users WHERE user_id = $1", testUserID)
+		"DELETE FROM users WHERE id = $1", testUserID)
 	if err != nil {
 		t.Fatalf("DELETE user: %v", err)
 	}

@@ -7,10 +7,9 @@
 // implementation can be proven to behave identically without
 // duplicating test logic per-implementation.
 //
-// As of SPEC-011, infra/memory is being removed: each contract is
-// exercised solely against infra/postgres via the "integration" build
-// (see infra/postgres/*_integration_test.go). The infra/memory
-// bindings will be deleted alongside infra/memory in Phase 2.
+// SPEC-011 完了: infra/memory 削除済み。各 contract は Postgres
+// (integration)のみで実行される
+// (see infra/postgres/*_integration_test.go).
 //
 // These files carry no build tag: they must remain compilable by both
 // the default (untagged) and "integration" builds, so they must not
@@ -101,8 +100,7 @@ func RunClientRepositoryContract(t *testing.T, newRepo NewClientRepository) {
 	// SPEC-005 plan §5.3's boundary row for client ("空 scope/redirect の
 	// 配列") lists redirect_uris alongside scope/response_type/grant_type;
 	// the subtest above only exercises the latter three. RedirectURIs is
-	// backed by a real (non-set) []client.RedirectURI slice in
-	// infra/memory and a jsonb array in infra/postgres, so an empty list
+	// backed by a jsonb array in infra/postgres, so an empty list
 	// exercises a distinct code path (in particular jsonb NOT NULL
 	// encoding an empty Go slice as "[]", never SQL NULL -- see
 	// infra/postgres/client_repository.go's encodeStringSlice).
@@ -143,12 +141,11 @@ func newTestClient(t *testing.T, id string, redirectURIs, scopes, responseTypes,
 // assertSameClient compares every observable field of got against
 // want. Multi-valued attributes are compared as sets (order-
 // independent): AllowedScopes/ResponseTypes/GrantTypes are backed by
-// a map internally even in infra/memory (client.Client.fromSet
-// iterates a Go map), so no implementation -- memory or Postgres --
-// is expected to promise a stable order. RedirectURIs is backed by a
-// real slice in infra/memory, but a jsonb round trip through Postgres
-// is not guaranteed to preserve order either, so it is compared the
-// same (order-independent) way here to avoid over-constraining a
+// a map in the domain (client.Client iterates a Go map), so the
+// Postgres implementation is not expected to promise a stable order.
+// RedirectURIs is backed by a jsonb array in infra/postgres; a jsonb
+// round trip is not guaranteed to preserve order, so it is compared
+// the same (order-independent) way here to avoid over-constraining a
 // property the domain does not itself promise.
 func assertSameClient(t *testing.T, got, want *client.Client) {
 	t.Helper()

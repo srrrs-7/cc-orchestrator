@@ -84,11 +84,12 @@ WORKDIR    := --workdir /workspace/app/auth
 # deps/install phase exists in this Makefile that would need network).
 OFFLINE  := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools-offline
 # tools (network enabled) + compose.yml layered in, for test-integration
-# only (see DB_COMPOSE above).
-DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR) \
-	-e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
-	-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \
-	tools
+# only (see DB_COMPOSE above). Deliberately stops short of the service
+# name/command: `docker compose run [OPTIONS] SERVICE [COMMAND...]`
+# requires any `-e` flags to precede SERVICE (anything after it is
+# parsed as the in-container command instead) -- test-integration below
+# appends its per-invocation `-e DB_*` flags, then `tools`, itself.
+DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR)
 
 # Tool CLIs previously invoked as `go run <pkg>@<version>` (a separate
 # pinned version per stack Makefile). SPEC-009 Phase A found that `go
@@ -238,7 +239,10 @@ migrate-create: ## 新しい goose マイグレーションファイルを作成
 
 .PHONY: test-integration
 test-integration: ## infra/postgres + route の実 DB 統合テストを実行する (offline 不可。tools サービス + compose.yml の postgres へ接続。事前に app/migrator で DB 作成 + up 適用が必要)
-	$(DB_ONLINE) make test-integration-native
+	$(DB_ONLINE) \
+		-e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
+		-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \
+		tools make test-integration-native
 
 endif
 

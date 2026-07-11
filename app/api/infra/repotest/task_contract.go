@@ -6,11 +6,9 @@
 // implementation can be proven to behave identically without
 // duplicating test logic per-implementation.
 //
-// As of SPEC-011, infra/memory is being removed: the contract is
-// exercised solely against infra/postgres via the "integration" build
-// (see infra/postgres/task_repository_integration_test.go). The
-// infra/memory binding (infra/memory/task_repository_contract_test.go)
-// will be deleted alongside infra/memory in Phase 2.
+// SPEC-011 完了: infra/memory 削除済み。contract は Postgres
+// (integration)のみで実行される
+// (see infra/postgres/task_repository_integration_test.go).
 //
 // This file carries no build tag: it must remain compilable by both
 // the default (untagged) and "integration" builds, so it must not
@@ -42,11 +40,10 @@ type NewTaskRepository func(t *testing.T) task.Repository
 // SPEC-011 R3) for Save / FindByID / FindByTitle / ListPage.
 //
 // Deliberately NOT covered here (see docs/plans/SPEC-005-plan.md
-// §6.1 R-a): UNIQUE(title) enforcement. infra/memory silently allows
-// saving two distinct Tasks that share a Title, while a Postgres
-// UNIQUE constraint on tasks.title is expected to reject it. That
-// asymmetry is intentionally out of scope for a *shared* contract and
-// is instead verified by a Postgres-only test in infra/postgres.
+// §6.1 R-a): UNIQUE(title) enforcement. A Postgres UNIQUE constraint
+// on tasks.title rejects duplicate titles; that is verified by a
+// Postgres-only test in infra/postgres rather than in this shared
+// contract.
 func RunTaskRepositoryContract(t *testing.T, newRepo NewTaskRepository) {
 	t.Helper()
 
@@ -246,10 +243,7 @@ func longRuneString(n int) string {
 // want. CreatedAt/UpdatedAt are compared with microsecond truncation:
 // Postgres's timestamptz column has microsecond precision, while
 // Go's time.Now() carries nanoseconds, so an exact time.Time ==
-// comparison would spuriously fail once this contract is exercised
-// against a real database (it does not affect infra/memory today,
-// which never truncates, but keeps this file usable unmodified by
-// infra/postgres later).
+// comparison would spuriously fail against a real database.
 func assertSameTask(t *testing.T, got, want *task.Task) {
 	t.Helper()
 	if got.ID() != want.ID() {

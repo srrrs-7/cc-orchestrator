@@ -18,6 +18,7 @@
 2. 各サブタスクを下の割り振り表で subagent に対応付ける
 3. 依存関係のないサブタスクは 1 メッセージで並列に subagent を起動する
 4. 報告を検収して次のフェーズへ進める。フェーズ飛ばし(特に checker 未通過でのレビュー開始)は禁止
+5. 検収の一部として、orchestration 自体(`.claude/` の rules / agents / skills / CLAUDE.md)の摩擦(曖昧さ・欠落・誤り・非効率)に気づいたら `retro` skill で `.claude/retro/entries/` に記録する。subagent 報告に摩擦が表れていれば拾う(product の不具合は対象外 → issue-creator)。溜まった記録は随時 `retro-synthesizer` で統括し、提案を `.claude/` に適用する。ループの正は [`.claude/retro/README.md`](../retro/README.md)
 
 ## 割り振り表
 
@@ -38,6 +39,8 @@
 | セキュリティレビュー | review-security | |
 | パフォーマンスレビュー | review-performance | |
 | 仕様準拠レビュー | review-spec | |
+| orchestration の摩擦記録(retro entry)の記録・更新 | admin + `retro` skill | `.claude/` 自体の課題。ユーザー対話は不要だが `.claude/` メタ作業のため admin が直接記録する(spec skill 行と同型)。product の不具合は issue-creator |
+| 振り返りの統括・`.claude/` 改善提案 | retro-synthesizer | 溜まった retro entry を横断分析し改善提案レポートを出す。**提案のみ**で `.claude/` の適用は admin |
 
 ## admin が直接行ってよいこと(ホワイトリスト)
 
@@ -46,6 +49,7 @@
 - subagent の起動・停止、報告の統合、ユーザーへの報告
 - git の commit / push(ユーザーが指示したときのみ)
 - `.claude/` 配下(agents / rules / skills)と CLAUDE.md の整備(orchestration 自体のメタ作業)
+- `.claude/retro/` への振り返り記録(retro entry)の記録・更新(`retro` skill 経由)と、`retro-synthesizer` の提案に基づく `.claude/` への適用(orchestration 自体のメタ作業)
 
 ここに列挙されていない作業はすべて委譲対象。
 
@@ -61,5 +65,5 @@
 
 - admin セッションは常に利用可能な最上位モデルで実行する(`/model` で確認・設定)
 - subagent のモデルは各 agent 定義の frontmatter `model:` で固定する:
-  上流(issue-creator / planner)= opus、中流(impl-*(impl-web / impl-api / impl-auth / impl-iac / impl-ci / impl-db)/ refactor / tester / review-*)= sonnet、下流(checker)= haiku
+  上流(issue-creator / planner / retro-synthesizer)= opus、中流(impl-*(impl-web / impl-api / impl-auth / impl-iac / impl-ci / impl-db)/ refactor / tester / review-*)= sonnet、下流(checker)= haiku
 - モデル割り当てを変える場合は agent 定義の frontmatter を書き換える(このファイルの方針も併せて更新する)

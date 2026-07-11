@@ -26,7 +26,7 @@ paths:
 **ふるまい契約テストを実装ごとに二重化しない**。ドメインが定義する `Repository` を単一の正とし、`infra/repotest` パッケージに `Run<集約>RepositoryContract(t, newRepo)` を 1 つだけ書いて各実装のテストから呼ぶ:
 
 - `infra/postgres/<集約>_repository_integration_test.go` — `//go:build integration` タグ付きで実 DB に対して回す(`make test-integration`。実行契約の正は `.claude/rules/db.md`)
-- `infra/repotest` は標準ライブラリと対象ドメインパッケージ以外に依存しない(SPEC-011 以降 memory binding は削除。memory 実装自体も Phase 2 で削除)
+- `infra/repotest` は標準ライブラリと対象ドメインパッケージ以外に依存しない(SPEC-011 完了: infra/memory 削除済み。contract は Postgres(integration)のみで実行)
 
 **SPEC-011 route テストの 2 層構成**:
 - **untagged(オフライン、`make check` に載る)**: ストアを要しないエラー注入・入力バリデーション・wire-shape エラー系を test-local 最小スタブで回す
