@@ -18,6 +18,49 @@ terraform {
   }
 }
 
+locals {
+  # CSP for the web SPA (S3/default behavior). Intentionally strict: no inline
+  # scripts/styles, no unsafe-eval, no external origins. Adjust connect-src if
+  # the frontend calls third-party APIs in the future.
+  csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+}
+
+# ---------------------------------------------------------------------------
+# Response Headers Policy — web SPA security headers (default behavior only)
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudfront_response_headers_policy" "web_security" {
+  name    = "${var.name_prefix}-web-security"
+  comment = "Security headers for the web SPA (S3 default behavior). Not applied to /api/* or /auth/* ordered behaviors."
+
+  security_headers_config {
+    content_security_policy {
+      content_security_policy = local.csp
+      override                = true
+    }
+
+    content_type_options {
+      override = true
+    }
+
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = false
+      override                   = true
+    }
+  }
+}
+
 # ---------------------------------------------------------------------------
 # WAFv2 Web ACL (CLOUDFRONT scope; must be created via the us-east-1 region)
 # ---------------------------------------------------------------------------
@@ -199,6 +242,12 @@ resource "aws_cloudfront_distribution" "this" {
     compress               = true
 
     cache_policy_id = data.aws_cloudfront_cache_policy.caching_optimized.id
+
+    # Security headers (CSP, X-Content-Type-Options, X-Frame-Options, HSTS,
+    # Referrer-Policy) applied only to the web SPA responses. The /api/* and
+    # /auth/* ordered behaviors intentionally omit this policy so their own
+    # Content-Type / framing semantics are unaffected.
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.web_security.id
 
     # SPA fallback: rewrites extensionless client-side-route paths to
     # /index.html. Scoped to this behavior only, so /api/* and /auth/*

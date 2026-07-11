@@ -19,25 +19,33 @@ export function TaskFilters() {
   const navigate = useNavigate({ from: "/" });
 
   return (
-    <fieldset className="flex flex-wrap gap-2 border-0 p-0">
-      <legend className="sr-only">Task status filter</legend>
-      {STATUS_OPTIONS.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={status === option.value}
-          onClick={() =>
-            navigate({ search: (prev) => ({ ...prev, status: option.value, offset: 0 }) })
-          }
-          className={
-            status === option.value
-              ? "rounded bg-blue-600 px-3 py-1 text-sm text-white pointer-coarse:min-h-11 pointer-coarse:px-4"
-              : "rounded bg-gray-100 px-3 py-1 text-sm text-gray-700 hover:bg-gray-200 pointer-coarse:min-h-11 pointer-coarse:px-4"
-          }
-        >
-          {option.label}
-        </button>
-      ))}
-    </fieldset>
+    <section aria-labelledby="task-filters-heading" className="flex flex-col gap-2">
+      <h2 id="task-filters-heading" className="text-sm font-medium text-gray-700">
+        Filter by status
+      </h2>
+      <fieldset className="flex flex-wrap gap-2 border-0 p-0">
+        <legend className="sr-only">Task status filter</legend>
+        {STATUS_OPTIONS.map((option) => {
+          const isActive = status === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() =>
+                navigate({ search: (prev) => ({ ...prev, status: option.value, offset: 0 }) })
+              }
+              className={
+                isActive
+                  ? "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-white shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 pointer-coarse:min-h-11"
+                  : "rounded-full border border-border-subtle bg-surface px-4 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:border-gray-300 hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 pointer-coarse:min-h-11"
+              }
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </fieldset>
+    </section>
   );
 }

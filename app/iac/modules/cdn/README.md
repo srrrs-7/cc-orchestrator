@@ -37,6 +37,14 @@ CloudFront の behavior(strip Function 込み)が代替する。**`app/web/nginx
 Dockerfile(nginx ランタイム)はローカル `docker compose` 専用**であり、AWS デプロイでは
 一切使用しない。両者を混同しないこと(「AWS でも nginx コンテナが要る」という誤解を避ける)。
 
+## Web SPA のセキュリティヘッダー(Response Headers Policy)
+
+`aws_cloudfront_response_headers_policy.web_security`(`${var.name_prefix}-web-security`)を
+`default_cache_behavior`(S3/web SPA)にのみ関連付け、CSP・`X-Content-Type-Options: nosniff`・
+`X-Frame-Options: DENY`・`Strict-Transport-Security`・`Referrer-Policy` を全 SPA レスポンスに付与する。
+`/api/*` / `/auth/*` の ordered behaviors には意図的に適用しない(それぞれのバックエンドが独自の
+`Content-Type` や CORS ヘッダを返すため、上書きすると問題が生じる可能性があるため)。
+
 ## SPA フォールバックを CloudFront Function にし、`custom_error_response` を退けた理由
 
 CloudFront ディストリビューション全体に効く `custom_error_response`(403/404 → `/index.html`,

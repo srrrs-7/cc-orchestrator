@@ -1,6 +1,14 @@
-import { createRootRoute, createRoute, createRouter, useParams } from "@tanstack/react-router";
+import {
+  Link,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  useParams,
+} from "@tanstack/react-router";
 import { z } from "zod";
+import { Alert } from "../shared/ui/Alert";
 import { CreateTaskForm } from "../features/tasks/components/CreateTaskForm";
+import { TaskDetailSkeleton } from "../features/tasks/components/TaskDetailSkeleton";
 import { TaskFilters } from "../features/tasks/components/TaskFilters";
 import { TaskItem } from "../features/tasks/components/TaskItem";
 import { TaskList } from "../features/tasks/components/TaskList";
@@ -44,7 +52,7 @@ const rootRoute = createRootRoute({
 
 function TaskListPage() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 sm:gap-8">
       <TaskSummary />
       <CreateTaskForm />
       <TaskFilters />
@@ -58,25 +66,42 @@ function TaskDetailPage() {
   const { data, isLoading, isError, error } = useTaskQuery(taskId);
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading task...</p>;
+    return <TaskDetailSkeleton />;
   }
 
   if (isError) {
-    return (
-      <p role="alert" className="text-sm text-red-600">
-        Failed to load task: {error.message}
-      </p>
-    );
+    return <Alert>Failed to load task: {error.message}</Alert>;
   }
 
   if (data === undefined) {
-    return <p className="text-sm text-gray-500">Task not found.</p>;
+    return (
+      <div className="rounded-lg border border-dashed border-gray-300 bg-surface-muted px-4 py-10 text-center">
+        <p className="text-base font-medium text-gray-900">Task not found</p>
+        <p className="mt-1 text-sm text-gray-500">
+          The task may have been removed or the link is invalid.
+        </p>
+        <Link
+          to="/"
+          search={{ status: "all", limit: DEFAULT_LIMIT, offset: 0 }}
+          className="mt-4 inline-flex text-sm font-medium text-accent hover:text-accent-hover focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 pointer-coarse:min-h-11 pointer-coarse:items-center"
+        >
+          ← Back to task list
+        </Link>
+      </div>
+    );
   }
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <h1 className="break-words text-xl font-semibold">{data.title}</h1>
-      <TaskItem task={data} />
+      <Link
+        to="/"
+        search={{ status: "all", limit: DEFAULT_LIMIT, offset: 0 }}
+        className="inline-flex w-fit text-sm font-medium text-gray-600 hover:text-accent focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 pointer-coarse:min-h-11 pointer-coarse:items-center"
+      >
+        ← Back to task list
+      </Link>
+      <h1 className="break-words text-xl font-semibold text-gray-900 sm:text-2xl">{data.title}</h1>
+      <TaskItem task={data} showTimestamps />
     </div>
   );
 }

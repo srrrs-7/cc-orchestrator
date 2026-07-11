@@ -37,13 +37,14 @@ describe("/tasks/$taskId (TaskDetailPage, via the real router)", () => {
 
     // useTaskQuery's fetch is asynchronous even against MSW, so the
     // very first render is still in its isLoading state.
-    expect(await screen.findByText("Loading task...")).toBeInTheDocument();
+    expect(await screen.findByText("Loading task")).toBeInTheDocument();
 
     expect(
       await screen.findByRole("heading", { name: "Set up project scaffolding" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("status: done")).toBeInTheDocument();
-    expect(screen.getByText("priority: high")).toBeInTheDocument();
+    expect(screen.getByText("Done")).toBeInTheDocument();
+    expect(screen.getByText("High")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "← Back to task list" })).toBeInTheDocument();
   });
 
   it("shows an error message when the task does not exist (abnormal: 404)", async () => {
