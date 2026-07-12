@@ -1,7 +1,6 @@
 package route
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -115,8 +114,7 @@ func parseQueryInt(r *http.Request, name string) (*int, error) {
 // @Router       /tasks [post]
 func (h *taskHandler) create(w http.ResponseWriter, r *http.Request) {
 	var req createTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeBadRequest(w, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -137,9 +135,9 @@ func (h *taskHandler) create(w http.ResponseWriter, r *http.Request) {
 // @Security     BearerAuth
 // @Produce      json
 // @Param        limit   query     int  false  "Maximum number of tasks to return (default 20, max 100; values above 100 are clamped)"
-// @Param        offset  query     int  false  "Number of tasks to skip (default 0)"
+// @Param        offset  query     int  false  "Number of tasks to skip (default 0, max 10000)"
 // @Success      200  {object}  taskListResponse
-// @Failure      400  {object}  errorResponse  "limit or offset is not an integer, limit is less than 1, or offset is negative"
+// @Failure      400  {object}  errorResponse  "limit or offset is not an integer, limit is less than 1, offset is negative, or offset exceeds 10000"
 // @Failure      401  {object}  errorResponse  "missing or invalid Authorization header"
 // @Failure      500  {object}  errorResponse
 // @Router       /tasks [get]
@@ -260,8 +258,7 @@ func (h *taskHandler) changePriority(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
 	var req changePriorityRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeBadRequest(w, "invalid request body")
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 

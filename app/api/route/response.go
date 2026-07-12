@@ -12,6 +12,29 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
 )
 
+// maxBodyBytes is the upper bound on JSON request bodies accepted by
+// every decode path. Requests exceeding this are rejected with 413.
+const maxBodyBytes = 1 << 20 // 1 MiB
+
+// decodeJSONBody reads at most maxBodyBytes from r.Body and decodes
+// the JSON into dst. On success it returns true. On any read or parse
+// error it writes the appropriate HTTP response (413 for an oversized
+// body, 400 for all other decode failures) and returns false; the
+// caller must return immediately without writing a second response.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request body too large"})
+		} else {
+			writeBadRequest(w, "invalid request body")
+		}
+		return false
+	}
+	return true
+}
+
 // errorResponse is the JSON body returned for any failed request.
 type errorResponse struct {
 	Error string `json:"error" validate:"required"`

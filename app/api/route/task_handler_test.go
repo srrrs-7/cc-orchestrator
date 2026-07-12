@@ -215,6 +215,7 @@ func TestListTasks_InvalidQueryParams(t *testing.T) {
 		{name: "limit is zero (below the domain's minimum of 1)", query: "?limit=0"},
 		{name: "limit is negative", query: "?limit=-1"},
 		{name: "offset is negative", query: "?offset=-1"},
+		{name: "offset exceeds MaxOffset (ISSUE-025 D)", query: "?offset=10001"},
 		{name: "limit is a float, not an integer", query: "?limit=1.5"},
 	}
 
@@ -408,6 +409,51 @@ func assertWireShape(t *testing.T, body map[string]any, wantFields []string) {
 		if _, isString := v.(string); !isString {
 			t.Errorf("field %q = %T(%v), want a JSON string", f, v, v)
 		}
+	}
+}
+
+// TestOversizedBody_Returns413 verifies that POST /tasks and
+// POST /tasks/{id}/priority reject bodies larger than maxBodyBytes
+// with 413 Request Entity Too Large.
+func TestOversizedBody_Returns413(t *testing.T) {
+	// Build a body that exceeds the 1 MiB limit. We wrap it in a JSON
+	// string field so that it is syntactically valid JSON up to the
+	// point where MaxBytesReader cuts the read.
+	bigTitle := strings.Repeat("a", 1<<20+1) // 1 MiB + 1 byte
+	oversizedBody := `{"title":"` + bigTitle + `"}`
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			name:   "POST /tasks oversized body -> 413",
+			method: http.MethodPost,
+			path:   "/tasks",
+			body:   oversizedBody,
+		},
+		{
+			name:   "POST /tasks/{id}/priority oversized body -> 413",
+			method: http.MethodPost,
+			path:   "/tasks/some-id/priority",
+			body:   oversizedBody,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newIntegrationTestHandler(t)
+			rec := doRawRequest(t, h, tt.method, tt.path, tt.body)
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusRequestEntityTooLarge, rec.Body.String())
+			}
+			body := decodeError(t, rec)
+			if body.Error == "" {
+				t.Error("error response body is empty, want a message")
+			}
+		})
 	}
 }
 
