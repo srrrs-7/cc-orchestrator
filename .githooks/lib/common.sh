@@ -84,51 +84,54 @@ githooks_run_iac_check() {
 
 # Re-exec run-checks.sh inside ONE toolbox *phase* container.
 #
-# SPEC-013 R6 fix (review-security Major, 2026-07-11): the hook used to
-# re-exec its entire run (every staged stack's checks, DB-backed test
-# execution included) into a single network-enabled `tools` container.
-# That let `go test` -- which genuinely executes arbitrary dependency/test
-# code against a real Postgres, the highest-risk phase -- run with the
-# public internet reachable, defeating SPEC-013 R6's supply-chain intent
-# (install/deps stay network-enabled; *execution* of checked-out code
-# never does). CI's own `api`/`auth` jobs never had this gap (their `make
-# check` already splits into `tools-offline` then `tools-db` internally,
-# per app/{api,auth}/Makefile) -- only this hook's single-container
-# bundling did.
+# History / rationale:
 #
-# Fix: exactly two phases, each its OWN `docker compose run` (own
-# container -- a running container cannot change its own network profile
-# mid-lifetime, so true separation requires separate invocations, not a
-# single shared one):
+# SPEC-013 R6 (review-security Major, 2026-07-11): the hook used to
+# re-exec its entire run into a single network-enabled `tools` container,
+# letting `go test` (which executes arbitrary dependency code against a
+# real Postgres) run with the internet reachable. Fixed by splitting into
+# two separate `docker compose run` invocations so that `go test` only
+# runs in a no-internet container.
 #
-#   offline  -- service `tools` (network enabled, compose.tools.yml
-#               alone -- no `postgres` needed for anything in this
-#               phase). Everything that is either genuinely
-#               network-needing (web install, iac validate's provider
-#               fetch, `go mod download`/`bun install` warming) or does
-#               not execute dependency/test code with the internet
-#               reachable in the sense R6 is scoped to (fmt/lint/vet/
-#               build -- static analysis and compilation, not `go test`
-#               execution).
-#   db-test  -- service `tools-db` (dbnet: postgres-reachable, no
-#               internet route at all -- see compose.tools.yml's own
-#               comment on that service). ONLY app/api's/app/auth's own
-#               `test-native` (`go test`, the actual dependency-code-
-#               execution phase) runs here. Layers the sibling
-#               compose.yml on top so `postgres` resolves by name (same
-#               file combination as the root Makefile's own
-#               COMPOSE_DB_FILES/DB_TOOLS_RUN).
+# ISSUE-029 (2026-07-12): the two-phase split still left api/auth's own
+# fmt-check/lint/vet/build running in the network-enabled `tools` phase
+# alongside go mod download, creating an asymmetry vs. CI and direct
+# `make check` (which run those checks in tools-offline). Fixed by adding
+# a third phase so that static analysis also runs in tools-offline,
+# matching CI exactly.
 #
-# Named volumes (gomodcache/gobuild/buncache) persist across these two
-# separate invocations, so `db-test`'s `go test` still sees whatever
-# `offline`'s `go mod download` already warmed into them -- the same
-# cross-invocation caching CI itself already relies on (its own separate
-# "Warm Go module cache" step vs. "Check" step, in different containers).
+# Three phases, each its OWN `docker compose run` (a running container
+# cannot change its own network profile mid-lifetime, so true separation
+# requires separate invocations, not a single shared one):
+#
+#   warm          -- service `tools` (network enabled, compose.tools.yml
+#                   alone). Only genuinely network-needing work: `bun
+#                   install`/web check, iac validate's provider fetch,
+#                   `go mod download` warming for Go stacks, contract/
+#                   sqlc drift generation. Static analysis absent here
+#                   (ISSUE-029).
+#   offline-check -- service `tools-offline` (--network none / GOPROXY=
+#                   off). api/auth fmt-check+lint+vet+build; migrator
+#                   full check-native (fmt-check+lint+vet+build+test,
+#                   DB-free). Matches what CI and direct `make check`
+#                   already run in tools-offline (ISSUE-029 fix).
+#   db-test       -- service `tools-db` (dbnet: postgres-reachable, no
+#                   internet route at all -- SPEC-013 R6). ONLY api/auth
+#                   `test-native` (`go test` against a real Postgres).
+#                   Layers the sibling compose.yml on top so `postgres`
+#                   resolves by name.
+#
+# Named volumes (gomodcache/gobuild/buncache) persist across all three
+# invocations, so offline-check and db-test both see whatever warm's
+# `go mod download` already cached -- the same cross-invocation caching
+# CI already relies on (its "Warm Go module cache" step vs. "Check" step
+# run in different containers).
 #
 # `$1` = phase name (exported into the re-exec'd process as
 # GITHOOKS_PHASE, read by run-checks.sh's githooks_main to pick which of
-# githooks_run_offline_phase/githooks_run_db_test_phase to run).
-# `$2` = service (`tools` | `tools-db`).
+# githooks_run_warm_phase / githooks_run_offline_check_phase /
+# githooks_run_db_test_phase to run).
+# `$2` = service (`tools` | `tools-offline` | `tools-db`).
 githooks_reexec_phase() {
   local phase="$1"
   local service="$2"

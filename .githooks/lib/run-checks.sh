@@ -48,54 +48,52 @@ githooks_check_sqlc_drift() {
   fi
 }
 
-# SPEC-013 R6 fix: everything that either needs the network (web install,
-# iac validate's provider fetch, go module warming) or does not execute
-# dependency/test code with the internet reachable in the sense R6 is
-# scoped to (fmt/lint/vet/build -- static analysis and compilation, not
-# `go test` execution). Runs inside the `tools` (network-enabled) phase --
-# see common.sh's githooks_reexec_phase for why this is split from
-# githooks_run_db_test_phase below into two separate container
-# invocations. api/auth's own DB-backed `test-native` is deliberately NOT
-# called here; it runs only in githooks_run_db_test_phase, no-internet.
-githooks_run_offline_phase() {
+# ISSUE-029 / SPEC-009 R3 fix: three-phase split.
+#
+# Phase 1 (warm, service `tools`, network enabled): only work that
+# genuinely needs the network -- bun install, `go mod download`, iac
+# validate's provider fetch, swag/openapi/sqlc code generation that
+# follows a go-mod warm, bun-backed contract generation. Static analysis
+# (fmt/lint/vet/build) and migrator's own test are deliberately absent
+# here and instead run in the `offline-check` phase below, matching the
+# same tools-offline service that CI and direct `make check` already use.
+#
+# api/auth's own DB-backed `test-native` is absent from both this phase
+# and offline-check; it runs only in githooks_run_db_test_phase
+# (tools-db, no internet -- SPEC-013 R6).
+githooks_run_warm_phase() {
   local repo_root
   repo_root="$(githooks_repo_root)"
 
   if [[ "$NEED_WEB" == 1 ]]; then
-    githooks_log "web check..."
+    githooks_log "web check (warm + check in tools, network-enabled)..."
     make -C "$repo_root/app/web" "$(githooks_make_target install)" INSTALL_FLAGS=--frozen-lockfile
     make -C "$repo_root/app/web" "$(githooks_make_target check)"
   fi
 
   if [[ "$NEED_API" == 1 ]]; then
-    githooks_log "api offline check (fmt-check + lint + vet + build; DB test runs in a separate no-internet phase)..."
+    githooks_log "api: warming Go module cache (tools, network-enabled)..."
     githooks_warm_go_mod app/api
-    # fmt-check-native/lint-native/vet-native/build-native individually
-    # (not the bundled check-native, which for app/api also includes
-    # test-native -- see app/api/Makefile's own check-offline-native vs.
-    # check-native split): this phase must never run test-native, so it
-    # calls the four offline-only native targets by name instead of
-    # relying on either stack's own (inconsistently named -- api has
-    # check-offline-native, auth's check-native IS already offline-only)
-    # bundle target.
-    make -C "$repo_root/app/api" fmt-check-native lint-native vet-native build-native
+    # fmt-check/lint/vet/build run in offline-check phase (tools-offline).
   fi
 
   if [[ "$NEED_AUTH" == 1 ]]; then
-    githooks_log "auth offline check (fmt-check + lint + vet + build; DB test runs in a separate no-internet phase)..."
+    githooks_log "auth: warming Go module cache (tools, network-enabled)..."
     githooks_warm_go_mod app/auth
-    make -C "$repo_root/app/auth" fmt-check-native lint-native vet-native build-native
+    # fmt-check/lint/vet/build run in offline-check phase (tools-offline).
   fi
 
   if [[ "$NEED_IAC" == 1 ]]; then
-    githooks_log "iac check..."
+    githooks_log "iac check (tools, network-enabled -- validate needs provider fetch)..."
     githooks_run_iac_check "$repo_root"
   fi
 
   if [[ "$NEED_MIGRATOR" == 1 ]]; then
-    githooks_log "migrator check..."
+    githooks_log "migrator: warming Go module cache (tools, network-enabled)..."
     githooks_warm_go_mod app/migrator
-    make -C "$repo_root/app/migrator" "$(githooks_make_target check)"
+    # check-native (fmt-check+lint+vet+build+test) runs in offline-check
+    # phase (tools-offline). migrator tests are DB-free, so they are safe
+    # to run under GOPROXY=off once the module cache is warmed here.
   fi
 
   if [[ "$NEED_CONTRACT_DRIFT" == 1 ]]; then
@@ -108,6 +106,44 @@ githooks_run_offline_phase() {
 
   if [[ "$NEED_SQLC_AUTH" == 1 ]]; then
     githooks_check_sqlc_drift auth
+  fi
+}
+
+# ISSUE-029 / SPEC-009 R3 fix: Phase 2 (offline-check, service
+# `tools-offline`, --network none / GOPROXY=off): static analysis and
+# compilation for Go stacks, exactly matching what CI and direct `make
+# check` already run in tools-offline.
+#
+# For api/auth: only fmt-check/lint/vet/build -- NOT test-native; that
+# runs in githooks_run_db_test_phase (tools-db) because it needs a real
+# Postgres. For migrator: full check-native (fmt-check+lint+vet+build+
+# test) -- migrator tests are DB-free, so they run here under GOPROXY=off
+# once the module cache was warmed in the preceding warm phase.
+githooks_run_offline_check_phase() {
+  local repo_root
+  repo_root="$(githooks_repo_root)"
+
+  if [[ "$NEED_API" == 1 ]]; then
+    githooks_log "api offline check: fmt-check + lint + vet + build (tools-offline, --network none)..."
+    # Call the four offline-only native targets individually rather than
+    # check-offline-native or check-native: api/auth test-native is
+    # DB-backed and must only run in the db-test phase (tools-db).
+    make -C "$repo_root/app/api" fmt-check-native lint-native vet-native build-native
+  fi
+
+  if [[ "$NEED_AUTH" == 1 ]]; then
+    githooks_log "auth offline check: fmt-check + lint + vet + build (tools-offline, --network none)..."
+    make -C "$repo_root/app/auth" fmt-check-native lint-native vet-native build-native
+  fi
+
+  if [[ "$NEED_MIGRATOR" == 1 ]]; then
+    githooks_log "migrator check: fmt-check + lint + vet + build + test (tools-offline, --network none; ISSUE-029 Info)..."
+    # check-native = fmt-check+lint+vet+build+test. migrator tests are
+    # DB-free, so running them in tools-offline (GOPROXY=off, module cache
+    # pre-warmed in the preceding warm phase) satisfies both ISSUE-029's
+    # Info item (go test should also be internet-non-reachable) and
+    # SPEC-009 R6's spirit.
+    make -C "$repo_root/app/migrator" "$(githooks_make_target check)"
   fi
 }
 
@@ -172,16 +208,24 @@ githooks_main() {
     # reachability is a separate, already-accepted caveat (see
     # .githooks/README.md's own "Devcontainer" note).
     case "${GITHOOKS_PHASE:-}" in
-      offline)
+      warm)
         githooks_print_plan
-        githooks_run_offline_phase
+        githooks_run_warm_phase
+        ;;
+      offline-check)
+        githooks_run_offline_check_phase
         ;;
       db-test)
         githooks_run_db_test_phase
         ;;
       *)
+        # Devcontainer / direct IN_TOOLBOX=1 session: no container
+        # boundary to enforce network splits across, so run all three
+        # phases sequentially in this one session (same pre-existing
+        # caveat as before ISSUE-029 -- see README.md "Devcontainer").
         githooks_print_plan
-        githooks_run_offline_phase
+        githooks_run_warm_phase
+        githooks_run_offline_check_phase
         githooks_run_db_test_phase
         ;;
     esac
@@ -215,8 +259,23 @@ githooks_main() {
     make -C "$repo_root" migrate-test
   fi
 
-  githooks_reexec_phase offline tools
+  # Phase 1: warm (tools, network-enabled) -- go mod download / bun
+  # install / iac validate / web check / contract+sqlc drift. Always run
+  # when any stack is needed (even WEB-only or IAC-only stages reach here).
+  githooks_reexec_phase warm tools
 
+  # Phase 2: offline-check (tools-offline, --network none / GOPROXY=off)
+  # -- api/auth fmt-check+lint+vet+build, migrator full check-native.
+  # Skipped when only non-Go stacks (web / iac) are staged.
+  # ISSUE-029: this is the fix -- previously these ran in the network-
+  # enabled `tools` container alongside go mod download; now they run in
+  # the same tools-offline service CI and direct `make check` already use.
+  if [[ "$NEED_API" == 1 || "$NEED_AUTH" == 1 || "$NEED_MIGRATOR" == 1 ]]; then
+    githooks_reexec_phase offline-check tools-offline
+  fi
+
+  # Phase 3: db-test (tools-db, Postgres-reachable, no internet) -- api/
+  # auth `go test` only (SPEC-013 R6, unchanged).
   if [[ "$NEED_API" == 1 || "$NEED_AUTH" == 1 ]]; then
     githooks_reexec_phase db-test tools-db
   fi

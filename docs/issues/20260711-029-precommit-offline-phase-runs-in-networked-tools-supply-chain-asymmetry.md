@@ -1,10 +1,10 @@
 ---
 id: ISSUE-029
 title: "SPEC-013/SPEC-009: pre-commit hook の offline フェーズが network 有効な tools で実行される非対称性(供給網防御の一貫性)"
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-12
 specs: [SPEC-013, SPEC-009]  # 関連Spec ID
 ---
 
@@ -76,18 +76,27 @@ specs: [SPEC-013, SPEC-009]  # 関連Spec ID
 
 ### 対応方針
 
-**今回は対応しない。** 悪用にはコードを実行するフェーズが必要で、当該 offline フェーズ(fmt / lint / vet / build)はコードを実行しない。SPEC-013 の主目的(test フェーズの egress 遮断)は達成済み。供給網防御の一貫性強化の将来課題として本 Issue に記録する。将来案は以下。
+hook の two-phase 構成を **three-phase 構成に拡張**し、`go mod download`(warm)と静的解析(fmt-check/lint/vet/build)を別コンテナに分離する。
 
 ### 実施内容
 
-- [ ] Minor: hook の offline フェーズ内で依存 warm(`go mod download`)を済ませた後、`tools-offline`(no-network)へさらに切り替えて fmt-check / lint / vet / build を実行する。あるいは warm 専用フェーズを分離し、検査本体は一貫して `tools-offline` で回す。
-- [ ] Info: SPEC-009 R6 の適用範囲を「`go test` 実行**全般**はインターネット非到達」まで広げる方針を採るなら、`app/migrator` の hook 経由 test(DB 非依存)も `tools-offline` 等へ寄せる(R6 の見直しと併せて判断)。
+- [x] Minor: hook の `offline` フェーズを `warm`(tools, network-enabled)と `offline-check`(tools-offline, --network none)に分離。`go mod download` のみ warm で実行し、fmt-check / lint / vet / build は offline-check(tools-offline)で実行する。CI・直接 `make check` と同一環境が揃った。
+- [x] Info: `app/migrator` の hook 経由 `check-native`(fmt-check+lint+vet+build+test)も `offline-check`(tools-offline)へ移動。migrator テストは DB 非依存のため GOPROXY=off 環境(module cache は warm フェーズで事前充填)で問題なく実行できる。SPEC-009 R6「go test 実行もインターネット非到達」の精神を migrator にも適用。
 
 ### 再発防止
 
 該当なし(意図的な設計妥協の記録)。将来 SPEC-009 R3 / R6 の適用範囲を厳格化・見直しする際は、CI / 直接 `make check` / pre-commit hook の 3 経路で「非依存フェーズ = offline」「コード実行フェーズ = internet 非到達」が一貫することをチェックリスト化する。
 
 ## 5. 経緯(時系列・追記のみ)
+
+### 2026-07-12
+
+- 解消。`.githooks/lib/run-checks.sh` / `common.sh` / `detect-stacks.sh` / `README.md` を修正し、two-phase(offline / db-test)を three-phase(warm / offline-check / db-test)に拡張した。
+  - **warm フェーズ**(service `tools`, network 有効): `go mod download`(api / auth / migrator)、bun install + web check、iac check(validate はプロバイダ fetch が必要)、contract drift / sqlc drift 生成。静的解析はここから除外した。
+  - **offline-check フェーズ**(service `tools-offline`, `--network none` / `GOPROXY=off`): api / auth の fmt-check+lint+vet+build、migrator の check-native(fmt-check+lint+vet+build+test)。CI・直接 `make check` が使う `tools-offline` と一致した。
+  - **db-test フェーズ**(service `tools-db`, internet 非到達): api / auth の test-native(SPEC-013 R6, 変更なし)。
+- Minor・Info の両チェックボックスを解消済みにした。
+- 参照コミット: `fix: pre-commit hook offline-check phase to tools-offline (ISSUE-029)` (feat/auth-oidc-foundation)。
 
 ### 2026-07-11
 

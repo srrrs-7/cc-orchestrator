@@ -122,13 +122,13 @@ githooks_any_stack_needed() {
 
 githooks_print_plan() {
   githooks_log "checks to run:"
-  [[ "$NEED_WEB" == 1 ]] && githooks_log "  - web: make install + make check"
-  [[ "$NEED_API" == 1 ]] && githooks_log "  - api: fmt-check+lint+vet+build (offline) + test (api_test, no-internet phase, SPEC-013 R6)"
-  [[ "$NEED_AUTH" == 1 ]] && githooks_log "  - auth: fmt-check+lint+vet+build (offline) + test (auth_test, no-internet phase, SPEC-013 R6)"
-  [[ "$NEED_IAC" == 1 ]] && githooks_log "  - iac: make check"
-  [[ "$NEED_MIGRATOR" == 1 ]] && githooks_log "  - migrator: make check"
-  [[ "$NEED_CONTRACT_DRIFT" == 1 ]] && githooks_log "  - contract drift (make openapi + make generate)"
-  [[ "$NEED_SQLC_API" == 1 ]] && githooks_log "  - api sqlc drift (make sqlc)"
-  [[ "$NEED_SQLC_AUTH" == 1 ]] && githooks_log "  - auth sqlc drift (make sqlc)"
+  [[ "$NEED_WEB" == 1 ]] && githooks_log "  - web: install+check (warm/tools, network-enabled)"
+  [[ "$NEED_API" == 1 ]] && githooks_log "  - api: go mod download (warm/tools) + fmt-check+lint+vet+build (offline-check/tools-offline) + test (db-test/tools-db, no-internet, SPEC-013 R6)"
+  [[ "$NEED_AUTH" == 1 ]] && githooks_log "  - auth: go mod download (warm/tools) + fmt-check+lint+vet+build (offline-check/tools-offline) + test (db-test/tools-db, no-internet, SPEC-013 R6)"
+  [[ "$NEED_IAC" == 1 ]] && githooks_log "  - iac: check (warm/tools, network-enabled -- validate needs provider fetch)"
+  [[ "$NEED_MIGRATOR" == 1 ]] && githooks_log "  - migrator: go mod download (warm/tools) + check-native incl. test (offline-check/tools-offline, ISSUE-029)"
+  [[ "$NEED_CONTRACT_DRIFT" == 1 ]] && githooks_log "  - contract drift (make openapi + make generate, warm/tools)"
+  [[ "$NEED_SQLC_API" == 1 ]] && githooks_log "  - api sqlc drift (make sqlc, warm/tools)"
+  [[ "$NEED_SQLC_AUTH" == 1 ]] && githooks_log "  - auth sqlc drift (make sqlc, warm/tools)"
   return 0
 }
