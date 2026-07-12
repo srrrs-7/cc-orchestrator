@@ -242,23 +242,6 @@ githooks_main() {
   repo_root="$(githooks_repo_root)"
   githooks_export_versions_env "$repo_root"
 
-  # SPEC-013: app/api's/app/auth's own `test-native` is now test-DB-backed
-  # by default (api_test/auth_test, not the dev api/auth databases) -- see
-  # this repo's root Makefile `migrate-test` target and app/{api,auth}/
-  # Makefile's own `check`/`test`. Provision that Postgres + those two test
-  # databases on the HOST'S OWN Docker before either phase container
-  # starts: root `make db-up`/`make migrate-test` always shell out to
-  # `docker compose` themselves (unlike stack Makefiles' targets, they
-  # have no IN_TOOLBOX-guarded `-native` counterpart), so they cannot run
-  # nested inside a toolbox container -- they must run here, still on the
-  # host, exactly like CI's own `api`/`auth` jobs provision Postgres
-  # before their own `make check` step.
-  if [[ "$NEED_API" == 1 || "$NEED_AUTH" == 1 ]]; then
-    githooks_log "provisioning Postgres test databases (api_test/auth_test)..."
-    make -C "$repo_root" db-up
-    make -C "$repo_root" migrate-test
-  fi
-
   # Phase 1: warm (tools, network-enabled) -- go mod download / bun
   # install / iac validate / web check / contract+sqlc drift. Always run
   # when any stack is needed (even WEB-only or IAC-only stages reach here).
@@ -272,6 +255,21 @@ githooks_main() {
   # the same tools-offline service CI and direct `make check` already use.
   if [[ "$NEED_API" == 1 || "$NEED_AUTH" == 1 || "$NEED_MIGRATOR" == 1 ]]; then
     githooks_reexec_phase offline-check tools-offline
+  fi
+
+  # ISSUE-028 partial fix: provision Postgres AFTER offline checks pass.
+  # Previously db-up + migrate-test ran unconditionally before the warm
+  # phase, so a fmt-check/lint/vet/build failure still paid the full DB
+  # startup + migration cost.  Moving this block here means that if the
+  # offline-check phase above fails (set -euo pipefail + githooks_reexec_phase
+  # exits non-zero), we never start Postgres at all -- fail-fast restored.
+  # root `make db-up`/`make migrate-test` shell out to `docker compose`
+  # themselves (no IN_TOOLBOX-guarded `-native` counterpart), so they must
+  # run on the host; the ordering change is all that is needed here.
+  if [[ "$NEED_API" == 1 || "$NEED_AUTH" == 1 ]]; then
+    githooks_log "provisioning Postgres test databases (api_test/auth_test)..."
+    make -C "$repo_root" db-up
+    make -C "$repo_root" migrate-test
   fi
 
   # Phase 3: db-test (tools-db, Postgres-reachable, no internet) -- api/

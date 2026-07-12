@@ -393,6 +393,15 @@ jobs:
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/api tools go mod download
 
+      # ISSUE-028 §4 現象3 fix: run offline checks (fmt-check + lint + vet +
+      # build) BEFORE Postgres is provisioned. A format / lint / vet / build
+      # failure exits immediately without paying the db-up + migrate-test cost
+      # — restoring the fail-fast that was lost when SPEC-013 folded DB
+      # provisioning into this job. Each host-side target delegates into
+      # tools-offline (network_mode:none) via the app/api/Makefile wrapper.
+      - name: Offline check (fmt-check + lint + vet + build)
+        run: make fmt-check lint vet build
+
       # `make -C "$GITHUB_WORKSPACE" ...` (rather than relying on this
       # job's own `defaults.run.working-directory: app/api`) because
       # `db-up`/`migrate-test` are root Makefile targets, not app/api's.
@@ -420,10 +429,13 @@ jobs:
       # REQUIRE_DB=1 (SPEC-013 plan §1.5 admin ruling): the正規経路 for
       # DB-backed tests must fail loudly (t.Fatal), never silently t.Skip,
       # if the api_test connection is ever unavailable here.
-      - name: Check (fmt-check + lint + vet + build + test; api_test-backed)
+      # Offline checks (fmt-check + lint + vet + build) already ran in the
+      # "Offline check" step above; this step runs only the DB-backed tests
+      # (ISSUE-028 §4 現象3 fix: DB provisioning is now post-offline-check).
+      - name: DB tests (test-native; api_test-backed; REQUIRE_DB=1)
         env:
           REQUIRE_DB: "1"
-        run: make check
+        run: make test
 
   # ---------------------------------------------------------------------------
   # auth (Go) — identical toolchain/flow to api (including SPEC-013's
@@ -448,6 +460,13 @@ jobs:
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/auth tools go mod download
 
+      # ISSUE-028 §4 現象3 fix: same offline-first ordering as the api job
+      # above — fmt-check + lint + vet + build run before any Postgres
+      # provisioning so a static-analysis failure exits without paying the
+      # db-up + migrate-test cost.
+      - name: Offline check (fmt-check + lint + vet + build)
+        run: make fmt-check lint vet build
+
       - name: Start Postgres (root make db-up)
         run: make -C "$GITHUB_WORKSPACE" db-up
 
@@ -469,10 +488,12 @@ jobs:
             -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=auth_test -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
             tools go run ./cmd/migrator -target auth -command up -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
 
-      - name: Check (fmt-check + lint + vet + build + test; auth_test-backed)
+      # Offline checks already ran above; only DB-backed tests run here
+      # (ISSUE-028 §4 現象3 fix, mirroring the api job's split).
+      - name: DB tests (test-native; auth_test-backed; REQUIRE_DB=1)
         env:
           REQUIRE_DB: "1"
-        run: make check
+        run: make test
 
   # ---------------------------------------------------------------------------
   # iac (Terraform) — `make check ENV=dev` = fmt-check (root) + validate
