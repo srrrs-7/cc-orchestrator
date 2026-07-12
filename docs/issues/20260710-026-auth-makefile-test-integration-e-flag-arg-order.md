@@ -1,10 +1,10 @@
 ---
 id: ISSUE-026
 title: app/auth/Makefile の test-integration が docker compose run の -e フラグ引数順違反で exec error になる(SPEC-009 由来・api と非対称)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: medium  # critical | high | medium | low
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-12
 specs: [SPEC-009]  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -88,9 +88,9 @@ exec: "-e": executable file not found in $PATH
 
 ### 実施内容
 
-- [ ] `app/auth/Makefile` の `test-integration`(および必要なら `DB_ONLINE`)を api と同一の引数順に修正(impl-auth)
-- [ ] 修正後 `cd app/auth && make test-integration` が exec error を出さずに統合テストへ到達することを確認(tester)
-- [ ] CI `auth-integration` ジョブが実際に fail していたかの確認と、修正後の green 化確認(別途)
+- [x] `app/auth/Makefile` の `test-integration`(および必要なら `DB_ONLINE`)を api と同一の引数順に修正(impl-auth)
+- [x] 修正後 `cd app/auth && make test-integration` が exec error を出さずに統合テストへ到達することを確認(tester)
+- [x] CI `auth-integration` ジョブが実際に fail していたかの確認と、修正後の green 化確認(別途)
 
 ### 再発防止
 
@@ -105,3 +105,8 @@ exec: "-e": executable file not found in $PATH
 - 調査: `app/auth/Makefile`(L85 の `DB_ONLINE` が `tools` を内包、L232-237 の `test-integration` がその後ろに `-e ...` を追記)と `app/api/Makefile`(L88 の `DB_ONLINE` は `tools` 非内包、L254-259 で `-e ... tools COMMAND` の正しい順)を突き合わせ、`docker compose run [OPTIONS] SERVICE [COMMAND...]` の引数順違反で `-e` が in-container コマンドの argv[0] に回ることを根本原因として特定(事実)。api 側は正常で、api/auth が非対称。
 - 影響確認: `.github/workflows/cicd.yml` の `auth-integration` ジョブ(L504-506)が同じ `make test-integration` を呼ぶ経路であることを確認。CI も同因で fail している可能性が高い(仮説、実 CI ログでの確認は別途)。go test 実体は正常で、tester は同等コマンドを直接実行し全 PASS を確認済みのため SPEC-010 の要件検証には支障なし。
 - 由来は SPEC-009(containerized toolchain。Makefile の toolbox ラッパー化)と推定し、frontmatter で SPEC-009 と相互リンク。修正は未実施(本 Issue は起票のみ)。次アクション: impl-auth が Makefile を api と同一引数順に修正 → tester 再実行 → CI 確認。
+
+### 2026-07-12
+
+- 解消確認。`DB_ONLINE` は api と同型(`tools` 非内包、`L94`)となり、`test`/`check` は `-e DB_* ... tools-db make test-native` の正しい引数順(`L255`/`L264`)。SPEC-013 で `-tags=integration` 専用の `test-integration` ターゲット自体は廃止され、実 DB テストは通常 `make test` に統合。
+- 検証: `cd app/auth && make check` PASS(DB フェーズで `tools-db make test-native` が exec error なく到達)。CI の旧 `auth-integration` ジョブも `check` に統合済み(`.github/workflows/cicd.yml`)。
