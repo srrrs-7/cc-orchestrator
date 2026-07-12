@@ -1,7 +1,7 @@
 ---
 id: RETRO-003
 title: CLAUDE.md と rules/auth.md の概要記述が実装の進展(集約 7 パッケージ・auth 新機能・新 Makefile ターゲット)に追随せず陳腐化した
-status: open  # open | addressed | wontfix
+status: addressed  # open | addressed | wontfix
 severity: medium  # high(頻発・手戻り大 / タスクをブロック) | medium(回避したが非効率) | low(軽微)
 source: review-spec
 phase: orchestration  # spec | plan | test | impl | check | review | orchestration | other
@@ -54,3 +54,7 @@ tags: [doc-drift, missing-command, stale-summary]
 ### 2026-07-12(同種摩擦の再発: rules/api.md)
 
 - auth.md 修正の過程で **`.claude/rules/api.md` にも同種のより深い陳腐化**を発見: レイアウトセクションが「`internal/` にアプリケーションコード本体を置く」「`internal/user`, `internal/order` など」と記述していたが、実際の `app/api` はトップレベル `domain` / `service` / `infra` / `route` / `cmd` 構成で `internal/` は存在しない(CLAUDE.md・auth.md・copilot-instructions の記述とも矛盾していた)。SPEC-009/013 のコンテナ実行・実 test DB 注記も欠落していた。ユーザー指示「api.md も直して」により admin が同日修正(冒頭概要 + SPEC-015 リソースサーバー化・コマンド注記・実レイアウト反映)。**同種摩擦が 3 ファイル(CLAUDE.md / auth.md / api.md)にまたがった再発**であり、恒久策(検収時のドキュメント追随確認)の必要性を補強する。severity は medium を維持(いずれも直接ブロックはしていない)。
+
+### 2026-07-12(addressed へ遷移)
+
+- 是正がコミットされたため addressed に遷移: CLAUDE.md / `.claude/rules/auth.md` / `.claude/rules/api.md`(+ 本 entry の経緯)は `5b88480`、`.github/copilot-instructions.md`(同種ドリフトの隣接修正。impl-ci 実施)は `2fba5d3` に含まれてコミット済み。提案 1・2 は解消。**恒久策(提案 3: orchestration.md の検収チェックへのドキュメント追随確認の追加)は未適用のまま**であり、retro-synthesizer の統括対象として残る(RETRO-002 と同根のため統括での一括提案が適切)。なお `5b88480` / `2fba5d3` は新スタック `app/auth-web` を導入しており、更新直後の CLAUDE.md / orchestration.md 割り振り表が同スタックに未追随 = 本 entry と同種の摩擦が直ちに再発している(別 entry 化は同種のため行わず、ここに記録)。
