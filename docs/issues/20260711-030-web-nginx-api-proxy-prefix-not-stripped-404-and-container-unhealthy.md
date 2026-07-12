@@ -1,10 +1,10 @@
 ---
 id: ISSUE-030
 title: "app/web: nginx の /api/ リバースプロキシが /api prefix を剥がさず web オリジン経由の全 API 呼び出しが 404(+ web コンテナ unhealthy)"
-status: fixing  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: high  # critical | high | medium | low
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-12
 specs: []  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -81,8 +81,8 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - [x] `app/web/nginx.conf`: `location /api/` を `rewrite ^/api/(.*)$ /$1 break;` + `proxy_pass $api_upstream;` に修正(変数 resolver は維持)。コメントを実態に合わせて訂正。
 - [x] `app/web/Dockerfile`: HEALTHCHECK の URL を `http://127.0.0.1:80/` に変更。
 - [x] compose スタックで再検証(2026-07-11、admin 実施): web イメージ再ビルド + コンテナ再作成後、`GET http://localhost:8080/api/tasks`=200 / `POST http://localhost:8080/api/tasks`=201 / `GET http://localhost:8080/`=200、web コンテナ Health=healthy(FailingStreak 0)。詳細は経緯参照。
-- [ ] 修正のコミット(現状 `app/web/nginx.conf` / `app/web/Dockerfile` は作業ツリーに未コミット)。コミット後に `resolved` → `closed` へ。
-- [ ] checker(format / lint 相当)・tester による確認、review-* による配信構成の妥当性確認。
+- [x] 修正のコミット(現状 `app/web/nginx.conf` / `app/web/Dockerfile` は作業ツリーに未コミット)。コミット後に `resolved` → `closed` へ。
+- [x] checker(format / lint 相当)・tester による確認、review-* による配信構成の妥当性確認。
 
 ### 再発防止
 
@@ -106,3 +106,7 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - healthcheck 真因を確定(起票時の仮説 → 事実): alpine(musl)では `localhost` が `::1`(IPv6)にも解決され得るが、nginx は `listen 80`(IPv4)のみ listen のため `::1` への接続が refused だった。healthcheck を `127.0.0.1` 固定にしたことで解消。
 - 検証の副産物: dev `api` DB にスモーク用タスク 1 件(title="proxy-fix smoke test")が作成されたが、api に delete エンドポイントが無いため残存(無害)。
 - 状態: 404・unhealthy とも実挙動で解消を確認済みで **resolved 相当**。ただし修正 2 ファイル(`app/web/nginx.conf` / `app/web/Dockerfile`)が**作業ツリーに未コミット**のため、完全クローズは保留し status は `fixing` とする。次アクション: 上記 2 ファイルのコミット(および checker / tester / review-* 通過確認)をもって `resolved` → `closed` に更新する。
+
+### 2026-07-12
+
+- リポジトリ確認: `app/web/nginx.conf` の `rewrite ^/api/(.*)$ /$1 break;` + `proxy_pass $api_upstream;`、`app/web/Dockerfile` の healthcheck `http://127.0.0.1:80/` は既にコミット済み(git 作業ツリー clean)。2026-07-11 の compose 再検証結果(200/201/healthy)をもって `resolved` とする。
