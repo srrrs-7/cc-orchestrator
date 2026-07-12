@@ -89,3 +89,21 @@ func TestRevoke_AccessTokenHint_StillRevokesRefreshToken(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body=%q)", refresh.Code, http.StatusBadRequest, refresh.Body.String())
 	}
 }
+
+// TestRevoke_PublicClient_NoClientID_StillRevokes verifies that public
+// clients (RFC 6749 2.1) may revoke their own refresh tokens without
+// presenting client_id (RFC 7009 §2.1 optional for public clients).
+func TestRevoke_PublicClient_NoClientID_StillRevokes(t *testing.T) {
+	h := newTestHandler(t)
+	orig := issueTokens(t, h, "openid offline_access", "")
+
+	rec := doRevoke(t, h, orig.RefreshToken, "", "refresh_token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	refresh := doRefreshToken(t, h, orig.RefreshToken, testClientID, "")
+	if refresh.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (token must be revoked; body=%q)", refresh.Code, http.StatusBadRequest, refresh.Body.String())
+	}
+}

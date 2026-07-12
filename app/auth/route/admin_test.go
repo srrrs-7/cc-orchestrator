@@ -274,6 +274,63 @@ func TestAdmin_CreateClient_InvalidRedirectURI(t *testing.T) {
 	}
 }
 
+// TestAdmin_CreateClient_MissingClientID verifies that an empty
+// client_id is rejected with 400.
+func TestAdmin_CreateClient_MissingClientID(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	body := map[string]any{
+		"client_id":      "",
+		"redirect_uris":  []string{"https://example.com/callback"},
+		"allowed_scopes": []string{"openid"},
+		"response_types": []string{"code"},
+		"grant_types":    []string{"authorization_code"},
+	}
+	rec := doAdminCreateClient(t, h, testAdminKey, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestAdmin_CreateClient_DuplicateClientID_Upserts verifies that
+// creating a client with an existing client_id upserts idempotently
+// (returns 201 on both calls; current Writer.Save is ON CONFLICT DO UPDATE).
+func TestAdmin_CreateClient_DuplicateClientID_Upserts(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	body := map[string]any{
+		"client_id":      "dup-client",
+		"redirect_uris":  []string{"https://example.com/callback"},
+		"allowed_scopes": []string{"openid"},
+		"response_types": []string{"code"},
+		"grant_types":    []string{"authorization_code"},
+	}
+	first := doAdminCreateClient(t, h, testAdminKey, body)
+	if first.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d, want %d (body=%q)", first.Code, http.StatusCreated, first.Body.String())
+	}
+
+	second := doAdminCreateClient(t, h, testAdminKey, body)
+	if second.Code != http.StatusCreated {
+		t.Fatalf("duplicate create status = %d, want %d (body=%q)", second.Code, http.StatusCreated, second.Body.String())
+	}
+}
+
+// TestAdmin_CreateClient_MalformedJSON verifies that invalid JSON
+// bodies are rejected with 400.
+func TestAdmin_CreateClient_MalformedJSON(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/clients", bytes.NewReader([]byte("{not-json")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-Key", testAdminKey)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // User creation tests
 // ---------------------------------------------------------------------------

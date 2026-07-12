@@ -62,23 +62,30 @@ func sanitizedPendingQuery(r *http.Request) string {
 	return q.Encode()
 }
 
-// writeLoginRequiredRedirect redirects to redirectURI with
-// error=login_required per OIDC Core 3.1.2.6, used when prompt=none
-// but the resource owner has no active session.
-func writeLoginRequiredRedirect(w http.ResponseWriter, r *http.Request, redirectURI, state string) {
+// writeAuthorizeErrorRedirect redirects to redirectURI with the given
+// OAuth/OIDC error code per OIDC Core 3.1.2.6 (login_required,
+// consent_required, etc.). Used when prompt=none forbids interactive UI.
+func writeAuthorizeErrorRedirect(w http.ResponseWriter, r *http.Request, redirectURI, state, oauthErrorCode string) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
-		slog.Error("route: authorize: parse redirect uri for login_required", "error", err)
+		slog.Error("route: authorize: parse redirect uri for authorize error", "error", err, "error_code", oauthErrorCode)
 		writeJSON(w, http.StatusInternalServerError, oauthError{Error: "server_error"})
 		return
 	}
 	q := u.Query()
-	q.Set("error", "login_required")
+	q.Set("error", oauthErrorCode)
 	if state != "" {
 		q.Set("state", state)
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+// writeLoginRequiredRedirect redirects to redirectURI with
+// error=login_required per OIDC Core 3.1.2.6, used when prompt=none
+// but the resource owner has no active session.
+func writeLoginRequiredRedirect(w http.ResponseWriter, r *http.Request, redirectURI, state string) {
+	writeAuthorizeErrorRedirect(w, r, redirectURI, state, "login_required")
 }
 
 // handle parses the authorization request's query parameters,
@@ -204,6 +211,11 @@ func (h *authorizeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !hasConsent {
+		// prompt=none must not show the consent UI (OIDC Core 3.1.2.6).
+		if prompt == "none" {
+			writeAuthorizeErrorRedirect(w, r, verified.RedirectURI, req.State, "consent_required")
+			return
+		}
 		pendingID, saveErr := h.authn.SavePendingAuthorize(r.Context(), sanitizedPendingQuery(r))
 		if saveErr != nil {
 			slog.Error("route: authorize: save pending consent", "error", saveErr)

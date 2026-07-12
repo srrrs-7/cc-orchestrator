@@ -24,6 +24,19 @@ func TestToken_AuthorizationCode_IssuesRefreshToken(t *testing.T) {
 	}
 }
 
+// TestToken_AuthorizationCode_NoOfflineAccess_NoRefreshToken verifies
+// ISSUE-038: refresh_token is only issued when offline_access scope
+// was granted. Without it the token response must omit refresh_token.
+func TestToken_AuthorizationCode_NoOfflineAccess_NoRefreshToken(t *testing.T) {
+	h := newTestHandler(t)
+
+	got := issueTokens(t, h, "openid profile email", "")
+
+	if got.RefreshToken != "" {
+		t.Errorf("refresh_token = %q, want empty when offline_access scope was not granted", got.RefreshToken)
+	}
+}
+
 // TestRefreshToken_Success_IssuesNewAccessAndIDToken covers R1
 // (accept grant_type=refresh_token), R3 (access/ID token reissue: iss/
 // sub/aud unchanged, a fresh iat, no nonce) and R4 (the refresh_token

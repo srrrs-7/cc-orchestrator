@@ -226,6 +226,79 @@ func TestAuthorize_PromptNone_WithSession_Succeeds(t *testing.T) {
 	}
 }
 
+// TestAuthorize_PromptNone_NoConsent_ConsentRequired verifies that when
+// prompt=none is requested and the user is authenticated but has not
+// granted consent, the server redirects to the client with
+// error=consent_required (OIDC Core 3.1.2.6) rather than /consent.
+func TestAuthorize_PromptNone_NoConsent_ConsentRequired(t *testing.T) {
+	h := newTestHandler(t)
+	verifier := strings.Repeat("A", 43)
+	session := loginSession(t, h)
+
+	rec := doAuthorizeWithSession(t, h, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {testClientID},
+		"redirect_uri":          {testRedirectURI},
+		"scope":                 {"openid profile"},
+		"state":                 {"none-consent"},
+		"code_challenge":        {pkceChallenge(verifier)},
+		"code_challenge_method": {"S256"},
+		"prompt":                {"none"},
+	}, session)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if strings.HasSuffix(loc.Path, "/consent") {
+		t.Errorf("Location = %q, must redirect to client redirect_uri (not /consent)", loc.String())
+	}
+	if got := loc.Query().Get("error"); got != "consent_required" {
+		t.Errorf("error = %q, want %q", got, "consent_required")
+	}
+	if got := loc.Query().Get("state"); got != "none-consent" {
+		t.Errorf("state = %q, want %q", got, "none-consent")
+	}
+}
+
+// TestAuthorize_PromptNone_MaxAgeExceeded_LoginRequired verifies that
+// prompt=none with max_age exceeded redirects to the client with
+// error=login_required instead of /login (OIDC Core 3.1.2.6).
+func TestAuthorize_PromptNone_MaxAgeExceeded_LoginRequired(t *testing.T) {
+	h := newTestHandler(t)
+	verifier := strings.Repeat("A", 43)
+	session := loginSession(t, h)
+
+	rec := doAuthorizeWithSession(t, h, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {testClientID},
+		"redirect_uri":          {testRedirectURI},
+		"scope":                 {"openid"},
+		"state":                 {"none-maxage"},
+		"code_challenge":        {pkceChallenge(verifier)},
+		"code_challenge_method": {"S256"},
+		"prompt":                {"none"},
+		"max_age":               {"0"},
+	}, session)
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if strings.HasSuffix(loc.Path, "/login") {
+		t.Errorf("Location = %q, must redirect to client redirect_uri (not /login)", loc.String())
+	}
+	if got := loc.Query().Get("error"); got != "login_required" {
+		t.Errorf("error = %q, want %q", got, "login_required")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // max_age tests
 // ---------------------------------------------------------------------------
