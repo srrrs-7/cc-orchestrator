@@ -1,10 +1,10 @@
 ---
 id: ISSUE-027
 title: Go を 1.26 に bump(全スタック横断・pin 箇所が ~8 箇所に分散)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-12
 specs: [SPEC-009]  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -113,3 +113,14 @@ specs: [SPEC-009]  # 関連Spec ID (例: [SPEC-002])
 ### 2026-07-10
 
 - 起票。プロジェクトの Go バージョン currency 見直しにあたり、Go 1.24 の pin が単一ソース化されておらず bump に横断編集が要る点を課題として起票。起票にあたり repo を grep / read で検証し、bump 対象(`versions.env` / 各 `go.mod` / 各 app `Dockerfile` / `docker/toolchain/Dockerfile` の `ARG` 既定値 / dependabot コメント)と現状値(すべて 1.24)、および 3 つの確認事項(golangci-lint 2.12.2 の 1.26 対応可否=最大の不確定要素 / sqlc の `GOTOOLCHAIN=auto` 回避策撤去可否 / goimports pin の更新余地)を確認・記載。severity は **low**(現状 1.24 で正常稼働し機能破壊なし、予防的アップグレード / 技術的負債の解消のため)と判定。SPEC-009(コンテナ化 toolchain。`versions.env` / `docker/toolchain` の所有 Spec)と相互リンク。実装は本 Issue では未着手(ドキュメント作成のみ)。
+
+### 2026-07-12
+
+- **解決完了**。feat/auth-oidc-foundation ブランチで全 bump が実施済み。検証結果:
+  1. `.devcontainer/toolchain/Dockerfile` の `ARG GO_VERSION` デフォルト値が 1.26、かつコメント(l.219-220)で「sqlc は go≥1.26.0 を要求し、このイメージの pinned `GO_VERSION`(versions.env)と合致。**GOTOOLCHAIN override は不要**」と記載 → **GOTOOLCHAIN=auto 回避策は既に撤去完了**
+  2. `.github/dependabot.yml` の toolchain 追跡コメント(l.82-83)が「`ARG GO_VERSION=1.26`」と更新済み
+  3. **db 環境での検証**: `make db-up && make migrate-test` で api_test / auth_test DB 作成 → `REQUIRE_DB=1` で:
+     - `app/api` の `make check`(fmt-check / lint / vet / build / test + DB 依存テスト) → **pass**
+     - `app/auth` の `make check`(fmt-check / lint / vet / build / test + DB 依存テスト) → **pass**
+     - `app/migrator` の `make check`(fmt-check / lint / vet / build / test) → **pass**
+  - 全 go.mod / Dockerfile(api / auth / migrator)/ dependabot コメント / toolchain `ARG` デフォルト値が 1.26 へ統一。golangci-lint 2.12.2 は Go 1.26 に対応し lint エラーなし。**技術的負債(GOTOOLCHAIN=auto 回避策)が解消**され、ビルド・test・lint の全経路で Go 1.26 が安定稼働。
