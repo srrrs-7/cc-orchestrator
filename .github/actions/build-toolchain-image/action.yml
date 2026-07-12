@@ -51,9 +51,13 @@ runs:
     # from drifting apart (docs/plans/SPEC-009-plan.md's "versions.env の設計"
     # note: this one file is meant to be readable by a shell, GitHub Actions,
     # docker compose, and make alike).
+    # `$GITHUB_ENV`'s file-command parser only accepts `KEY=value` lines and
+    # rejects comments/blank lines with "Invalid format" (versions.env's own
+    # header is a multi-line `#` comment block, so a plain `cat` here fails
+    # immediately) -- grep out only the `KEY=value` lines before appending.
     - name: Load versions.env
       shell: bash
-      run: cat "${{ github.workspace }}/.devcontainer/versions.env" >> "$GITHUB_ENV"
+      run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${{ github.workspace }}/.devcontainer/versions.env" >> "$GITHUB_ENV"
 
     # Build-arg list mirrors compose.tools.yml's `x-tools-base.build.args`
     # exactly (same 10 keys, same versions.env source that anchor itself

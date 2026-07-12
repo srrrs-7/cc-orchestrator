@@ -3,8 +3,8 @@ id: SPEC-009
 title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要・サプライチェーン対策)
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
-updated: 2026-07-11
-issues: [ISSUE-026, ISSUE-027, ISSUE-029, ISSUE-054]  # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-13
+issues: [ISSUE-026, ISSUE-027, ISSUE-029, ISSUE-054, ISSUE-055]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -164,3 +164,9 @@ supersedes: null # 置き換える旧Spec ID
 - SPEC-013 T8 の review-security 再検証で、**R3 のオフライン原則からの部分的後退**を検出し **ISSUE-029** として起票・相互リンク(frontmatter `issues` に追記)。内容: SPEC-013 の Major 修正(pre-commit hook の `go test` フェーズを `tools-db`=internet 非到達へ移して egress Major を解消)後も、**hook 経路の offline フェーズ(api/auth の fmt-check/lint/vet/build)は `tools`(network 有効)で実行される**一方、CI・直接 `make check` は `tools-offline`(`--network none`)で実行する非対称性が残る(R3「非依存フェーズは全てオフライン」からの部分的後退。fmt/lint/vet/build はコード非実行のため悪用可能性は低い)。原因は hook の `go mod download` warm を同一コンテナで済ませる設計妥協。
 - 関連 Info: `app/migrator` の hook 経由 test(SPEC-013 以前からの既存挙動・DB 非依存)が network 有効な `tools` で走る。R6 を「`go test` 全般は internet 非到達」へ広げるなら migrator も `tools-offline` へ寄せる見直し余地。
 - severity low・今回は対応せず、R3/R6 の一貫性強化の将来課題として記録。本 SPEC 側は**相互リンクのみ**(将来対応時は impl-ci)。
+
+### 2026-07-13(追記: ISSUE-055 起票 — Phase C composite action の versions.env 読み込み不具合)
+
+- Phase C で導入した共有 composite action `.github/actions/build-toolchain-image/action.yml` の「Load versions.env」step が `cat versions.env >> "$GITHUB_ENV"` を実行しており、`$GITHUB_ENV` が受け付けない**コメント行・空行**(`.devcontainer/versions.env` 1 行目〜のコメントブロック)ごと流し込むため、全 `make <target>` ジョブが `Error: Invalid format '# versions.env — ...'` で失敗する severity critical の不具合を **ISSUE-055** として起票・相互リンク(frontmatter `issues` に追記)。
+- 付随して `.devcontainer/versions.env` 7 行目のヘッダーコメントが、動かない消費方法 `cat .devcontainer/versions.env >> "$GITHUB_ENV"` を「GitHub Actions からの読み方」として案内していた(実装ミスを誘発)ことも判明。GitHub Actions からの消費は `KEY=value` 行のみを抽出する必要がある点を versions.env / action 双方に反映する。
+- 対応は impl-ci(`KEY=value` 行のみ抽出する形へ action を修正 + versions.env ヘッダーコメント追随)。本 SPEC 側は**相互リンクのみ**。詳細は `docs/issues/20260713-055-ci-toolchain-action-versions-env-github-env-comment-lines.md`。
