@@ -70,7 +70,7 @@ func NewRouter(
 	mux.HandleFunc("GET /.well-known/jwks.json", discovery.jwks)
 
 	if introspectSvc != nil {
-		introspect := &introspectHandler{svc: introspectSvc}
+		introspect := &introspectHandler{svc: introspectSvc, clients: clients}
 		mux.HandleFunc("POST /introspect", introspect.handle)
 	}
 

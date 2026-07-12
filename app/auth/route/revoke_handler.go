@@ -11,8 +11,7 @@ type revokeHandler struct {
 }
 
 func (h *revokeHandler) handle(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		writeJSON(w, http.StatusBadRequest, oauthError{Error: "invalid_request"})
+	if !parseFormBody(w, r) {
 		return
 	}
 

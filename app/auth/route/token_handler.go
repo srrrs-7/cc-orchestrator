@@ -25,9 +25,8 @@ type tokenHandler struct {
 //   - client_secret_post:  client_id + client_secret in the POST body
 //   - none (public):       client_id in the POST body, no secret
 func (h *tokenHandler) handle(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		setTokenNoCacheHeaders(w)
-		writeBadRequest(w, "malformed form body")
+	setTokenNoCacheHeaders(w)
+	if !parseFormBody(w, r) {
 		return
 	}
 

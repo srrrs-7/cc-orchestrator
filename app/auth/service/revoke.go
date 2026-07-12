@@ -36,23 +36,29 @@ func (s *AuthorizationService) Revoke(ctx context.Context, req RevokeRequest) er
 		return fmt.Errorf("service: revoke: %w", err)
 	}
 
-	if req.ClientID != "" {
-		cid, err := client.ParseClientID(req.ClientID)
-		if err != nil {
+	tokenClientID, err := client.ParseClientID(rt.ClientID().String())
+	if err != nil {
+		return nil
+	}
+	c, err := s.clients.FindByID(ctx, tokenClientID)
+	if err != nil {
+		return nil
+	}
+
+	if c.IsConfidential() {
+		// RFC 7009 §2.1: confidential clients MUST authenticate at revoke.
+		presentedCID, parseErr := client.ParseClientID(req.ClientID)
+		if req.ClientID == "" || parseErr != nil ||
+			presentedCID.String() != tokenClientID.String() ||
+			!c.VerifySecret(req.ClientSecret) {
 			return nil
 		}
-		c, err := s.clients.FindByID(ctx, cid)
-		if err != nil {
+	} else if req.ClientID != "" {
+		presentedCID, parseErr := client.ParseClientID(req.ClientID)
+		if parseErr != nil {
 			return nil
 		}
-		// Confidential client authentication (ISSUE-035): RFC 7009 §2.1
-		// requires the client to authenticate if it is confidential.
-		// Per RFC 7009 §2.2, the AS SHOULD treat an auth failure the same
-		// as an invalid token (return success to not leak information).
-		if c.IsConfidential() && !c.VerifySecret(req.ClientSecret) {
-			return nil
-		}
-		if err := rt.MatchesClient(refreshtoken.NewClientID(cid.String())); err != nil {
+		if err := rt.MatchesClient(refreshtoken.NewClientID(presentedCID.String())); err != nil {
 			return nil
 		}
 	}

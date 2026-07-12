@@ -1,7 +1,7 @@
 package route
 
 import (
-	"encoding/json"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -66,13 +66,14 @@ type createUserResponse struct {
 //   - X-Admin-Key: <key>
 //
 // The check is fail-closed: if apiKey is empty (ADMIN_API_KEY not
-// set), every request is rejected with 401. Timing behaviour is
-// a constant-time comparison via subtle only when the lengths match,
-// which is sufficient for a fixed-entropy static API key.
+// set), every request is rejected with 401. Comparison uses
+// crypto/subtle.ConstantTimeCompare to avoid timing leaks.
 func requireAdminAuth(apiKey string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented := extractAdminKey(r)
-		if apiKey == "" || presented != apiKey {
+		if apiKey == "" ||
+			len(presented) != len(apiKey) ||
+			subtle.ConstantTimeCompare([]byte(presented), []byte(apiKey)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="admin"`)
 			writeJSON(w, http.StatusUnauthorized, adminError{
 				Error:            "unauthorized",
@@ -101,11 +102,7 @@ func extractAdminKey(r *http.Request) string {
 // confidential), and delegates to AdminService.CreateClient.
 func (h *adminHandler) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 	var req createClientRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, adminError{
-			Error:            "invalid_request",
-			ErrorDescription: "request body must be valid JSON",
-		})
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 
@@ -160,11 +157,7 @@ func (h *adminHandler) handleCreateClient(w http.ResponseWriter, r *http.Request
 // password via user.New), and delegates to AdminService.CreateUser.
 func (h *adminHandler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req createUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, adminError{
-			Error:            "invalid_request",
-			ErrorDescription: "request body must be valid JSON",
-		})
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 

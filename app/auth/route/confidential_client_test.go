@@ -346,6 +346,48 @@ func TestConfidentialClient_RefreshToken_Failure_WrongSecret(t *testing.T) {
 	}
 }
 
+// TestRevoke_ConfidentialClient_NoClientID_DoesNotRevoke verifies RFC 7009
+// §2.1: a confidential client's refresh token cannot be revoked without
+// client authentication (returns 200 but leaves the token valid).
+func TestRevoke_ConfidentialClient_NoClientID_DoesNotRevoke(t *testing.T) {
+	h := newConfidentialTestHandler(t)
+
+	verifier := strings.Repeat("H", 43)
+	code := issueConfAuthCode(t, h, "openid offline_access", verifier)
+
+	tokenRec := doToken(t, h, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {testConfRedirectURI},
+		"client_id":     {testConfClientID},
+		"client_secret": {testConfSecret},
+		"code_verifier": {verifier},
+	})
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token exchange status = %d, want %d (body=%q)", tokenRec.Code, http.StatusOK, tokenRec.Body.String())
+	}
+	tokenBody := decodeTokenResponse(t, tokenRec)
+	if tokenBody.RefreshToken == "" {
+		t.Fatal("setup: refresh_token is empty")
+	}
+
+	rec := doRevoke(t, h, tokenBody.RefreshToken, "", "refresh_token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("revoke status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	refreshRec := doToken(t, h, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {tokenBody.RefreshToken},
+		"client_id":     {testConfClientID},
+		"client_secret": {testConfSecret},
+	})
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh after unauthenticated revoke status = %d, want %d (token must remain valid; body=%q)",
+			refreshRec.Code, http.StatusOK, refreshRec.Body.String())
+	}
+}
+
 // TestPublicClient_Token_StillWorks confirms that public clients
 // (no client_secret registered) continue to work without any secret,
 // verifying that ISSUE-035 does not regress the existing behavior.

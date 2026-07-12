@@ -316,9 +316,16 @@ func TestAuthorize_MaxAge_Zero_RedirectsToLogin(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // doIntrospect sends a POST /introspect request with the given token.
-func doIntrospect(t *testing.T, h http.Handler, token string) *httptest.ResponseRecorder {
+// clientID (and clientSecret when needed) authenticate the caller per RFC 7662 §2.1.
+func doIntrospect(t *testing.T, h http.Handler, token, clientID, clientSecret string) *httptest.ResponseRecorder {
 	t.Helper()
 	form := url.Values{"token": {token}}
+	if clientID != "" {
+		form.Set("client_id", clientID)
+	}
+	if clientSecret != "" {
+		form.Set("client_secret", clientSecret)
+	}
 	req := httptest.NewRequest(http.MethodPost, "/introspect", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
@@ -354,7 +361,7 @@ func TestIntrospect_ValidAccessToken_Active(t *testing.T) {
 		t.Fatal("setup: access_token is empty")
 	}
 
-	rec := doIntrospect(t, h, accessToken)
+	rec := doIntrospect(t, h, accessToken, testClientID, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -379,7 +386,7 @@ func TestIntrospect_ValidAccessToken_Active(t *testing.T) {
 func TestIntrospect_InvalidToken_Inactive(t *testing.T) {
 	h := newTestHandler(t)
 
-	rec := doIntrospect(t, h, "not.a.real.jwt")
+	rec := doIntrospect(t, h, "not.a.real.jwt", testClientID, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -394,7 +401,7 @@ func TestIntrospect_InvalidToken_Inactive(t *testing.T) {
 func TestIntrospect_EmptyToken_Inactive(t *testing.T) {
 	h := newTestHandler(t)
 
-	rec := doIntrospect(t, h, "")
+	rec := doIntrospect(t, h, "", testClientID, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -416,13 +423,28 @@ func TestIntrospect_IDToken_Inactive(t *testing.T) {
 		t.Fatal("setup: id_token is empty")
 	}
 
-	rec := doIntrospect(t, h, idToken)
+	rec := doIntrospect(t, h, idToken, testClientID, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := decodeIntrospectionBody(t, rec)
 	if body.Active {
 		t.Error("active = true for an ID token, want false (aud mismatch: ID token aud=client_id, not apiAudience)")
+	}
+}
+
+// TestIntrospect_NoClientAuth_Unauthorized verifies RFC 7662 §2.1: the
+// introspection endpoint rejects unauthenticated callers.
+func TestIntrospect_NoClientAuth_Unauthorized(t *testing.T) {
+	h := newTestHandler(t)
+
+	rec := doIntrospect(t, h, "any-token", "", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+	got := decodeErrorBody(t, rec)
+	if got.Error != "invalid_client" {
+		t.Errorf("error = %q, want %q", got.Error, "invalid_client")
 	}
 }
 
