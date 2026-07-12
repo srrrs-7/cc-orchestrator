@@ -1,7 +1,7 @@
 ---
 id: ISSUE-039
 title: app/auth クライアント / ユーザー管理 API(seed 以外の登録・更新)
-status: open
+status: resolved
 severity: medium
 created: 2026-07-12
 updated: 2026-07-12
@@ -61,3 +61,8 @@ specs: []
 ### 2026-07-12
 
 - 起票。AUTH-002 ロードマップ Phase 4.1。
+
+### 2026-07-12 (resolved)
+
+- `POST /admin/clients` / `POST /admin/users` 管理 API。`ADMIN_API_KEY` 認証(fail-closed)。
+- 検証: `REQUIRE_DB=1 make -C app/auth check` 緑。

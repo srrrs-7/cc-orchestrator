@@ -20,3 +20,16 @@ type Repository interface {
 	FindByID(ctx context.Context, id UserID) (*User, error)
 	FindByUsername(ctx context.Context, username Username) (*User, error)
 }
+
+// Writer is the write-side persistence boundary for the User
+// aggregate, introduced by ISSUE-039 to support the admin management
+// API. It is kept separate from Repository (the read-only port) so
+// the composition root can wire each to the appropriate connection
+// pool.
+//
+// CreateUser upserts u (INSERT ... ON CONFLICT (id) DO UPDATE), so
+// calling it multiple times with the same UserID converges
+// idempotently on the latest state.
+type Writer interface {
+	CreateUser(ctx context.Context, u *User) error
+}

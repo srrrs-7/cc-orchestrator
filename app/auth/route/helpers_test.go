@@ -119,8 +119,9 @@ func newDiscoveryTestHandler(t *testing.T) http.Handler {
 	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer, testAPIAudience)
 	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
+	introspectSvc := service.NewIntrospectionService(verifier, testIssuer, testAPIAudience)
 	_ = username
-	return route.NewRouter(authSvc, authnSvc, consentSvc, nil, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, nil, userInfoSvc, discoverySvc, introspectSvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // newTokenErrorTestHandler builds a router for /token error-injection
@@ -248,8 +249,9 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	consentSvc := service.NewConsentService(consentRepo)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
+	introspectSvc := service.NewIntrospectionService(verifier, testIssuer, testAPIAudience)
 
-	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, introspectSvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // ---------------------------------------------------------------------------

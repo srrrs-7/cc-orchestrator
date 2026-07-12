@@ -125,7 +125,9 @@ func run() error {
 	// as authCodeRepo / refreshTokenRepo but typed as expiredPurger so
 	// the background purge ticker can call PurgeExpired (ISSUE-015,
 	// ISSUE-019) without exposing that method on the domain interface.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, authCodePurger, refreshTokenPurger, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
+	// clientWriter / userWriter back the admin management API (ISSUE-039)
+	// and are wired to the writer pool.
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, clientWriter, userWriter, authCodePurger, refreshTokenPurger, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -149,14 +151,27 @@ func run() error {
 	sessionStore := memory.NewIdPSessionStore()
 
 	// Wiring: infra -> application service -> presentation.
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, e.APIAudience)
 	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
 	consentSvc := service.NewConsentService(consentRepo)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
+	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer, e.APIAudience)
 	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
-	handler := route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, route.RouterConfig{
+	introspectSvc := service.NewIntrospectionService(verifier, e.Issuer, e.APIAudience)
+
+	// Admin service: nil when ADMIN_API_KEY is unset (fail-closed:
+	// no key → no admin routes registered, ISSUE-039).
+	var adminSvc *service.AdminService
+	if e.AdminAPIKey != "" {
+		adminSvc = service.NewAdminService(clientWriter, userWriter)
+		slog.Info("authz: admin API enabled")
+	} else {
+		slog.Warn("authz: ADMIN_API_KEY not set; admin routes disabled")
+	}
+
+	handler := route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, introspectSvc, adminSvc, route.RouterConfig{
 		Issuer:        e.Issuer,
 		SecureCookies: route.SecureCookiesFromIssuer(e.Issuer),
+		AdminAPIKey:   e.AdminAPIKey,
 	})
 
 	srv := &http.Server{
@@ -270,30 +285,32 @@ func buildKeyRingLoader(signingKeysFile string) token.KeyRingLoader {
 //   - authcode/refreshtoken (single-use tokens whose read-after-write
 //     correctness must not be exposed to replica lag) → writer pool
 //     for both reads and writes
+//   - clientWriter/userWriter (admin management API, ISSUE-039)
+//     → writer pool (admin writes must reach the primary)
 //
 // writerCfg/readerCfg are Env.writerConfig()/Env.readerConfig()
 // (SPEC-010): postgres.OpenPair opens a single shared *sql.DB when
 // readerCfg == writerCfg (the DB_READER_* -unset default) or two
 // independent pools otherwise.
 //
-// It returns the four repositories as their domain-declared interfaces,
-// two expiredPurger values for the background purge ticker
+// It returns the four read repositories, the two write ports for admin
+// management, two expiredPurger values for the background purge ticker
 // (authCodePurger, refreshTokenPurger -- the same concrete objects as
 // authCodeRepo/refreshTokenRepo, exposed through the infra-only
 // expiredPurger interface so the service layer remains unaware), and a
 // closePersistence func the caller MUST defer-call during shutdown to
 // release pooled connections.
-func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, expiredPurger, expiredPurger, func() error, string, error) {
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, client.Writer, user.Writer, expiredPurger, expiredPurger, func() error, string, error) {
 	noopClose := func() error { return nil }
 
 	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
 	if err != nil {
-		return nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
 	}
 	seededPassword, err := seedPostgres(ctx, writerDB, demoPassword)
 	if err != nil {
 		_ = closeFn()
-		return nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
 	}
 	// Reader pool: seeded, read-only-at-runtime aggregates.
 	clientRepo := postgres.NewClientRepository(readerDB)
@@ -303,11 +320,14 @@ func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config,
 	authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
 	consentRepo := postgres.NewConsentRepository(writerDB)
+	// Writer pool: admin management write ports (ISSUE-039).
+	clientWriter := postgres.NewClientWriter(writerDB)
+	userWriter := postgres.NewUserWriter(writerDB)
 	slog.Info("authz: persistence configured", "mode", "postgres")
 	// authCodeRepo and refreshTokenRepo are also returned as
 	// expiredPurger so the background purge ticker can call PurgeExpired
 	// without the domain interface needing to expose that method.
-	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, clientWriter, userWriter, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo

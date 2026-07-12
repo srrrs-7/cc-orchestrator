@@ -17,12 +17,25 @@ type RouterConfig struct {
 	// SecureCookies sets the Secure flag on IdP session cookies. Use true
 	// when ISSUER is https; local http compose must keep this false.
 	SecureCookies bool
+	// AdminAPIKey is the static API key that protects the /admin/*
+	// routes (ISSUE-039). When empty, admin routes are not registered
+	// (fail-closed: no key → no admin access).
+	AdminAPIKey string
 }
 
 // NewRouter builds the HTTP handler for the authorization server,
 // wiring each OAuth 2.0 / OIDC endpoint to its handler method. It
 // uses the Go 1.22+ http.ServeMux method-pattern syntax
 // ("METHOD /path").
+//
+// introspectSvc is optional (nil = no /introspect route). When non-nil,
+// POST /introspect is registered and the discovery metadata lists an
+// introspection_endpoint.
+//
+// adminSvc is optional (nil = no admin routes). Admin routes are only
+// registered when both adminSvc is non-nil and cfg.AdminAPIKey is
+// non-empty; either condition being absent suppresses the /admin
+// subtree entirely (fail-closed).
 func NewRouter(
 	authSvc *service.AuthorizationService,
 	authnSvc *service.AuthenticationService,
@@ -30,6 +43,8 @@ func NewRouter(
 	clients client.Repository,
 	userInfoSvc *service.UserInfoService,
 	discoverySvc *service.DiscoveryService,
+	introspectSvc *service.IntrospectionService,
+	adminSvc *service.AdminService,
 	cfg RouterConfig,
 ) http.Handler {
 	authorize := &authorizeHandler{svc: authSvc, authn: authnSvc, consent: consentSvc, issuer: cfg.Issuer, secureCookies: cfg.SecureCookies}
@@ -53,6 +68,20 @@ func NewRouter(
 	mux.HandleFunc("GET /userinfo", userInfo.handle)
 	mux.HandleFunc("GET /.well-known/openid-configuration", discovery.metadata)
 	mux.HandleFunc("GET /.well-known/jwks.json", discovery.jwks)
+
+	if introspectSvc != nil {
+		introspect := &introspectHandler{svc: introspectSvc}
+		mux.HandleFunc("POST /introspect", introspect.handle)
+	}
+
+	if adminSvc != nil && cfg.AdminAPIKey != "" {
+		admin := &adminHandler{svc: adminSvc, apiKey: cfg.AdminAPIKey}
+		withAuth := func(h http.HandlerFunc) http.Handler {
+			return requireAdminAuth(cfg.AdminAPIKey, http.HandlerFunc(h))
+		}
+		mux.Handle("POST /admin/clients", withAuth(admin.handleCreateClient))
+		mux.Handle("POST /admin/users", withAuth(admin.handleCreateUser))
+	}
 
 	return mux
 }

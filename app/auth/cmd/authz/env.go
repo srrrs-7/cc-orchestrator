@@ -18,10 +18,11 @@ import (
 // set DB_SSLMODE=disable explicitly (see compose.yml and this repo's
 // Makefiles, which already do so).
 const (
-	defaultPort    = "8080"
-	defaultIssuer  = "http://localhost:8080"
-	defaultDBPort  = "5432"
-	defaultSSLMode = "require"
+	defaultPort        = "8080"
+	defaultIssuer      = "http://localhost:8080"
+	defaultAPIAudience = "http://localhost:8081/api"
+	defaultDBPort      = "5432"
+	defaultSSLMode     = "require"
 )
 
 // Env holds every configuration value app/auth reads from the process
@@ -38,6 +39,11 @@ type Env struct {
 	Port   string
 	Issuer string
 
+	// APIAudience is the resource identifier placed in the "aud" claim of
+	// issued access tokens (ISSUE-037). app/api verifies its AUTH_AUDIENCE
+	// against this value. Defaults to defaultAPIAudience when unset.
+	APIAudience string
+
 	// SigningKeysFile is the path to the JSON key ring file produced by
 	// `make auth-signing-keys` (ISSUE-036). When empty, the process
 	// generates an ephemeral RSA key pair that does not survive restart
@@ -45,6 +51,11 @@ type Env struct {
 	SigningKeysFile string
 
 	DemoPassword string
+
+	// AdminAPIKey is the static Bearer token / X-Admin-Key value that
+	// protects the /admin/* routes (ISSUE-039). When empty, no admin
+	// routes are registered (fail-closed: missing key → no access).
+	AdminAPIKey string
 
 	DBHost     string
 	DBPort     string
@@ -87,8 +98,10 @@ func NewEnv() Env {
 	e := Env{
 		Port:            orDefault(os.Getenv("PORT"), defaultPort),
 		Issuer:          orDefault(os.Getenv("ISSUER"), defaultIssuer),
+		APIAudience:     orDefault(os.Getenv("API_AUDIENCE"), defaultAPIAudience),
 		SigningKeysFile: os.Getenv("SIGNING_KEYS_FILE"),
 		DemoPassword:    os.Getenv("DEMO_PASSWORD"),
+		AdminAPIKey:     os.Getenv("ADMIN_API_KEY"),
 
 		DBHost:     os.Getenv("DB_HOST"),
 		DBPort:     orDefault(os.Getenv("DB_PORT"), defaultDBPort),

@@ -111,8 +111,9 @@ func newConfidentialTestHandler(t *testing.T) http.Handler {
 	consentSvc := service.NewConsentService(consentRepo)
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
+	introspectSvc := service.NewIntrospectionService(verifier, testIssuer, testAPIAudience)
 
-	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, introspectSvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // issueConfAuthCode runs a successful /authorize for the confidential
