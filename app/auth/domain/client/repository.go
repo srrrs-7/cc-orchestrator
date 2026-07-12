@@ -18,4 +18,23 @@ import "context"
 // pool.
 type Repository interface {
 	FindByID(ctx context.Context, id ClientID) (*Client, error)
+	// ListAll returns every registered client ordered by id. An empty
+	// store yields a nil slice, not an error.
+	ListAll(ctx context.Context) ([]*Client, error)
+}
+
+// Writer is the write-side persistence boundary for the Client
+// aggregate, introduced by ISSUE-039 to support the admin management
+// API. It is kept separate from Repository (the read-only port) so
+// the composition root can wire each to the appropriate connection
+// pool (writer pool for writes, reader pool for reads).
+//
+// Save upserts c (INSERT ... ON CONFLICT DO UPDATE), so calling it
+// multiple times with the same ClientID converges idempotently on the
+// latest state rather than erroring on the second call.
+type Writer interface {
+	Save(ctx context.Context, c *Client) error
+	// DeleteClient removes c and any dependent consent, refresh-token, and
+	// authorization-code rows. Returns ErrNotFound when id is absent.
+	DeleteClient(ctx context.Context, id ClientID) error
 }

@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -21,7 +20,9 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/consent"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/refreshtoken"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/user"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/memory"
@@ -30,9 +31,28 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
 
+// expiredPurger is a local interface for the background purge goroutine.
+// Implemented by *postgres.AuthCodeRepository, *postgres.
+// RefreshTokenRepository, and *memory.IdPSessionStore. PurgeExpired is
+// an infra-layer GC concern, not a domain invariant, so it is
+// intentionally absent from the authcode/refreshtoken domain Repository
+// interfaces and from idpsession.Store (ISSUE-015, ISSUE-019,
+// ISSUE-044).
+type expiredPurger interface {
+	PurgeExpired(ctx context.Context) (int64, error)
+}
+
 const (
-	rsaKeyBits      = 2048
 	shutdownTimeout = 10 * time.Second
+
+	// purgeInterval is how often the background goroutine calls
+	// PurgeExpired on the authcode and refresh-token repositories, and
+	// on the IdP session store (ISSUE-015, ISSUE-019, ISSUE-044). 15
+	// minutes is a conservative default: authorization codes have a
+	// 10-minute TTL, refresh tokens a 24-hour TTL, and IdP sessions/
+	// pending-authorize entries a 24-hour/10-minute TTL, so all of these
+	// stay bounded in size even under load.
+	purgeInterval = 15 * time.Minute
 
 	// HTTP server timeouts. In particular, ReadHeaderTimeout bounds how
 	// long a client may take to send request headers, which mitigates
@@ -52,12 +72,13 @@ const (
 	// 2.1/2.2). They are documented in README.md. The RSA signing key
 	// and the demo user's password *are* secrets and are generated
 	// fresh at process startup instead (see run() / buildDemoUser()).
-	demoClientID    = "demo-client"
-	demoRedirectURI = "http://localhost:3000/callback"
-	demoUsername    = "demo-user"
-	demoUserID      = "demo-user-id"
-	demoUserName    = "Demo User"
-	demoUserEmail   = "demo-user@example.com"
+	demoClientID           = "demo-client"
+	demoRedirectURI        = "http://localhost:3000/callback"
+	demoRedirectURICompose = "http://localhost:8080/callback"
+	demoUsername           = "demo-user"
+	demoUserID             = "demo-user-id"
+	demoUserName           = "Demo User"
+	demoUserEmail          = "demo-user@example.com"
 )
 
 func main() {
@@ -72,8 +93,7 @@ func run() error {
 	defer stop()
 
 	e := NewEnv()
-	mode, err := e.validate()
-	if err != nil {
+	if err := e.validate(); err != nil {
 		return err // already wrapped "authz: validate env: ..."
 	}
 	// OIDC Discovery 1.0 requires a production issuer to use https;
@@ -81,30 +101,36 @@ func run() error {
 	// development. A production deployment MUST set ISSUER to an
 	// https URL (see README.md "issuer").
 
-	// RSA signing key: generated fresh in memory every time the
-	// process starts. It is never written to disk, logged, or
-	// otherwise persisted, so restarting the process invalidates
-	// every token issued by the previous instance (see README.md).
-	privateKey, err := rsa.GenerateKey(rand.Reader, rsaKeyBits)
+	// RSA signing key ring: loaded from SIGNING_KEYS_FILE when set
+	// (production / persistent keys), or generated ephemeral in memory
+	// when unset (local development). The key ring supports multiple
+	// public keys in JWKS for rotation overlap (ISSUE-036).
+	loader := buildKeyRingLoader(e.SigningKeysFile)
+	material, err := loader.Load()
 	if err != nil {
-		return fmt.Errorf("authz: generate rsa key: %w", err)
+		return fmt.Errorf("authz: load signing keys: %w", err)
 	}
-	kid, err := jwt.ComputeKeyID(&privateKey.PublicKey)
+	keyRing, err := jwt.NewKeyRingFromMaterial(material)
 	if err != nil {
-		return fmt.Errorf("authz: compute key id: %w", err)
+		return fmt.Errorf("authz: build key ring: %w", err)
 	}
-	signer := jwt.NewSigner(privateKey, kid)
-	verifier := jwt.NewVerifier(&privateKey.PublicKey)
-	keyProvider := jwt.NewKeyProvider(&privateKey.PublicKey, kid)
+	signer := keyRing.Signer()
+	verifier := keyRing.Verifier()
+	keyProvider := keyRing.KeyProvider()
+	kid := material.ActiveKid
 
-	// Repositories + demo seed data (SPEC-005: Postgres or in-memory,
-	// chosen by setupPersistence based on DB_HOST/APP_ENV -- see its
-	// doc comment for the fail-closed selection contract). SPEC-010:
-	// in Postgres mode, setupPersistence opens a writer/reader pool
-	// pair via postgres.OpenPair and wires each repository to the
-	// pool the "auth の correctness-critical read の配置" table
-	// (docs/plans/SPEC-010-plan.md) assigns it.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closePersistence, err := setupPersistence(ctx, mode, e.writerConfig(), e.readerConfig())
+	// Repositories + demo seed data (SPEC-011: Postgres is the sole
+	// persistence backend). SPEC-010: setupPersistence opens a
+	// writer/reader pool pair via postgres.OpenPair and wires each
+	// repository to the pool the "auth の correctness-critical read の
+	// 配置" table (docs/plans/SPEC-010-plan.md) assigns it.
+	// authCodePurger / refreshTokenPurger are the same concrete objects
+	// as authCodeRepo / refreshTokenRepo but typed as expiredPurger so
+	// the background purge ticker can call PurgeExpired (ISSUE-015,
+	// ISSUE-019) without exposing that method on the domain interface.
+	// clientWriter / userWriter back the admin management API (ISSUE-039)
+	// and are wired to the writer pool.
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, clientWriter, userWriter, authCodePurger, refreshTokenPurger, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -114,16 +140,48 @@ func run() error {
 		}
 	}()
 
-	defaultUsername, err := user.NewUsername(demoUsername)
-	if err != nil {
-		return fmt.Errorf("authz: build default username: %w", err)
+	// sessionStore is created here (before the purge ticker below) so
+	// its PurgeExpired can be swept by the same background goroutine as
+	// authCodePurger/refreshTokenPurger (ISSUE-044).
+	sessionStore := memory.NewIdPSessionStore()
+
+	// Background purge ticker (ISSUE-015 / ISSUE-019 / ISSUE-044): sweep
+	// expired authorization_codes, refresh_tokens, and IdP sessions/
+	// pending-authorize entries every purgeInterval so none of these
+	// grow without bound between lazy-eviction opportunities (in
+	// particular, a pending authorize abandoned before login completes
+	// has no other deletion path -- see IdPSessionStore.PurgeExpired's
+	// doc comment). The goroutine exits when ctx is cancelled (SIGINT /
+	// SIGTERM) via the select's ctx.Done() arm; it does not block the
+	// server's graceful shutdown path.
+	go runPurgeTicker(ctx, purgeInterval, authCodePurger, refreshTokenPurger, sessionStore)
+	if e.DemoPassword != "" || os.Getenv("DEMO_LOG_PASSWORD") == "1" {
+		slog.Info("authz: demo user password", "username", demoUsername, "password", demoPassword)
 	}
 
 	// Wiring: infra -> application service -> presentation.
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, defaultUsername)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, e.APIAudience)
+	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
+	consentSvc := service.NewConsentService(consentRepo)
+	userInfoSvc := service.NewUserInfoService(userRepo, verifier, e.Issuer, e.APIAudience)
 	discoverySvc := service.NewDiscoveryService(e.Issuer, keyProvider)
-	handler := route.NewRouter(authSvc, userInfoSvc, discoverySvc)
+	introspectSvc := service.NewIntrospectionService(verifier, e.Issuer, e.APIAudience)
+
+	// Admin service: nil when ADMIN_API_KEY is unset (fail-closed:
+	// no key → no admin routes registered, ISSUE-039).
+	var adminSvc *service.AdminService
+	if e.AdminAPIKey != "" {
+		adminSvc = service.NewAdminService(clientWriter, userWriter, clientRepo, userRepo)
+		slog.Info("authz: admin API enabled")
+	} else {
+		slog.Warn("authz: ADMIN_API_KEY not set; admin routes disabled")
+	}
+
+	handler := route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, introspectSvc, adminSvc, route.RouterConfig{
+		Issuer:        e.Issuer,
+		SecureCookies: route.SecureCookiesFromIssuer(e.Issuer),
+		AdminAPIKey:   e.AdminAPIKey,
+	})
 
 	srv := &http.Server{
 		Addr:              ":" + e.Port,
@@ -166,93 +224,133 @@ func run() error {
 	return nil
 }
 
-// setupPersistence is SPEC-005's persistence composition block: it
-// wires infra/postgres or infra/memory depending on the mode/cfg the
-// caller provides. mode is resolved once, up front, by Env.validate
-// (env.go) via postgres.SelectMode's fail-closed contract --
+// runPurgeTicker runs a background loop that calls PurgeExpired on
+// authCodePurger, refreshTokenPurger, and idpSessionPurger every
+// interval. It is designed to be launched as a goroutine from run(); it
+// exits cleanly when ctx is cancelled (i.e. when the process receives
+// SIGINT/SIGTERM and run's signal.NotifyContext fires).
 //
-//   - DB_HOST set        -> Postgres, regardless of APP_ENV
-//   - DB_HOST unset,
-//     APP_ENV=local|test -> in-memory (this sample's original behavior)
-//   - DB_HOST unset,
-//     any other APP_ENV  -> a wrapped error (no silent memory
-//     fallback; this includes an unset APP_ENV and
-//     APP_ENV=production)
+// idpSessionPurger is *memory.IdPSessionStore, sharing this ticker
+// rather than running its own (ISSUE-044): its sessions/pending TTLs
+// (24h / 10min) are both comfortably longer than purgeInterval, so
+// piggybacking on the same 15-minute cadence used for authcode/
+// refreshtoken keeps the in-memory store's size bounded without adding
+// a second goroutine.
 //
-// so a production deployment that forgot to configure DB_HOST fails
-// to start instead of silently running on non-durable, single-instance
-// in-memory storage (docs/plans/SPEC-005-plan.md §0 "切替の env / DSN
-// / 本番必須強制").
+// Errors from individual purge calls are logged but do not stop the
+// ticker: a transient failure during GC should not escalate to a
+// process crash. The first purge fires after the first tick, not at
+// startup, so it does not delay the server's readiness.
+func runPurgeTicker(ctx context.Context, interval time.Duration, authCodePurger, refreshTokenPurger, idpSessionPurger expiredPurger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purgeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			acN, acErr := authCodePurger.PurgeExpired(purgeCtx)
+			rtN, rtErr := refreshTokenPurger.PurgeExpired(purgeCtx)
+			// IdPSessionStore.PurgeExpired is an in-memory map sweep
+			// under a mutex, not a network call, but it still honors ctx
+			// cancellation (see its doc comment) so it is driven through
+			// the same purgeCtx/deadline as the other two for
+			// consistency.
+			sessN, sessErr := idpSessionPurger.PurgeExpired(purgeCtx)
+			cancel()
+
+			if acErr != nil || rtErr != nil || sessErr != nil {
+				slog.Error("authz: purge expired tokens/sessions",
+					"authcode_error", acErr, "refresh_token_error", rtErr, "idp_session_error", sessErr,
+					"authorization_codes_purged", acN, "refresh_tokens_purged", rtN, "idp_sessions_purged", sessN)
+				continue
+			}
+			if acN > 0 || rtN > 0 || sessN > 0 {
+				slog.Info("authz: purge expired tokens/sessions",
+					"authorization_codes_purged", acN,
+					"refresh_tokens_purged", rtN,
+					"idp_sessions_purged", sessN)
+			}
+		}
+	}
+}
+
+// buildKeyRingLoader selects the appropriate token.KeyRingLoader
+// implementation based on the signingKeysFile env value:
+//   - non-empty: jwt.FileLoader reads from that path (production)
+//   - empty:     jwt.EphemeralLoader generates a fresh key in memory
+//     (local development; tokens do not survive restart)
+func buildKeyRingLoader(signingKeysFile string) token.KeyRingLoader {
+	if signingKeysFile != "" {
+		slog.Info("authz: loading signing keys from file", "path", signingKeysFile)
+		return jwt.NewFileLoader(signingKeysFile)
+	}
+	slog.Warn("authz: SIGNING_KEYS_FILE not set; generating ephemeral RSA key (tokens will not survive restart)")
+	return jwt.NewEphemeralLoader()
+}
+
+// setupPersistence is the persistence composition block (SPEC-011:
+// Postgres is the sole backend). It opens a writer/reader pool pair
+// via postgres.OpenPair and wires each repository according to
+// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
+// 配置" table:
+//
+//   - client/user (seeded once at startup, never written at runtime)
+//     → reader pool
+//   - authcode/refreshtoken (single-use tokens whose read-after-write
+//     correctness must not be exposed to replica lag) → writer pool
+//     for both reads and writes
+//   - clientWriter/userWriter (admin management API, ISSUE-039)
+//     → writer pool (admin writes must reach the primary)
 //
 // writerCfg/readerCfg are Env.writerConfig()/Env.readerConfig()
-// (SPEC-010): in Postgres mode they are passed to postgres.OpenPair,
-// which opens a single shared *sql.DB when readerCfg == writerCfg
-// (the DB_READER_* -unset default) or two independent pools
-// otherwise. Repository construction then follows
-// docs/plans/SPEC-010-plan.md's "auth の correctness-critical read の
-// 配置" table: client/user (seeded once at startup, never written at
-// runtime) are wired to the reader pool, while authcode/refreshtoken
-// (single-use tokens whose read-after-write correctness must not be
-// exposed to replica lag) stay pinned to the writer pool for both
-// reads and writes.
+// (SPEC-010): postgres.OpenPair opens a single shared *sql.DB when
+// readerCfg == writerCfg (the DB_READER_* -unset default) or two
+// independent pools otherwise.
 //
-// It returns the four repositories as their domain-declared
-// interfaces (client.Repository / user.Repository /
-// authcode.Repository / refreshtoken.Repository -- the last added by
-// SPEC-006) -- the rest of run() never needs to know which backend is
-// in play -- plus a closePersistence func the caller MUST defer-call
-// during shutdown to release any pooled Postgres connections (a no-op
-// for the in-memory backend, per infra/postgres.Open's
-// ctx-bound-ping-only lifecycle contract).
-func setupPersistence(ctx context.Context, mode postgres.Mode, writerCfg, readerCfg postgres.Config) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, func() error, error) {
+// It returns the four read repositories, the two write ports for admin
+// management, two expiredPurger values for the background purge ticker
+// (authCodePurger, refreshTokenPurger -- the same concrete objects as
+// authCodeRepo/refreshTokenRepo, exposed through the infra-only
+// expiredPurger interface so the service layer remains unaware), and a
+// closePersistence func the caller MUST defer-call during shutdown to
+// release pooled connections.
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, client.Writer, user.Writer, expiredPurger, expiredPurger, func() error, string, error) {
 	noopClose := func() error { return nil }
 
-	switch mode {
-	case postgres.ModeMemory:
-		clientRepo := memory.NewClientRepository()
-		userRepo := memory.NewUserRepository()
-		authCodeRepo := memory.NewAuthCodeRepository()
-		refreshTokenRepo := memory.NewRefreshTokenRepository()
-		if err := seedMemory(clientRepo, userRepo); err != nil {
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (memory): %w", err)
-		}
-		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, noopClose, nil
-
-	case postgres.ModePostgres:
-		writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
-		if err != nil {
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("postgres open pair: %w", err)
-		}
-		// Seed writes go through the writer pool (seedPostgres is an
-		// idempotent upsert -- see its doc comment -- so it must never
-		// run against a lagging replica).
-		if err := seedPostgres(ctx, writerDB); err != nil {
-			_ = closeFn()
-			return nil, nil, nil, nil, noopClose, fmt.Errorf("seed demo data (postgres): %w", err)
-		}
-		// Reader pool: seeded, read-only-at-runtime aggregates.
-		clientRepo := postgres.NewClientRepository(readerDB)
-		userRepo := postgres.NewUserRepository(readerDB)
-		// Writer pool: single-use token aggregates, pinned for both
-		// reads and writes (see func doc comment).
-		authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
-		refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
-		slog.Info("authz: persistence configured", "mode", mode)
-		return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, closeFn, nil
-
-	default:
-		// Unreachable: SelectMode only ever returns ModeMemory,
-		// ModePostgres, or a non-nil error.
-		return nil, nil, nil, nil, noopClose, fmt.Errorf("select persistence mode: unexpected mode %q", mode)
+	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
+	if err != nil {
+		return nil, nil, nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
 	}
+	seededPassword, err := seedPostgres(ctx, writerDB, demoPassword)
+	if err != nil {
+		_ = closeFn()
+		return nil, nil, nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
+	}
+	// Reader pool: seeded, read-only-at-runtime aggregates.
+	clientRepo := postgres.NewClientRepository(readerDB)
+	userRepo := postgres.NewUserRepository(readerDB)
+	// Writer pool: single-use token aggregates, pinned for both
+	// reads and writes (see func doc comment).
+	authCodeRepo := postgres.NewAuthCodeRepository(writerDB)
+	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
+	consentRepo := postgres.NewConsentRepository(writerDB)
+	// Writer pool: admin management write ports (ISSUE-039).
+	clientWriter := postgres.NewClientWriter(writerDB)
+	userWriter := postgres.NewUserWriter(writerDB)
+	slog.Info("authz: persistence configured", "mode", "postgres")
+	// authCodeRepo and refreshTokenRepo are also returned as
+	// expiredPurger so the background purge ticker can call PurgeExpired
+	// without the domain interface needing to expose that method.
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, clientWriter, userWriter, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo
 // OAuth client (see the demoClientID/demoRedirectURI package
-// constants). It is shared by both persistence backends' seed paths
-// (seedMemory / seedPostgres) so the demo data itself is defined
-// exactly once.
+// constants). It is shared by seedPostgres so the demo data itself is
+// defined exactly once.
 func buildDemoClient() (*client.Client, error) {
 	clientID, err := client.ParseClientID(demoClientID)
 	if err != nil {
@@ -262,90 +360,69 @@ func buildDemoClient() (*client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build demo client: %w", err)
 	}
+	redirectURICompose, err := client.NewRedirectURI(demoRedirectURICompose)
+	if err != nil {
+		return nil, fmt.Errorf("build demo client: %w", err)
+	}
 	return client.New(
 		clientID,
-		[]client.RedirectURI{redirectURI},
-		[]string{"openid", "profile", "email"},
+		[]client.RedirectURI{redirectURI, redirectURICompose},
+		[]string{"openid", "profile", "email", "offline_access"},
 		[]string{"code"},
 		[]string{"authorization_code", "refresh_token"},
 	), nil
 }
 
-// buildDemoUser constructs this authorization server's single demo
-// user. The demo user's password is generated fresh on every call
-// rather than hardcoded, even though this sample's wiring never
-// checks it (see service.AuthorizationService.resolveOwner: there is
-// no login UI, so User.VerifyPassword is never called in the current
-// request flow). It exists so the aggregate's shape matches a real
-// IdP and can be wired to an actual login handler later. Shared by
-// both persistence backends' seed paths.
-func buildDemoUser() (*user.User, error) {
+// buildDemoUser constructs this authorization server's single demo user.
+// When plaintextPassword is empty a random secret is generated.
+func buildDemoUser(plaintextPassword string) (*user.User, string, error) {
 	userID, err := user.ParseUserID(demoUserID)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
 	username, err := user.NewUsername(demoUsername)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
 	profile, err := user.NewProfile(demoUserName, demoUserEmail)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
-	password, err := randomSecret(32)
+	password := plaintextPassword
+	if password == "" {
+		password, err = randomSecret(32)
+		if err != nil {
+			return nil, "", fmt.Errorf("build demo user: %w", err)
+		}
+	}
+	u, err := user.New(userID, username, password, profile)
 	if err != nil {
-		return nil, fmt.Errorf("build demo user: %w", err)
+		return nil, "", fmt.Errorf("build demo user: %w", err)
 	}
-	return user.New(userID, username, password, profile), nil
+	return u, password, nil
 }
 
-// seedMemory registers this sample authorization server's demo client
-// and demo user into in-memory repositories. It runs once, at
-// startup; there is no admin API to register additional
-// clients/users (out of scope for this DDD layering sample -- see
-// README.md). This is the original (pre-SPEC-005) seed behavior,
-// preserved unchanged for the in-memory persistence path.
-func seedMemory(clientRepo *memory.ClientRepository, userRepo *memory.UserRepository) error {
+// seedPostgres idempotently upserts the demo client/user data via
+// postgres.SeedClient/SeedUser. It returns the plaintext demo password
+// used for optional startup logging.
+func seedPostgres(ctx context.Context, db *sql.DB, demoPassword string) (string, error) {
 	demoClient, err := buildDemoClient()
 	if err != nil {
-		return fmt.Errorf("seed client: %w", err)
-	}
-	clientRepo.Seed(demoClient)
-
-	demoUser, err := buildDemoUser()
-	if err != nil {
-		return fmt.Errorf("seed user: %w", err)
-	}
-	userRepo.Seed(demoUser)
-
-	return nil
-}
-
-// seedPostgres idempotently upserts the same demo client/user data
-// seedMemory registers, via postgres.SeedClient/SeedUser
-// (docs/plans/SPEC-005-plan.md §1.2 "seed": a startup idempotent
-// upsert -- not a migration-embedded seed, so the demo user's
-// freshly-generated password is never committed to a SQL file, and
-// repeated process starts converge on the same demo row instead of
-// erroring on the second run).
-func seedPostgres(ctx context.Context, db *sql.DB) error {
-	demoClient, err := buildDemoClient()
-	if err != nil {
-		return fmt.Errorf("seed client: %w", err)
+		return "", fmt.Errorf("seed client: %w", err)
 	}
 	if err := postgres.SeedClient(ctx, db, demoClient); err != nil {
-		return fmt.Errorf("seed client: %w", err)
+		return "", fmt.Errorf("seed client: %w", err)
 	}
 
-	demoUser, err := buildDemoUser()
+	demoUser, plaintext, err := buildDemoUser(demoPassword)
 	if err != nil {
-		return fmt.Errorf("seed user: %w", err)
+		return "", fmt.Errorf("seed user: %w", err)
 	}
 	if err := postgres.SeedUser(ctx, db, demoUser); err != nil {
-		return fmt.Errorf("seed user: %w", err)
+		return "", fmt.Errorf("seed user: %w", err)
 	}
 
-	return nil
+	return plaintext, nil
 }
 
 // randomSecret generates a cryptographically random, base64url-encoded

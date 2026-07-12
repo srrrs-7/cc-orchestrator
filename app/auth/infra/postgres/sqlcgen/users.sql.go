@@ -9,15 +9,28 @@ import (
 	"context"
 )
 
+const deleteUser = `-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1
+`
+
+// Removes a user row. Returns 0 rows when id is absent.
+func (q *Queries) DeleteUser(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getUserByID = `-- name: GetUserByID :one
 
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE id = $1
 `
 
 // SPEC-005 R2/R4: sqlc input for the users table
-// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 // infra/postgres/sqlcgen from this file; keep both in the same commit
 // (no drift).
 // Backs user.Repository.FindByID. Returns sql.ErrNoRows when absent;
@@ -28,7 +41,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Password,
+		&i.PasswordHash,
 		&i.ProfileName,
 		&i.ProfileEmail,
 	)
@@ -36,7 +49,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id string) (User, error) {
 }
 
 const getUserByUsername = `-- name: GetUserByUsername :one
-SELECT id, username, password, profile_name, profile_email
+SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE username = $1
 `
@@ -51,27 +64,63 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	err := row.Scan(
 		&i.ID,
 		&i.Username,
-		&i.Password,
+		&i.PasswordHash,
 		&i.ProfileName,
 		&i.ProfileEmail,
 	)
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT id, username, password_hash, profile_name, profile_email
+FROM users
+ORDER BY id
+`
+
+// Backs user.Repository.ListAll for the admin management API.
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.PasswordHash,
+			&i.ProfileName,
+			&i.ProfileEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertUser = `-- name: UpsertUser :exec
-INSERT INTO users (id, username, password, profile_name, profile_email)
+INSERT INTO users (id, username, password_hash, profile_name, profile_email)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (id) DO UPDATE SET
-    username      = EXCLUDED.username,
-    password      = EXCLUDED.password,
-    profile_name  = EXCLUDED.profile_name,
-    profile_email = EXCLUDED.profile_email
+    username       = EXCLUDED.username,
+    password_hash  = EXCLUDED.password_hash,
+    profile_name   = EXCLUDED.profile_name,
+    profile_email  = EXCLUDED.profile_email
 `
 
 type UpsertUserParams struct {
 	ID           string
 	Username     string
-	Password     string
+	PasswordHash string
 	ProfileName  string
 	ProfileEmail string
 }
@@ -85,7 +134,7 @@ func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) error {
 	_, err := q.db.ExecContext(ctx, upsertUser,
 		arg.ID,
 		arg.Username,
-		arg.Password,
+		arg.PasswordHash,
 		arg.ProfileName,
 		arg.ProfileEmail,
 	)

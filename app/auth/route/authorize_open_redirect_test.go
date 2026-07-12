@@ -95,6 +95,44 @@ func TestAuthorize_UnverifiedError_NeverRedirectsToAttackerURI(t *testing.T) {
 	}
 }
 
+// TestAuthorize_VerifiedRedirectURI_RedirectsToRegisteredURI_OnMissingResponseType
+// verifies that a missing response_type (RFC 6749 §4.1.2.1 required
+// parameter) is reported as invalid_request once client_id and
+// redirect_uri are already verified (ISSUE-003).
+func TestAuthorize_VerifiedRedirectURI_RedirectsToRegisteredURI_OnMissingResponseType(t *testing.T) {
+	h := newTestHandler(t)
+	verifier := strings.Repeat("A", 43)
+
+	rec := doAuthorize(t, h, url.Values{
+		// response_type intentionally omitted
+		"client_id":             {testClientID},
+		"redirect_uri":          {testRedirectURI},
+		"scope":                 {"openid"},
+		"state":                 {"s-missing-rt"},
+		"code_challenge":        {pkceChallenge(verifier)},
+		"code_challenge_method": {"S256"},
+	})
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d (verified client/redirect_uri errors are reported via redirect; body=%q)", rec.Code, http.StatusFound, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location header: %v", err)
+	}
+
+	gotBase := (&url.URL{Scheme: loc.Scheme, Host: loc.Host, Path: loc.Path}).String()
+	if gotBase != testRedirectURI {
+		t.Errorf("redirect target = %q, want registered redirect_uri %q", gotBase, testRedirectURI)
+	}
+	if got := loc.Query().Get("error"); got != "invalid_request" {
+		t.Errorf("redirect error = %q, want %q", got, "invalid_request")
+	}
+	if got := loc.Query().Get("state"); got != "s-missing-rt" {
+		t.Errorf("redirect state = %q, want %q", got, "s-missing-rt")
+	}
+}
+
 // TestAuthorize_VerifiedRedirectURI_RedirectsToRegisteredURI_OnUnsupportedResponseType
 // is the positive counterpart of the above: once client_id and
 // redirect_uri are confirmed valid, a subsequent OAuth error

@@ -4,7 +4,7 @@ title: app/api・app/auth の Postgres 永続化基盤(goose + sqlc)
 status: done  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-09
 updated: 2026-07-10
-issues: [ISSUE-005, ISSUE-015, ISSUE-016, ISSUE-017, ISSUE-022]       # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-005, ISSUE-015, ISSUE-016, ISSUE-017, ISSUE-022, ISSUE-051]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 

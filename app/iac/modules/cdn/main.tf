@@ -18,6 +18,95 @@ terraform {
   }
 }
 
+locals {
+  # CSP for the web SPA (S3/default behavior). Intentionally strict: no inline
+  # scripts/styles, no unsafe-eval, no external origins. Adjust connect-src if
+  # the frontend calls third-party APIs in the future.
+  csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+}
+
+# ---------------------------------------------------------------------------
+# Response Headers Policy — web SPA security headers (default behavior only)
+# ---------------------------------------------------------------------------
+
+resource "aws_cloudfront_response_headers_policy" "web_security" {
+  name    = "${var.name_prefix}-web-security"
+  comment = "Security headers for the web SPA (S3 default behavior). Not applied to /api/* or /auth/* ordered behaviors -- /auth/* gets its own auth_security policy below (ISSUE-042); /api/* still intentionally omits both, since app/api returns no HTML for a clickjacking vector to target."
+
+  security_headers_config {
+    content_security_policy {
+      content_security_policy = local.csp
+      override                = true
+    }
+
+    content_type_options {
+      override = true
+    }
+
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = false
+      override                   = true
+    }
+  }
+}
+
+# ISSUE-042: frame-control headers for /auth/* (login/consent are HTML forms
+# an attacker can target with a transparent-iframe clickjacking overlay to
+# trick an already-authenticated victim into approving a malicious client's
+# consent request). This is a *separate* policy from web_security, not a
+# reuse of it, for one deliberate reason: web_security's
+# content_security_policy block is owned by the web SPA's asset/script
+# allowlist and would override (`override = true`) whatever CSP app/auth's
+# own middleware sends for its login/consent HTML (see ISSUE-042's app/auth
+# side, owned by impl-auth) -- app/auth needs `form-action 'self'` and other
+# directives web_security doesn't express, and CSP is otherwise
+# content-specific enough that it belongs to the app that renders the HTML,
+# not the CDN in front of it. So this policy intentionally covers only the
+# transport/frame-level headers that are safe to fix at the edge and are
+# origin-agnostic, and leaves content_security_policy unset entirely (an
+# unset block in a response_headers_policy resource means CloudFront does
+# not add or override that header at all, so app/auth's own CSP passes
+# through unmodified) -- multi-layer defense with app/auth's own
+# ISSUE-042 middleware, which must hold even for direct-to-ALB traffic that
+# bypasses CloudFront.
+resource "aws_cloudfront_response_headers_policy" "auth_security" {
+  name    = "${var.name_prefix}-auth-security"
+  comment = "Frame-control / transport headers for /auth/* (login, consent). Deliberately no CSP here -- app/auth owns and sends its own (see this resource's comment)."
+
+  security_headers_config {
+    content_type_options {
+      override = true
+    }
+
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+
+    referrer_policy {
+      referrer_policy = "strict-origin-when-cross-origin"
+      override        = true
+    }
+
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = false
+      override                   = true
+    }
+  }
+}
+
 # ---------------------------------------------------------------------------
 # WAFv2 Web ACL (CLOUDFRONT scope; must be created via the us-east-1 region)
 # ---------------------------------------------------------------------------
@@ -200,6 +289,12 @@ resource "aws_cloudfront_distribution" "this" {
 
     cache_policy_id = data.aws_cloudfront_cache_policy.caching_optimized.id
 
+    # Security headers (CSP, X-Content-Type-Options, X-Frame-Options, HSTS,
+    # Referrer-Policy) applied only to the web SPA responses. The /api/* and
+    # /auth/* ordered behaviors intentionally omit this policy so their own
+    # Content-Type / framing semantics are unaffected.
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.web_security.id
+
     # SPA fallback: rewrites extensionless client-side-route paths to
     # /index.html. Scoped to this behavior only, so /api/* and /auth/*
     # responses (including genuine 403/404s) are never rewritten -- see
@@ -247,6 +342,10 @@ resource "aws_cloudfront_distribution" "this" {
     # cached; token exchange in particular must never be served from cache.
     cache_policy_id          = data.aws_cloudfront_cache_policy.disabled.id
     origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host_header.id
+
+    # ISSUE-042: frame-control/transport headers only (no CSP -- see
+    # aws_cloudfront_response_headers_policy.auth_security's comment above).
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.auth_security.id
 
     # Strips the "/auth" prefix so app/auth (which registers routes at its
     # container root, e.g. "/authorize", "/.well-known/jwks.json") receives

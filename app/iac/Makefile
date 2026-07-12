@@ -23,7 +23,7 @@
 # --- SPEC-009 Phase B: transparent toolbox delegation -----------------------
 #
 # 公開ターゲット名・挙動(上記の表・.claude/rules/iac.md の「コマンド」表)は
-# SPEC-009 前と不変(R4)。実体だけが docker/toolchain の単一 polyglot イメージ
+# SPEC-009 前と不変(R4)。実体だけが .devcontainer/toolchain の単一 polyglot イメージ
 # (compose.tools.yml 経由)の中で動くようになり、ホストに terraform/tflint/trivy
 # が入っていなくてもこの Makefile と docker だけで動く。実際のレシピは
 # `ifdef IN_TOOLBOX` 配下の `<target>-native` に退避してあり、`IN_TOOLBOX` は
@@ -82,11 +82,9 @@
 .DEFAULT_GOAL := help
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-# versions.env はこの Makefile 自身では値を消費しない(terraform/tflint/trivy
-# の版は docker/toolchain/Dockerfile が build ARG として焼き込む側の関心事で、
-# ここではバイナリを名前で呼ぶだけ)。それでも単一ソースの所在を明示する
-# ドキュメントとして include しておく(他スタックの Makefile と同じ扱い)。
-include $(REPO_ROOT)/versions.env
+DEVCONTAINER_DIR := $(REPO_ROOT)/.devcontainer
+COMPOSE_TOOLS_FILE := $(DEVCONTAINER_DIR)/compose.tools.yml
+include $(DEVCONTAINER_DIR)/versions.env
 # 一部の docker compose 実装(nerdctl/Rancher Desktop 系の compose v2 plugin
 # 等)はトップレベル `--env-file` を受け付けず `unknown flag: --env-file` で
 # 落ちる。`--env-file` には頼らず、上の include で読み込んだ版変数を実プロセス
@@ -103,7 +101,7 @@ ENV_DIR := envs/$(ENV)
 
 # docker compose (プラグイン) があればそれを使い、無ければ standalone
 # docker-compose にフォールバックする(root Makefile / app/migrator/Makefile
-# と同じ probe。docker/toolchain/README.md もこのフォールバックを前提に
+# と同じ probe。.devcontainer/toolchain/README.md もこのフォールバックを前提に
 # している)。
 COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
@@ -112,8 +110,11 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # `user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"` は compose 自身が
 # コンテナ生成前に自プロセス環境から `${...}` を解決する値であり、`-e` は
 # コンテナ生成後にしか効かず間に合わない(同ファイルの header comment 参照)。
-COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
+TOOLBOX_ENV_PREFIX := COMPOSE_PROJECT_NAME=cc-orchestrator \
+	TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
+	TOOLBOX_WORKSPACE=$(REPO_ROOT) TOOLBOX_CONTEXT=$(DEVCONTAINER_DIR)/toolchain
+COMPOSE_TOOLS := $(TOOLBOX_ENV_PREFIX) \
+	$(COMPOSE_BIN) -f $(COMPOSE_TOOLS_FILE)
 
 # 実 backend / AWS provider を使う init(非 --backend=false) / plan / apply
 # 向け。compose.tools.yml はホストの ~/.aws 等を一切マウントしないため、
@@ -225,7 +226,7 @@ apply-native: guard-env-native ## terraform apply -- agent は実行禁止。pla
 
 else
 # =============================================================================
-# ホスト側: docker/toolchain の単一 polyglot イメージへ透過委譲する
+# ホスト側: .devcontainer/toolchain の単一 polyglot イメージへ透過委譲する
 # (SPEC-009)。ホストに terraform / tflint / trivy が入っていなくても、
 # この Makefile と docker だけで動く。
 # =============================================================================

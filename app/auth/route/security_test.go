@@ -1,3 +1,17 @@
+// Security regression tests. Both run as part of the default
+// `make test` / `make check` (SPEC-013), but reach the repository
+// layer differently:
+//
+//   - TestUserInfo_ValidSignatureWrongAudOrIssuer_Unauthorized: JWT
+//     validation (iss/aud check) fails before any userRepo access, so
+//     newDiscoveryTestHandler (nil userRepo) is sufficient -- no DB
+//     required.
+//
+//   - TestToken_ErrorResponse_HasNoCacheHeaders: the /token error path
+//     needs a valid client lookup followed by an auth-code not-found.
+//     newTokenErrorTestHandler wires the real Postgres test DB (seeded
+//     demo client, empty authorization_codes table), so submitting a
+//     code that was never issued reproduces the invalid_grant path.
 package route_test
 
 import (
@@ -20,8 +34,11 @@ import (
 // verifies against, so a failure here can only be explained by a
 // missing/broken iss or aud check in UserInfoService.UserInfo -- not
 // by signature verification.
+//
+// Uses newDiscoveryTestHandler: the JWT iss/aud validation fails
+// before userRepo is accessed, so nil repos suffice.
 func TestUserInfo_ValidSignatureWrongAudOrIssuer_Unauthorized(t *testing.T) {
-	h := newTestHandler(t)
+	h := newDiscoveryTestHandler(t)
 
 	kid, err := jwt.ComputeKeyID(&testRSAKey.PublicKey)
 	if err != nil {
@@ -60,8 +77,13 @@ func TestUserInfo_ValidSignatureWrongAudOrIssuer_Unauthorized(t *testing.T) {
 // to every /token response, not only successful ones): both
 // Cache-Control: no-store and Pragma: no-cache must be present even
 // when the request is rejected.
+//
+// Uses newTokenErrorTestHandler: the test client exists (seeded into
+// the real Postgres test DB by newTestHandler) and the submitted code
+// "does-not-exist" is never found in the (truncated, empty)
+// authorization_codes table → invalid_grant.
 func TestToken_ErrorResponse_HasNoCacheHeaders(t *testing.T) {
-	h := newTestHandler(t)
+	h := newTokenErrorTestHandler(t)
 
 	rec := doToken(t, h, url.Values{
 		"grant_type":    {"authorization_code"},

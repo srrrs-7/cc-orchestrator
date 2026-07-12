@@ -68,7 +68,7 @@ func (r *RefreshTokenRepository) Save(ctx context.Context, rt *refreshtoken.Refr
 }
 
 // FindByTokenHash returns the RefreshToken stored under hash. A
-// consumed-but-unexpired row is returned on purpose (db/queries's
+// consumed-but-unexpired row is returned on purpose (schema/queries's
 // GetRefreshToken query is not filtered by consumed), so callers can
 // detect a reuse of an already-rotated token before it even reaches
 // Rotate. It returns a wrapped refreshtoken.ErrNotFound when no row
@@ -95,7 +95,7 @@ func (r *RefreshTokenRepository) FindByTokenHash(ctx context.Context, hash refre
 
 	rt, err := reconstructRefreshToken(
 		row.TokenHash, row.FamilyID, row.ClientID, row.UserID, row.Scope,
-		row.ExpiresAt, row.Consumed,
+		row.AuthTime, row.ExpiresAt, row.Consumed,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: find refresh token: %w", err)
@@ -161,6 +161,23 @@ func (r *RefreshTokenRepository) Rotate(ctx context.Context, oldHash refreshtoke
 	return nil
 }
 
+// PurgeExpired deletes every expired refresh_token row in a single
+// statement (ISSUE-019 item 1: bulk eviction). It returns the number of
+// rows deleted. Returning 0 (with nil error) is normal when no expired rows
+// exist. This covers both consumed (already-rotated) rows that were
+// intentionally kept for reuse detection during their TTL, and unconsumed
+// rows that were never exchanged -- all are safe to delete once expires_at
+// is in the past. This method is not part of the refreshtoken.Repository
+// domain interface: it is an infra-layer GC concern called by the background
+// purge ticker in cmd/authz/main.go, not by the service layer.
+func (r *RefreshTokenRepository) PurgeExpired(ctx context.Context) (int64, error) {
+	n, err := r.q.PurgeExpiredRefreshTokens(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: purge expired refresh tokens: %w", err)
+	}
+	return n, nil
+}
+
 // RevokeFamily deletes every refresh token whose family_id matches
 // familyID in a single statement (RevokeFamilyRefreshTokens). Deleting
 // zero rows is not an error -- idempotent, matching
@@ -183,6 +200,7 @@ func insertRefreshTokenParams(rt *refreshtoken.RefreshToken) sqlcgen.InsertRefre
 		UserID:    rt.UserID().String(),
 		Scope:     rt.Scope().String(),
 		ExpiresAt: rt.ExpiresAt(),
+		AuthTime:  encodeAuthTime(rt.AuthTime()),
 	}
 }
 
@@ -193,8 +211,13 @@ func insertRefreshTokenParams(rt *refreshtoken.RefreshToken) sqlcgen.InsertRefre
 // repository's own Save/Rotate is surfaced as an error rather than
 // silently accepted (mirrors reconstructAuthCode in
 // authcode_repository.go).
+//
+// authTimeVal is the nullable auth_time column value (added by goose
+// migration 000005, ISSUE-038): SQL NULL decodes to time.Time{} (zero),
+// meaning "not available", via decodeAuthTime.
 func reconstructRefreshToken(
 	hashStr, familyIDStr, clientIDStr, userIDStr, scopeStr string,
+	authTimeVal sql.NullTime,
 	expiresAt time.Time,
 	consumed bool,
 ) (*refreshtoken.RefreshToken, error) {
@@ -217,6 +240,7 @@ func reconstructRefreshToken(
 		refreshtoken.NewClientID(clientIDStr),
 		refreshtoken.NewUserID(userIDStr),
 		scope,
+		decodeAuthTime(authTimeVal),
 		expiresAt,
 		consumed,
 	), nil

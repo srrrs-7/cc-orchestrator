@@ -38,6 +38,24 @@ func (q *Queries) ConsumeAuthCode(ctx context.Context, code string) (time.Time, 
 	return expires_at, err
 }
 
+const deleteAuthCodesByClientID = `-- name: DeleteAuthCodesByClientID :exec
+DELETE FROM authorization_codes WHERE client_id = $1
+`
+
+func (q *Queries) DeleteAuthCodesByClientID(ctx context.Context, clientID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAuthCodesByClientID, clientID)
+	return err
+}
+
+const deleteAuthCodesByUserID = `-- name: DeleteAuthCodesByUserID :exec
+DELETE FROM authorization_codes WHERE user_id = $1
+`
+
+func (q *Queries) DeleteAuthCodesByUserID(ctx context.Context, userID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAuthCodesByUserID, userID)
+	return err
+}
+
 const deleteExpiredAuthCode = `-- name: DeleteExpiredAuthCode :exec
 DELETE FROM authorization_codes
 WHERE code = $1 AND expires_at <= now()
@@ -56,7 +74,7 @@ func (q *Queries) DeleteExpiredAuthCode(ctx context.Context, code string) error 
 
 const getActiveAuthCode = `-- name: GetActiveAuthCode :one
 SELECT code, client_id, user_id, redirect_uri, scope, nonce,
-       challenge, challenge_method, expires_at, consumed
+       challenge, challenge_method, expires_at, consumed, auth_time
 FROM authorization_codes
 WHERE code = $1 AND consumed = false AND expires_at > now()
 `
@@ -72,6 +90,7 @@ type GetActiveAuthCodeRow struct {
 	ChallengeMethod string
 	ExpiresAt       time.Time
 	Consumed        bool
+	AuthTime        sql.NullTime
 }
 
 // Backs authcode.Repository.FindByCode. Only a row that is both
@@ -96,6 +115,7 @@ func (q *Queries) GetActiveAuthCode(ctx context.Context, code string) (GetActive
 		&i.ChallengeMethod,
 		&i.ExpiresAt,
 		&i.Consumed,
+		&i.AuthTime,
 	)
 	return i, err
 }
@@ -104,9 +124,9 @@ const insertAuthCode = `-- name: InsertAuthCode :exec
 
 INSERT INTO authorization_codes (
     code, client_id, user_id, redirect_uri, scope, nonce,
-    challenge, challenge_method, expires_at, consumed
+    challenge, challenge_method, expires_at, consumed, auth_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, false
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, false, $10
 )
 `
 
@@ -120,16 +140,19 @@ type InsertAuthCodeParams struct {
 	Challenge       string
 	ChallengeMethod string
 	ExpiresAt       time.Time
+	AuthTime        sql.NullTime
 }
 
 // SPEC-005 R2/R4: sqlc input for the authorization_codes table
-// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 // infra/postgres/sqlcgen from this file; keep both in the same commit
 // (no drift).
 // Backs authcode.Repository.Save: authorization codes are
 // issue-once/consume-once, so this is a plain INSERT (not an upsert --
 // a code colliding with an existing primary key would indicate a
 // broken random generator, not a legitimate re-save).
+// auth_time ($10) is the OIDC IdP session login timestamp; NULL means
+// not available (maps to time.Time{} in Go -- see ISSUE-038).
 func (q *Queries) InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) error {
 	_, err := q.db.ExecContext(ctx, insertAuthCode,
 		arg.Code,
@@ -141,6 +164,26 @@ func (q *Queries) InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) 
 		arg.Challenge,
 		arg.ChallengeMethod,
 		arg.ExpiresAt,
+		arg.AuthTime,
 	)
 	return err
+}
+
+const purgeExpiredAuthCodes = `-- name: PurgeExpiredAuthCodes :execrows
+DELETE FROM authorization_codes WHERE expires_at <= now()
+`
+
+// Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
+// rows whose TTL has elapsed in a single statement. Called by the background
+// purge ticker in cmd/authz/main.go (every 15 min) so expired authorization
+// codes do not accumulate between lazy-eviction opportunities.
+// Returns the number of rows deleted (sqlc :execrows).
+// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+// rows exist, and it never touches unconsumed/unexpired codes.
+func (q *Queries) PurgeExpiredAuthCodes(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeExpiredAuthCodes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

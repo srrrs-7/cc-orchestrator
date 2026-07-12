@@ -1,7 +1,7 @@
 ---
 id: ISSUE-007
 title: app/web の vitest を beta(5.0.0-beta.6)にピン留めして回避している(Rolldown-vite + vitest4 の zod export バグ)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: closed  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
 updated: 2026-07-08
@@ -97,3 +97,9 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - 影響範囲メモ: バグは Vitest の runner のみに影響し、`vite build` / `vite dev` の SSR ローディングは無影響(本番ビルドは正常)。
 - severity 判定: `low`。判定根拠 — 動作する回避策があり、テスト・ビルドとも全て緑で機能的劣化はなく、エンドユーザー影響なし。残存リスクは開発側の保守・サプライチェーン衛生(beta 依存 + クリーンインストール時のゲート)に限られるため。
 - 次アクション: 安定版 `vitest@5.x`(または 4.x 修正版)のリリースを監視し、出たらアップグレードして beta ピンを解消・再テストする(今回は深追い調査せず監視のみ)。
+
+### 2026-07-12
+
+- **closed(回避策完了・上流待ち)**。2026-07-12 時点で npm の最新 vitest は依然 `5.0.0-beta.6`(stable 5.0.0 未公開)。Vitest 4.1.10 + rolldown-vite(`vite@8.1.3`)構成での `z` export 欠落バグは再現条件として有効なまま。
+- 回避策(`vitest@5.0.0-beta.6` ピン、`make -C app/web check` green)は維持。beta 除去は stable 5.x リリース後に新規 Issue または Dependabot で追随する。
+- 本 Issue のスコープ(回避策の記録と監視)は達成。stable 追随は別サイクル。

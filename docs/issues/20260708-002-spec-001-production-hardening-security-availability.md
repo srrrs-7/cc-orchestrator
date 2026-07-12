@@ -133,3 +133,9 @@ specs: [SPEC-001]  # 関連Spec ID (例: [SPEC-002])
 - 追記した項目: 8. CloudFront ↔ ALB の HTTP 平文区間拡大(auth 経路・custom header `X-Origin-Verify` / `X-Target-Service`)/ 9. S3(web)のアクセスログ・バージョニング未設定(`modules/cdn/s3.tf`)/ 10. CloudFront アクセスログ未設定(拡張後 distribution)/ 11. CloudWatch Logs の CMK 暗号化なし / 12. CloudFront Function `strip_prefix` の正規化強化 + apply 後の `curl` 実地検証 / 13. deploy.yml の OIDC 信頼ポリシーのスコープ確認と承認ゲート / 14. auth の可用性(`desired_count=1` × 100% Spot の SPOF、`fargate_base=1` で解消可能)。
 - **いずれも退行ではなく、SPEC-004 のサンプルスコープでの意図的省略 / apply 後検証に回した項目**である点を各項目に明記し、SPEC-004 / ISSUE-014 を参照リンクとした(本 Issue と同じ「サンプルでは見送り、本番移行時に有効化」の性質)。
 - 本エントリは本番移行チェックリストへの項目追加のみで、本 Issue の **ステータスは open のまま維持(本番移行時に対応)、severity も low のまま**。frontmatter の `updated` を 2026-07-09 に更新した。
+
+### 2026-07-12(関連 sub-issue 解消の相互参照)
+
+- **ISSUE-010**(app/api HTTP ボディサイズ上限 + サーバタイムアウト)は 2026-07-12 に **resolved**。アプリ層の defense-in-depth は別 Issue で完結。本 Issue(インフラ層チェックリスト)の項目 1〜7 / 8〜14 とは層が異なり、本 Issue ステータスへの影響は無い。
+- **ISSUE-017**(migrator ECR push 経路)、**ISSUE-022**(goose advisory lock)も resolved。項目 8〜14 のデプロイ前提(マイグレーションイメージ配布・並行 migrate 排他)に関する sub 課題は解消済み。
+- 本 Issue は **SPEC-001 dev サンプルスコープで意図的に見送った本番相当強化のチェックリスト**として **open 維持**。本番移行決定時に planner → impl-iac で各項目を実装する。現時点で close しない(チェックリストの正として残す)。

@@ -1,9 +1,9 @@
 # --- build stage -----------------------------------------------------------
-# Go 1.24 on Alpine (musl). The module has no external requires and
+# Go 1.26 on Alpine (musl). The module has no external requires and
 # CGO_ENABLED=0 produces a fully static binary, so glibc/gcc from the
-# full golang:1.24 image are not needed; the binary still runs unmodified
+# full golang:1.26 image are not needed; the binary still runs unmodified
 # on the distroless runtime stage below.
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Copy only the dependency manifest first so the `go mod download` layer is

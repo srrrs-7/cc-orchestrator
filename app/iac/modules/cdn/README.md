@@ -37,6 +37,31 @@ CloudFront の behavior(strip Function 込み)が代替する。**`app/web/nginx
 Dockerfile(nginx ランタイム)はローカル `docker compose` 専用**であり、AWS デプロイでは
 一切使用しない。両者を混同しないこと(「AWS でも nginx コンテナが要る」という誤解を避ける)。
 
+## Web SPA のセキュリティヘッダー(Response Headers Policy)
+
+`aws_cloudfront_response_headers_policy.web_security`(`${var.name_prefix}-web-security`)を
+`default_cache_behavior`(S3/web SPA)にのみ関連付け、CSP・`X-Content-Type-Options: nosniff`・
+`X-Frame-Options: DENY`・`Strict-Transport-Security`・`Referrer-Policy` を全 SPA レスポンスに付与する。
+`/api/*` には意図的に適用しない(app/api は HTML を返さずクリックジャッキングの標的にならず、独自の
+`Content-Type` を上書きすると問題が生じ得るため)。
+
+### `/auth/*` のフレーム制御(`auth_security`、ISSUE-042)
+
+`/auth/*`(login・consent)は HTML フォームを返すため、透明 iframe オーバーレイによるクリックジャッ
+キングの標的になり得る(ISSUE-042)。そこで `aws_cloudfront_response_headers_policy.auth_security`
+(`${var.name_prefix}-auth-security`)を `/auth/*` の `ordered_cache_behavior` にのみ関連付け、
+`X-Frame-Options: DENY`・`X-Content-Type-Options: nosniff`・`Strict-Transport-Security`・
+`Referrer-Policy` を付与する。
+
+`web_security` を使い回さず**別ポリシーとして新設**したのは、CSP を含めないためである。`web_security`
+の `content_security_policy`(`override = true`)は web SPA 用の allowlist を前提にしており、
+app/auth 自身のログイン/同意画面が必要とする CSP(`form-action 'self'` 等)を上書きして壊しかねない。
+CSP は「その HTML を実際に返すアプリ」が所有すべきという判断から、CDN 側では transport/frame 層の
+ヘッダに絞り、CSP は付与しない(`content_security_policy` ブロック自体を書かない = CloudFront は
+その応答ヘッダに一切手を入れない)。app/auth 自身が `X-Frame-Options` / CSP `frame-ancestors 'none'` /
+`X-Content-Type-Options` を返すミドルウェアを持つのが本線の防御であり(impl-auth 側、ISSUE-042)、
+この CloudFront ポリシーは CloudFront/ALB 経路を通るリクエストに対する多層防御(二層目)である。
+
 ## SPA フォールバックを CloudFront Function にし、`custom_error_response` を退けた理由
 
 CloudFront ディストリビューション全体に効く `custom_error_response`(403/404 → `/index.html`,
@@ -74,10 +99,12 @@ ALB リスナールール(`modules/service`)はこのヘッダの組み合わせ
 のプレフィックスリスト SG と合わせた二層防御)。`X-Target-Service` はセキュリティ境界ではなく、
 あくまでルーティング用の判別子である。
 
-auth の `ISSUER` 環境変数(`http://<cloudfront-domain>/auth`)は discovery の絶対 URL 生成に使われ
-るが(`issuer` 文字列連結)、`/auth/*` behavior を経由すれば剥がされて実際に到達可能なため、
-issuer と実アクセス経路が一致する(R5 充足。詳細は `docs/plans/SPEC-004-plan.md` の
-「R5 の確定結論」)。
+auth の `ISSUER` 環境変数(`https://<cloudfront-domain>/auth`。ISSUE-043 で `http://` から修正済み
+-- CloudFront は全 behavior で `redirect-to-https` を強制するため実アクセスは常に HTTPS であり、
+scheme を揃えないと app/auth の `SecureCookiesFromIssuer` が Cookie に `Secure` を付けない)は
+discovery の絶対 URL 生成に使われるが(`issuer` 文字列連結)、`/auth/*` behavior を経由すれば剥がされ
+て実際に到達可能なため、issuer と実アクセス経路が一致する(R5 充足。詳細は
+`docs/plans/SPEC-004-plan.md` の「R5 の確定結論」)。
 
 ## コスト上の選択理由
 

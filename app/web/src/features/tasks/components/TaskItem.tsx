@@ -1,11 +1,16 @@
 import { Link } from "@tanstack/react-router";
 import { Button } from "../../../shared/ui/Button";
+import { Card } from "../../../shared/ui/Card";
+import { formatDateTime } from "../domain/format";
 import type { Task } from "../domain/task";
 import { canComplete, canStart } from "../domain/task";
 import { useCompleteTask, useStartTask } from "../hooks/useTasks";
+import { PriorityBadge } from "./PriorityBadge";
+import { StatusBadge } from "./StatusBadge";
 
 type TaskItemProps = {
   readonly task: Task;
+  readonly showTimestamps?: boolean;
 };
 
 /**
@@ -16,7 +21,7 @@ type TaskItemProps = {
  * domain transition function is needed here to compute a "next status"
  * to send.
  */
-export function TaskItem({ task }: TaskItemProps) {
+export function TaskItem({ task, showTimestamps = false }: TaskItemProps) {
   const startTask = useStartTask();
   const completeTask = useCompleteTask();
 
@@ -30,33 +35,47 @@ export function TaskItem({ task }: TaskItemProps) {
     completeTask.mutate(task.id);
   };
 
+  const isMutating = startTask.isPending || completeTask.isPending;
+
   return (
-    <div className="flex flex-col gap-3 rounded border border-gray-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <div className="flex min-w-0 flex-col gap-1">
+    <Card className="flex flex-col gap-3 p-4 transition-shadow motion-reduce:transition-none hover:shadow-md sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="flex min-w-0 flex-col gap-2">
         <Link
           to="/tasks/$taskId"
           params={{ taskId: task.id }}
-          className="break-words font-medium hover:underline"
+          className="break-words text-base font-medium text-gray-900 hover:text-accent focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         >
           {task.title}
         </Link>
-        <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-          <span>status: {task.status}</span>
-          <span>priority: {task.priority}</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusBadge status={task.status} />
+          <PriorityBadge priority={task.priority} />
         </div>
+        {showTimestamps ? (
+          <dl className="flex flex-col gap-1 text-xs text-gray-500 sm:flex-row sm:flex-wrap sm:gap-x-4">
+            <div className="min-w-0">
+              <dt className="sr-only">Created</dt>
+              <dd>
+                Created <time dateTime={task.createdAt}>{formatDateTime(task.createdAt)}</time>
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="sr-only">Updated</dt>
+              <dd>
+                Updated <time dateTime={task.updatedAt}>{formatDateTime(task.updatedAt)}</time>
+              </dd>
+            </div>
+          </dl>
+        ) : null}
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
-        <Button
-          variant="secondary"
-          onClick={handleStart}
-          disabled={!canStart(task) || startTask.isPending}
-        >
-          Start
+        <Button variant="secondary" onClick={handleStart} disabled={!canStart(task) || isMutating}>
+          {startTask.isPending ? "Starting…" : "Start"}
         </Button>
-        <Button onClick={handleComplete} disabled={!canComplete(task) || completeTask.isPending}>
-          Complete
+        <Button onClick={handleComplete} disabled={!canComplete(task) || isMutating}>
+          {completeTask.isPending ? "Completing…" : "Complete"}
         </Button>
       </div>
-    </div>
+    </Card>
   );
 }

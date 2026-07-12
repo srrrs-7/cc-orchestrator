@@ -1,6 +1,6 @@
 module github.com/srrrs-7/cc-orchestrator/app/migrator
 
-go 1.25.7
+go 1.26
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0

@@ -41,6 +41,12 @@ type Querier interface {
 	// a follow-up GetRefreshToken call in the same transaction, per 付録
 	// A's precedence rule.
 	ConsumeRefreshToken(ctx context.Context, tokenHash string) (string, error)
+	DeleteAuthCodesByClientID(ctx context.Context, clientID string) error
+	DeleteAuthCodesByUserID(ctx context.Context, userID string) error
+	// Removes a client row. Returns 0 rows when id is absent.
+	DeleteClient(ctx context.Context, id string) (int64, error)
+	DeleteConsentsByClientID(ctx context.Context, clientID string) error
+	DeleteConsentsByUserID(ctx context.Context, userID string) error
 	// Lazy eviction companion to GetActiveAuthCode: called by
 	// infra/postgres/authcode_repository.go after GetActiveAuthCode finds
 	// no active row, to opportunistically remove a code that exists but
@@ -55,6 +61,10 @@ type Querier interface {
 	// expires_at <= now() guard makes this a no-op (not an error) if
 	// token_hash does not exist or has not actually expired.
 	DeleteExpiredRefreshToken(ctx context.Context, tokenHash string) error
+	DeleteRefreshTokensByClientID(ctx context.Context, clientID string) error
+	DeleteRefreshTokensByUserID(ctx context.Context, userID string) error
+	// Removes a user row. Returns 0 rows when id is absent.
+	DeleteUser(ctx context.Context, id string) (int64, error)
 	// Backs authcode.Repository.FindByCode. Only a row that is both
 	// unconsumed and not yet past its TTL is "active"; an expired row is
 	// invisible here even though it still physically exists until
@@ -65,7 +75,7 @@ type Querier interface {
 	// authcode.ErrNotFound.
 	GetActiveAuthCode(ctx context.Context, code string) (GetActiveAuthCodeRow, error)
 	// SPEC-005 R2/R4: sqlc input for the clients table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs client.Repository.FindByID. Returns sql.ErrNoRows when
@@ -85,7 +95,7 @@ type Querier interface {
 	// evicting an expired row, if any).
 	GetRefreshToken(ctx context.Context, tokenHash string) (GetRefreshTokenRow, error)
 	// SPEC-005 R2/R4: sqlc input for the users table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs user.Repository.FindByID. Returns sql.ErrNoRows when absent;
@@ -96,17 +106,21 @@ type Querier interface {
 	// when absent; infra/postgres/user_repository.go maps that to
 	// user.ErrNotFound.
 	GetUserByUsername(ctx context.Context, username string) (User, error)
+	// ISSUE-032: sqlc input for consents (schema/migrations/000004_create_consents.sql).
+	HasConsent(ctx context.Context, arg HasConsentParams) (bool, error)
 	// SPEC-005 R2/R4: sqlc input for the authorization_codes table
-	// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+	// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 	// infra/postgres/sqlcgen from this file; keep both in the same commit
 	// (no drift).
 	// Backs authcode.Repository.Save: authorization codes are
 	// issue-once/consume-once, so this is a plain INSERT (not an upsert --
 	// a code colliding with an existing primary key would indicate a
 	// broken random generator, not a legitimate re-save).
+	// auth_time ($10) is the OIDC IdP session login timestamp; NULL means
+	// not available (maps to time.Time{} in Go -- see ISSUE-038).
 	InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) error
 	// SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
-	// (db/migrations/000002_create_refresh_tokens.sql). `make sqlc`
+	// (schema/migrations/000002_create_refresh_tokens.sql). `make sqlc`
 	// regenerates infra/postgres/sqlcgen from this file; keep both in the
 	// same commit (no drift).
 	// Backs refreshtoken.Repository.Save (the initial refresh token minted
@@ -115,7 +129,32 @@ type Querier interface {
 	// INSERT, not an upsert: a token_hash collision would indicate a
 	// broken random generator, not a legitimate re-save (mirrors
 	// InsertAuthCode's doc comment in authcodes.sql).
+	// auth_time ($7) is the OIDC IdP session login timestamp carried forward
+	// through rotation; NULL means not available (maps to time.Time{} in Go --
+	// see ISSUE-038).
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
+	// Backs client.Repository.ListAll for the admin management API.
+	ListClients(ctx context.Context) ([]Client, error)
+	// Backs user.Repository.ListAll for the admin management API.
+	ListUsers(ctx context.Context) ([]User, error)
+	// Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
+	// rows whose TTL has elapsed in a single statement. Called by the background
+	// purge ticker in cmd/authz/main.go (every 15 min) so expired authorization
+	// codes do not accumulate between lazy-eviction opportunities.
+	// Returns the number of rows deleted (sqlc :execrows).
+	// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+	// rows exist, and it never touches unconsumed/unexpired codes.
+	PurgeExpiredAuthCodes(ctx context.Context) (int64, error)
+	// Bulk eviction companion to DeleteExpiredRefreshToken (ISSUE-019 item 1):
+	// deletes ALL rows whose expires_at is in the past in a single statement.
+	// This covers both consumed (already-rotated) rows that were intentionally
+	// kept for reuse detection during their TTL and unconsumed rows that were
+	// never exchanged. Called by the background purge ticker in
+	// cmd/authz/main.go (every 15 min).
+	// Returns the number of rows deleted (sqlc :execrows).
+	// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+	// rows exist, and it never touches live (unexpired) refresh tokens.
+	PurgeExpiredRefreshTokens(ctx context.Context) (int64, error)
 	// Backs refreshtoken.Repository.RevokeFamily: the reuse-detection
 	// response (RFC 9700 4.14) that invalidates every token in a rotation
 	// chain (both active and already-consumed rows) in one statement, so
@@ -128,7 +167,10 @@ type Querier interface {
 	// Inserts a new row, or overwrites every column in place when id
 	// already exists, so repeated process starts converge on the same
 	// seed data rather than erroring on the second run.
+	// client_secret_hash is NULL for public clients, non-NULL (bcrypt hash)
+	// for confidential clients (ISSUE-035).
 	UpsertClient(ctx context.Context, arg UpsertClientParams) error
+	UpsertConsent(ctx context.Context, arg UpsertConsentParams) error
 	// Backs the startup idempotent seed (infra/postgres/seed.go's
 	// SeedUser), not user.Repository itself (which is read-only). Inserts
 	// a new row, or overwrites every column in place when id already

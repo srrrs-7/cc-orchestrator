@@ -81,7 +81,7 @@ func findTask(op string, query func() (sqlcgen.Task, error)) (*task.Task, error)
 
 // ListPage returns the Tasks in page -- ordered by created_at, id
 // ascending, at most page.Limit() rows starting at page.Offset() (see
-// db/queries/tasks.sql: ListTasksPage) -- alongside the total number
+// schema/queries/tasks.sql: ListTasksPage) -- alongside the total number
 // of Tasks in the table regardless of limit/offset (CountTasks). An
 // offset at or beyond the total simply yields an empty items slice,
 // not an error (SPEC-008 R2/R5).

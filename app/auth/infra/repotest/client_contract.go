@@ -1,19 +1,19 @@
 // Package repotest provides shared "behavioral contract" test suites
-// for app/auth's three persisted aggregates (client, user, authcode;
-// SPEC-005 R2). Each domain package's Repository interface
-// (domain/<aggregate>/repository.go) is the single source of truth
-// for what an implementation must do; the Run*RepositoryContract
-// functions in this package exercise those contracts once, so
-// infra/memory and (once implemented) infra/postgres can both be
-// proven to behave identically without duplicating test logic
-// per-implementation.
+// for app/auth's persisted aggregates (client, user, authcode,
+// refreshtoken; SPEC-005 R2). Each domain package's Repository
+// interface (domain/<aggregate>/repository.go) is the single source
+// of truth for what an implementation must do; the Run*RepositoryContract
+// functions in this package exercise those contracts once, so every
+// implementation can be proven to behave identically without
+// duplicating test logic per-implementation.
 //
-// These files carry no build tag: they must compile and be usable
-// both by the default (untagged) build -- exercised today against
-// infra/memory -- and by the "integration" build (see
-// infra/postgres/*_integration_test.go) once infra/postgres exists.
-// They must therefore not depend on anything beyond the standard
-// library and the relevant domain package.
+// SPEC-011 完了: infra/memory 削除済み。SPEC-013 以降、各 contract は
+// default `make test` の一部として実 DB(`auth_test`)に対して実行される
+// (see infra/postgres/*_integration_test.go).
+//
+// These files carry no build tag: they must remain compilable
+// regardless of build tags, so they must not depend on anything
+// beyond the standard library and the relevant domain package.
 package repotest
 
 import (
@@ -29,13 +29,12 @@ import (
 //
 // client.Repository is read-only (FindByID only; see
 // domain/client/repository.go): seeding is necessarily performed
-// outside the interface, through whatever mechanism each
-// implementation uses in production (infra/memory.ClientRepository's
-// Seed method; infra/postgres's planned startup idempotent-seed
-// UpsertClient, per docs/plans/SPEC-005-plan.md §2.2). Implementations
-// MUST start from an empty store on every call, the same way
-// memory.NewClientRepository() does, so subtests never observe data
-// left behind by another subtest.
+// outside the interface, through postgres.SeedClient's idempotent
+// upsert (wrapped by testsupport.SeedClient for tests).
+// Implementations MUST start from an empty store on every call so
+// subtests never observe data left behind by another subtest. See
+// infra/postgres/client_repository_integration_test.go for the
+// concrete factory (SPEC-011: Postgres is the sole implementation).
 type NewClientRepository func(t *testing.T, seed ...*client.Client) client.Repository
 
 // RunClientRepositoryContract runs the behavioral contract shared by
@@ -100,8 +99,7 @@ func RunClientRepositoryContract(t *testing.T, newRepo NewClientRepository) {
 	// SPEC-005 plan §5.3's boundary row for client ("空 scope/redirect の
 	// 配列") lists redirect_uris alongside scope/response_type/grant_type;
 	// the subtest above only exercises the latter three. RedirectURIs is
-	// backed by a real (non-set) []client.RedirectURI slice in
-	// infra/memory and a jsonb array in infra/postgres, so an empty list
+	// backed by a jsonb array in infra/postgres, so an empty list
 	// exercises a distinct code path (in particular jsonb NOT NULL
 	// encoding an empty Go slice as "[]", never SQL NULL -- see
 	// infra/postgres/client_repository.go's encodeStringSlice).
@@ -115,6 +113,45 @@ func RunClientRepositoryContract(t *testing.T, newRepo NewClientRepository) {
 		}
 		if len(got.RedirectURIs()) != 0 {
 			t.Errorf("RedirectURIs() = %v, want empty", got.RedirectURIs())
+		}
+	})
+
+	t.Run("ListAll returns every seeded client ordered by id", func(t *testing.T) {
+		c1 := newTestClient(t, "client-a",
+			[]string{"http://localhost:3000/a"},
+			[]string{"openid"},
+			[]string{"code"},
+			[]string{"authorization_code"},
+		)
+		c2 := newTestClient(t, "client-b",
+			[]string{"http://localhost:3000/b"},
+			[]string{"openid", "profile"},
+			[]string{"code"},
+			[]string{"authorization_code"},
+		)
+		repo := newRepo(t, c2, c1)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("ListAll() len = %d, want 2", len(got))
+		}
+		if got[0].ID().String() != "client-a" || got[1].ID().String() != "client-b" {
+			t.Errorf("ListAll() order = [%q, %q], want [client-a, client-b]", got[0].ID(), got[1].ID())
+		}
+	})
+
+	t.Run("ListAll on an empty store returns an empty slice", func(t *testing.T) {
+		repo := newRepo(t)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("ListAll() len = %d, want 0", len(got))
 		}
 	})
 }
@@ -142,12 +179,11 @@ func newTestClient(t *testing.T, id string, redirectURIs, scopes, responseTypes,
 // assertSameClient compares every observable field of got against
 // want. Multi-valued attributes are compared as sets (order-
 // independent): AllowedScopes/ResponseTypes/GrantTypes are backed by
-// a map internally even in infra/memory (client.Client.fromSet
-// iterates a Go map), so no implementation -- memory or Postgres --
-// is expected to promise a stable order. RedirectURIs is backed by a
-// real slice in infra/memory, but a jsonb round trip through Postgres
-// is not guaranteed to preserve order either, so it is compared the
-// same (order-independent) way here to avoid over-constraining a
+// a map in the domain (client.Client iterates a Go map), so the
+// Postgres implementation is not expected to promise a stable order.
+// RedirectURIs is backed by a jsonb array in infra/postgres; a jsonb
+// round trip is not guaranteed to preserve order, so it is compared
+// the same (order-independent) way here to avoid over-constraining a
 // property the domain does not itself promise.
 func assertSameClient(t *testing.T, got, want *client.Client) {
 	t.Helper()

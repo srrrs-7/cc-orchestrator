@@ -28,15 +28,32 @@ const (
 // SPEC-005 plan §RF.2.2): api now connects to its own dedicated
 // Postgres database (DBName) instead of a shared database selected via
 // connection search_path, so there is no DB_SCHEMA left to read.
+//
+// Env has no AppEnv field (removed by SPEC-011): memory fallback is
+// gone and fail-closed is enforced by Config.Validate (DB_HOST/DB_NAME/
+// DB_USER/DB_PASSWORD required). APP_ENV is no longer consumed.
 type Env struct {
 	Port       string
-	AppEnv     string
 	DBHost     string
 	DBPort     string
 	DBName     string
 	DBUser     string
 	DBPassword string
 	DBSSLMode  string
+
+	// AuthIssuer, AuthJWKSURL, and AuthAudience configure Bearer JWT
+	// authentication. When all three are set, the API validates incoming
+	// JWTs against the auth server's JWKS with full iss+aud checks. When
+	// any is unset, auth middleware is disabled (useful for local
+	// development without an auth server). In production all three must
+	// be set:
+	//   AUTH_ISSUER    — expected "iss" value in access tokens
+	//   AUTH_JWKS_URL  — URL of the auth server's JWKS endpoint
+	//   AUTH_AUDIENCE  — expected value in access token "aud" claim
+	//                    (ISSUE-037: resource identifier for this API)
+	AuthIssuer   string
+	AuthJWKSURL  string
+	AuthAudience string
 
 	// DBReader holds the reader-pool connection settings SPEC-010
 	// adds (docs/plans/SPEC-010-plan.md). Each field already carries
@@ -68,14 +85,16 @@ type DBReaderEnv struct {
 // Env.validate to check the result.
 func NewEnv() Env {
 	e := Env{
-		Port:       orDefault(os.Getenv("PORT"), defaultPort),
-		AppEnv:     os.Getenv("APP_ENV"),
-		DBHost:     os.Getenv("DB_HOST"),
-		DBPort:     orDefault(os.Getenv("DB_PORT"), defaultDBPort),
-		DBName:     os.Getenv("DB_NAME"),
-		DBUser:     os.Getenv("DB_USER"),
-		DBPassword: os.Getenv("DB_PASSWORD"),
-		DBSSLMode:  orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
+		Port:         orDefault(os.Getenv("PORT"), defaultPort),
+		DBHost:       os.Getenv("DB_HOST"),
+		DBPort:       orDefault(os.Getenv("DB_PORT"), defaultDBPort),
+		DBName:       os.Getenv("DB_NAME"),
+		DBUser:       os.Getenv("DB_USER"),
+		DBPassword:   os.Getenv("DB_PASSWORD"),
+		DBSSLMode:    orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
+		AuthIssuer:   os.Getenv("AUTH_ISSUER"),
+		AuthJWKSURL:  os.Getenv("AUTH_JWKS_URL"),
+		AuthAudience: os.Getenv("AUTH_AUDIENCE"),
 	}
 
 	// SPEC-010 R3/R4: each DB_READER_* item falls back individually to
@@ -125,35 +144,45 @@ func (e Env) readerConfig() postgres.Config {
 	}
 }
 
-// validate resolves the persistence mode and, when that mode is
-// Postgres, checks that the required DB_* variables are present for
-// both the writer and reader configs (DB_* are optional in memory
-// mode). Validating the reader config too is mostly redundant once
-// the writer config is valid, since NewEnv already fell every unset
-// DB_READER_* item back to the (about-to-be-validated) writer value --
-// but it still catches the case where an operator supplies a partial,
-// invalid override (e.g. DB_READER_USER set to an empty string is
-// impossible via os.Getenv, but a future non-Getenv-backed Env literal
-// could still hit this). It returns the resolved Mode so callers need
-// not call postgres.SelectMode a second time. SelectMode (and
-// therefore the resolved Mode) is a function of the writer's own
-// DB_HOST/APP_ENV only: DB_READER_* never influences which mode is
-// selected. The returned error never contains DBPassword's or
-// DBReader.Password's value.
-func (e Env) validate() (postgres.Mode, error) {
-	mode, err := postgres.SelectMode(e.DBHost, e.AppEnv)
-	if err != nil {
-		return "", fmt.Errorf("api: validate env: %w", err)
+// validate checks that the required DB_* variables are present for
+// both the writer and reader configs (SPEC-011: Postgres is the only
+// persistence backend; fail-closed is enforced by Config.Validate).
+// It also enforces that AUTH_ISSUER and AUTH_JWKS_URL are either both
+// set or both unset (partial auth config is a misconfiguration).
+// The writer and reader configs are validated independently so that a
+// partial DB_READER_* override (e.g. DB_READER_USER set to an empty
+// string via a future non-Getenv-backed Env literal) is still caught.
+// The returned error never contains DBPassword's or DBReader.Password's
+// value.
+func (e Env) validate() error {
+	if err := e.writerConfig().Validate(); err != nil {
+		return fmt.Errorf("api: validate env: %w", err)
 	}
-	if mode == postgres.ModePostgres {
-		if err := e.writerConfig().Validate(); err != nil {
-			return "", fmt.Errorf("api: validate env: %w", err)
-		}
-		if err := e.readerConfig().Validate(); err != nil {
-			return "", fmt.Errorf("api: validate env: %w", err)
-		}
+	if err := e.readerConfig().Validate(); err != nil {
+		return fmt.Errorf("api: validate env: %w", err)
 	}
-	return mode, nil
+	// AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be set
+	// together or all be unset (partial auth config is a
+	// misconfiguration). ISSUE-037: AUTH_AUDIENCE separates API-bound
+	// access tokens from other token uses.
+	authVarsSet := map[string]bool{
+		"AUTH_ISSUER":   e.AuthIssuer != "",
+		"AUTH_JWKS_URL": e.AuthJWKSURL != "",
+		"AUTH_AUDIENCE": e.AuthAudience != "",
+	}
+	allSet := authVarsSet["AUTH_ISSUER"] && authVarsSet["AUTH_JWKS_URL"] && authVarsSet["AUTH_AUDIENCE"]
+	noneSet := !authVarsSet["AUTH_ISSUER"] && !authVarsSet["AUTH_JWKS_URL"] && !authVarsSet["AUTH_AUDIENCE"]
+	if !allSet && !noneSet {
+		return fmt.Errorf("api: validate env: AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be set or all be unset")
+	}
+	return nil
+}
+
+// authEnabled reports whether JWT auth middleware should be activated.
+// AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be non-empty
+// (validate guarantees they are all set together or all unset).
+func (e Env) authEnabled() bool {
+	return e.AuthIssuer != "" && e.AuthJWKSURL != "" && e.AuthAudience != ""
 }
 
 // orDefault returns v, or def when v is empty.

@@ -1,6 +1,6 @@
 # app/migrator: SPEC-005's shared migration runner for app/api and
 # app/auth (2026-07-09 refactor, plan §RF.1.2/§RF.6.1 RF-b). One image
-# bundles both stacks' db/migrations; the caller selects which to apply
+# bundles both stacks' schema migrations; the caller selects which to apply
 # at run time via -target api|auth (see main.go). This replaces the
 # prior per-stack app/{api,auth}/Dockerfile.migrate + db/migrate-
 # entrypoint.sh (removed by this refactor), which needed a shell + psql
@@ -9,17 +9,18 @@
 # no psql/shell is required at all.
 #
 # Build context is the *repository root*, not app/migrator, because this
-# Dockerfile also COPYs app/api/db/migrations and app/auth/db/migrations,
+# Dockerfile also COPYs app/api/infra/postgres/schema/migrations and
+# app/auth/infra/postgres/schema/migrations,
 # which live outside app/migrator's own directory tree:
 #
 #   docker build -f app/migrator/Dockerfile .
 #
 # --- build stage -------------------------------------------------------
-# Go 1.24 on Alpine (musl). CGO_ENABLED=0 produces a fully static
-# binary, so glibc/gcc from the full golang:1.24 image are not needed;
+# Go 1.26 on Alpine (musl). CGO_ENABLED=0 produces a fully static
+# binary, so glibc/gcc from the full golang:1.26 image are not needed;
 # the binary still runs unmodified on the distroless runtime stage
 # below (same pattern as app/api/Dockerfile and app/auth/Dockerfile).
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Copy only the dependency manifest first so `go mod download` is
@@ -45,8 +46,8 @@ COPY --from=build /out/migrator /migrator
 # (RF-b: a single ECR repository/image serves api and auth alike,
 # selected at run time by -target's default migrations-dir,
 # "/migrations/<target>" -- see main.go's parseFlags).
-COPY app/api/db/migrations /migrations/api
-COPY app/auth/db/migrations /migrations/auth
+COPY app/api/infra/postgres/schema/migrations /migrations/api
+COPY app/auth/infra/postgres/schema/migrations /migrations/auth
 
 USER nonroot:nonroot
 

@@ -12,12 +12,13 @@ import (
 
 // TestToken_ConcurrentCodeReuse_ExactlyOneSucceeds covers the
 // concurrency fix in AuthorizationService.Token /
-// infra/memory.AuthCodeRepository.Consume: firing many concurrent
-// /token requests for the same authorization code must yield exactly
-// one 200 (a single successful redemption) and every other request
-// must observe invalid_grant, never two successful token issuances
-// for one code. Run with `go test -race` to also confirm the
-// repository's Consume critical section has no data race.
+// postgres.AuthCodeRepository.Consume: firing many concurrent /token
+// requests for the same authorization code must yield exactly one 200
+// (a single successful redemption) and every other request must
+// observe invalid_grant, never two successful token issuances for one
+// code. Run with `go test -race` to also confirm the repository's
+// Consume critical section (a real Postgres row, per SPEC-013) has no
+// data race.
 func TestToken_ConcurrentCodeReuse_ExactlyOneSucceeds(t *testing.T) {
 	h := newTestHandler(t)
 

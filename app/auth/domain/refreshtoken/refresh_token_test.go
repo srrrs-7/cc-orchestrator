@@ -32,6 +32,7 @@ func newTestRefreshToken(t *testing.T) (*refreshtoken.RefreshToken, refreshtoken
 		refreshtoken.NewClientID("client-1"),
 		refreshtoken.NewUserID("user-1"),
 		testScope(t, "openid profile"),
+		time.Time{},
 	)
 	if err != nil {
 		t.Fatalf("setup Issue() unexpected error: %v", err)
@@ -75,6 +76,7 @@ func TestIssue(t *testing.T) {
 		refreshtoken.NewClientID("client-1"),
 		refreshtoken.NewUserID("user-1"),
 		testScope(t, "openid profile"),
+		time.Time{},
 	)
 	if err != nil {
 		t.Fatalf("setup second Issue() unexpected error: %v", err)
@@ -174,7 +176,7 @@ func TestRefreshToken_IsExpired(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rt := refreshtoken.Reconstruct(
 				base.TokenHash(), base.FamilyID(), base.ClientID(), base.UserID(), base.Scope(),
-				tt.expiresAt, false,
+				time.Time{}, tt.expiresAt, false,
 			)
 			if got := rt.IsExpired(); got != tt.want {
 				t.Errorf("IsExpired() = %v, want %v (expiresAt=%v)", got, tt.want, tt.expiresAt)
@@ -193,7 +195,7 @@ func TestReconstruct_Getters(t *testing.T) {
 	base, _ := newTestRefreshToken(t)
 	expiresAt := time.Now().Add(1 * time.Hour)
 
-	rt := refreshtoken.Reconstruct(base.TokenHash(), base.FamilyID(), base.ClientID(), base.UserID(), base.Scope(), expiresAt, true)
+	rt := refreshtoken.Reconstruct(base.TokenHash(), base.FamilyID(), base.ClientID(), base.UserID(), base.Scope(), time.Time{}, expiresAt, true)
 
 	if rt.TokenHash() != base.TokenHash() {
 		t.Errorf("TokenHash() = %v, want %v", rt.TokenHash(), base.TokenHash())

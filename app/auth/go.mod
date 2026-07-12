@@ -1,8 +1,11 @@
 module github.com/srrrs-7/cc-orchestrator/app/auth
 
-go 1.25.0
+go 1.26
 
-require github.com/jackc/pgx/v5 v5.10.0
+require (
+	github.com/jackc/pgx/v5 v5.10.0
+	golang.org/x/crypto v0.31.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

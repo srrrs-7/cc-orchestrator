@@ -1,25 +1,27 @@
-// env_test.go exercises env.go's Env / NewEnv / (Env).validate /
-// (Env).dbConfig -- the sole place app/auth reads the process
-// environment (os.Getenv), consolidated here by the env.go refactor.
+// env_test.go exercises env.go's Env / NewEnv / (Env).validate --
+// the sole place app/auth reads the process environment (os.Getenv),
+// consolidated here by the env.go refactor.
+//
 // All os.Getenv reads happen inside NewEnv, so these tests use
 // t.Setenv (auto-restored per test, which also neutralizes any
 // ambient value already present in the CI/dev environment) to isolate
 // each case, and never require a live Postgres: (Env).validate only
-// resolves a postgres.Mode and checks presence of DB_* fields via
-// postgres.Config.Validate, it never dials a connection.
+// checks presence of DB_* fields via postgres.Config.Validate, it
+// never dials a connection.
+//
+// APP_ENV is removed (SPEC-011): infra/memory is gone; Postgres is the
+// sole backend; validate() now always enforces the DB_* fields via
+// Config.Validate (fail-closed), with no mode-selection step.
 package main
 
 import (
-	"errors"
 	"strings"
 	"testing"
-
-	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 )
 
 // envVars lists every environment variable NewEnv reads.
 var envVars = []string{
-	"PORT", "APP_ENV", "ISSUER",
+	"PORT", "ISSUER",
 	"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE",
 	"DB_READER_HOST", "DB_READER_PORT", "DB_READER_NAME", "DB_READER_USER", "DB_READER_PASSWORD", "DB_READER_SSLMODE",
 }
@@ -34,10 +36,10 @@ var readerFallbackVars = []string{
 
 // TestNewEnv_Defaults confirms PORT/ISSUER/DB_PORT/DB_SSLMODE fall back
 // to their documented defaults when every relevant variable is unset,
-// while variables without a default (APP_ENV, DB_HOST, DB_NAME,
-// DB_USER, DB_PASSWORD) stay empty. DB_SSLMODE's default is
-// fail-closed ("require", ISSUE-016 m-2): omitting it must not
-// silently downgrade the connection to plaintext.
+// while variables without a default (DB_HOST, DB_NAME, DB_USER,
+// DB_PASSWORD) stay empty. DB_SSLMODE's default is fail-closed
+// ("require", ISSUE-016 m-2): omitting it must not silently downgrade
+// the connection to plaintext.
 func TestNewEnv_Defaults(t *testing.T) {
 	for _, key := range envVars {
 		t.Setenv(key, "")
@@ -61,7 +63,6 @@ func TestNewEnv_Defaults(t *testing.T) {
 		name string
 		got  string
 	}{
-		{"AppEnv", e.AppEnv},
 		{"DBHost", e.DBHost},
 		{"DBName", e.DBName},
 		{"DBUser", e.DBUser},
@@ -98,13 +99,9 @@ func TestNewEnv_Defaults(t *testing.T) {
 
 // TestNewEnv_ReadsEveryVar sets every variable NewEnv reads to a
 // distinct value and asserts each is threaded through to the
-// corresponding Env field unchanged. This migrates the env-read
-// coverage the pre-refactor infra/postgres.ConfigFromEnv tests used to
-// carry for the DB_* subset, now consolidated with the non-DB
-// variables (including ISSUER) under NewEnv.
+// corresponding Env field unchanged.
 func TestNewEnv_ReadsEveryVar(t *testing.T) {
 	t.Setenv("PORT", "9090")
-	t.Setenv("APP_ENV", "production")
 	t.Setenv("ISSUER", "https://auth.example.com")
 	t.Setenv("DB_HOST", "db.internal")
 	t.Setenv("DB_PORT", "6543")
@@ -121,7 +118,6 @@ func TestNewEnv_ReadsEveryVar(t *testing.T) {
 		want  string
 	}{
 		{"Port", e.Port, "9090"},
-		{"AppEnv", e.AppEnv, "production"},
 		{"Issuer", e.Issuer, "https://auth.example.com"},
 		{"DBHost", e.DBHost, "db.internal"},
 		{"DBPort", e.DBPort, "6543"},
@@ -137,31 +133,13 @@ func TestNewEnv_ReadsEveryVar(t *testing.T) {
 	}
 }
 
-// TestValidate_MemoryMode_AllowsEmptyDBFields is the 境界値 case for
-// validate: in memory mode (APP_ENV=local, DB_HOST unset) every DB_*
-// field being its zero value is legal -- validate must not reject an
-// otherwise-valid local/test configuration just because DB_* was never
-// set.
-func TestValidate_MemoryMode_AllowsEmptyDBFields(t *testing.T) {
-	e := Env{AppEnv: "local"}
-
-	mode, err := e.validate()
-	if err != nil {
-		t.Fatalf("validate() unexpected error: %v", err)
-	}
-	if mode != postgres.ModeMemory {
-		t.Errorf("validate() mode = %q, want %q", mode, postgres.ModeMemory)
-	}
-}
-
-// TestValidate_PostgresMode_RequiresDBFields is the 異常系 case: once
-// DB_HOST selects Postgres mode, the remaining required DB_* fields
-// (DB_NAME/DB_USER/DB_PASSWORD) become mandatory, and validate's error
-// must name every one that is missing.
-func TestValidate_PostgresMode_RequiresDBFields(t *testing.T) {
+// TestValidate_RequiresDBFields is the 異常系 case: with DB_HOST set
+// but the remaining required DB_* fields (DB_NAME/DB_USER/DB_PASSWORD)
+// absent, validate must return an error naming every missing variable.
+func TestValidate_RequiresDBFields(t *testing.T) {
 	e := Env{DBHost: "db.internal"} // DBName/DBUser/DBPassword deliberately empty
 
-	_, err := e.validate()
+	err := e.validate()
 	if err == nil {
 		t.Fatal("validate() = nil error, want an error naming the missing DB_NAME/DB_USER/DB_PASSWORD")
 	}
@@ -172,15 +150,15 @@ func TestValidate_PostgresMode_RequiresDBFields(t *testing.T) {
 	}
 }
 
-// TestValidate_PostgresMode_ErrorNeverLeaksPassword is the security
-// invariant: even though DBPassword is populated (unlike DBName/DBUser
-// alongside it), validate's error must never echo its value -- only
-// missing variable *names* may appear.
-func TestValidate_PostgresMode_ErrorNeverLeaksPassword(t *testing.T) {
+// TestValidate_ErrorNeverLeaksPassword is the security invariant:
+// even though DBPassword is populated (unlike DBName/DBUser alongside
+// it), validate's error must never echo its value -- only missing
+// variable *names* may appear.
+func TestValidate_ErrorNeverLeaksPassword(t *testing.T) {
 	const secret = "sup3r-secret-xyz"
 	e := Env{DBHost: "db.internal", DBPassword: secret} // DBName/DBUser deliberately empty
 
-	_, err := e.validate()
+	err := e.validate()
 	if err == nil {
 		t.Fatal("validate() = nil error, want an error (DB_NAME/DB_USER missing)")
 	}
@@ -194,47 +172,42 @@ func TestValidate_PostgresMode_ErrorNeverLeaksPassword(t *testing.T) {
 	}
 }
 
-// TestValidate_FailClosed is the 異常系 fail-closed case: with every
-// field at its zero value (DB_HOST unset, APP_ENV unset), validate
-// must not silently default to memory mode -- it must return an error
-// wrapping postgres.ErrPersistenceNotConfigured, so callers can
-// distinguish "not configured" from other failures via errors.Is.
+// TestValidate_FailClosed is the fail-closed case: with every field
+// at its zero value (DB_HOST unset), validate must return an error
+// listing the missing required fields -- it must never silently
+// succeed (SPEC-011: Postgres is required; there is no fallback).
 func TestValidate_FailClosed(t *testing.T) {
 	e := Env{}
 
-	_, err := e.validate()
+	err := e.validate()
 	if err == nil {
-		t.Fatal("validate() = nil error, want a fail-closed error (DB_HOST unset, APP_ENV unset)")
+		t.Fatal("validate() = nil error, want a fail-closed error (all DB fields unset)")
 	}
-	if !errors.Is(err, postgres.ErrPersistenceNotConfigured) {
-		t.Errorf("validate() error = %v, want it to wrap %v", err, postgres.ErrPersistenceNotConfigured)
+	for _, want := range []string{"DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validate() error = %q, want it to name missing variable %s", err.Error(), want)
+		}
 	}
 }
 
-// TestValidate_PostgresMode_AllFieldsPresent is the 正常系 case: a
-// fully-populated Postgres Env resolves to ModePostgres with no error.
-func TestValidate_PostgresMode_AllFieldsPresent(t *testing.T) {
+// TestValidate_AllFieldsPresent is the 正常系 case: a fully-populated
+// Env with both writer and reader configs complete passes validate with
+// no error.
+func TestValidate_AllFieldsPresent(t *testing.T) {
 	e := Env{DBHost: "db.internal", DBName: "appdb", DBUser: "appuser", DBPassword: "pw"}
-	// SPEC-010: validate() also validates the reader Config in Postgres
-	// mode. A hand-built Env literal (unlike one NewEnv returns) does
-	// not get DB_READER_* fallback for free -- that fallback happens
-	// inside NewEnv itself -- so DBReader is populated here to mirror
-	// what NewEnv's fallback would produce when every DB_READER_* is
-	// unset (reader == writer), keeping this test's original intent
-	// (a fully-populated Postgres Env succeeds) isolated from the
-	// separate fallback behavior TestNewEnv_ReaderFallback_* below
-	// exercises directly.
+	// SPEC-010: validate() also validates the reader Config.
+	// A hand-built Env literal (unlike one NewEnv returns) does not get
+	// DB_READER_* fallback for free -- that fallback happens inside
+	// NewEnv itself -- so DBReader is populated here to mirror what
+	// NewEnv's fallback would produce when every DB_READER_* is unset
+	// (reader == writer).
 	e.DBReader.Host = e.DBHost
 	e.DBReader.Name = e.DBName
 	e.DBReader.User = e.DBUser
 	e.DBReader.Password = e.DBPassword
 
-	mode, err := e.validate()
-	if err != nil {
+	if err := e.validate(); err != nil {
 		t.Fatalf("validate() unexpected error: %v", err)
-	}
-	if mode != postgres.ModePostgres {
-		t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
 	}
 }
 
@@ -249,11 +222,6 @@ func TestValidate_PostgresMode_AllFieldsPresent(t *testing.T) {
 // empty) DB_READER_* strings. (Env).writerConfig() / (Env).readerConfig()
 // project Env's writer fields / Env.DBReader into a postgres.Config
 // each, replacing the pre-SPEC-010 (Env).dbConfig().
-//
-// These two method names and the Env.DBReader field are the exact
-// symbols docs/plans/SPEC-010-plan.md's implementation table names for
-// cmd/authz/env.go; impl-auth must implement them under these names for
-// this file to compile.
 
 // TestNewEnv_ReaderFallback_AllUnset covers R3/R4's core fallback case:
 // with every DB_READER_* variable unset, Env.DBReader must equal the
@@ -409,58 +377,12 @@ func TestNewEnv_ReaderFallback_PerField(t *testing.T) {
 	}
 }
 
-// TestValidate_SelectMode_IndependentOfDBReader covers R3/R4's
-// non-interference guarantee: DB_READER_* variables (surfaced via
-// Env.DBReader) must never influence which persistence mode
-// (Env).validate() selects -- that decision is solely a function of
-// the writer's own DB_HOST/APP_ENV (postgres.SelectMode's existing
-// contract), unchanged by SPEC-010.
-func TestValidate_SelectMode_IndependentOfDBReader(t *testing.T) {
-	t.Run("DB_READER_HOST alone does not select postgres (writer DB_HOST unset)", func(t *testing.T) {
-		for _, key := range readerFallbackVars {
-			t.Setenv(key, "")
-		}
-		t.Setenv("DB_HOST", "")
-		t.Setenv("APP_ENV", "local")
-		t.Setenv("DB_READER_HOST", "replica.internal")
-
-		e := NewEnv()
-		mode, err := e.validate()
-		if err != nil {
-			t.Fatalf("validate() unexpected error: %v", err)
-		}
-		if mode != postgres.ModeMemory {
-			t.Errorf("validate() mode = %q, want %q (DB_READER_HOST must not influence SelectMode)", mode, postgres.ModeMemory)
-		}
-	})
-
-	t.Run("writer DB_HOST set selects postgres regardless of DB_READER_* presence", func(t *testing.T) {
-		for _, key := range readerFallbackVars {
-			t.Setenv(key, "")
-		}
-		t.Setenv("DB_HOST", "db.internal")
-		t.Setenv("DB_NAME", "appdb")
-		t.Setenv("DB_USER", "appuser")
-		t.Setenv("DB_PASSWORD", "pw")
-		// DB_READER_* left entirely unset.
-
-		e := NewEnv()
-		mode, err := e.validate()
-		if err != nil {
-			t.Fatalf("validate() unexpected error: %v", err)
-		}
-		if mode != postgres.ModePostgres {
-			t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
-		}
-	})
-}
-
-// TestValidate_PostgresMode_WithReaderOverride_StaysValid exercises the
-// full NewEnv -> validate() path with the writer fully valid and only
-// DB_READER_HOST overridden: validate() must still resolve
-// ModePostgres with no error, since every other DB_READER_* field
-// falls back to the (already valid) writer value.
-func TestValidate_PostgresMode_WithReaderOverride_StaysValid(t *testing.T) {
+// TestValidate_WithReaderOverride_StaysValid exercises the full
+// NewEnv -> validate() path with the writer fully valid and only
+// DB_READER_HOST overridden: validate() must still succeed, since
+// every other DB_READER_* field falls back to the (already valid)
+// writer value.
+func TestValidate_WithReaderOverride_StaysValid(t *testing.T) {
 	for _, key := range readerFallbackVars {
 		t.Setenv(key, "")
 	}
@@ -471,12 +393,8 @@ func TestValidate_PostgresMode_WithReaderOverride_StaysValid(t *testing.T) {
 	t.Setenv("DB_READER_HOST", "replica.internal")
 
 	e := NewEnv()
-	mode, err := e.validate()
-	if err != nil {
+	if err := e.validate(); err != nil {
 		t.Fatalf("validate() unexpected error: %v", err)
-	}
-	if mode != postgres.ModePostgres {
-		t.Errorf("validate() mode = %q, want %q", mode, postgres.ModePostgres)
 	}
 	if e.readerConfig().Host != "replica.internal" {
 		t.Errorf("readerConfig().Host = %q, want %q", e.readerConfig().Host, "replica.internal")

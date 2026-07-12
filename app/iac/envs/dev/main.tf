@@ -85,6 +85,45 @@ module "cdn" {
   tags = local.common_tags
 }
 
+# ISSUE-041 / ISSUE-043: single computation point for every OIDC value
+# service_api and service_auth must agree on, so they cannot drift the way
+# service_api's AUTH_ISSUER/AUTH_JWKS_URL/AUTH_AUDIENCE drifted (to
+# nonexistent) from service_auth's ISSUER/API_AUDIENCE before this fix. All
+# three are derived from module.cdn.cloudfront_domain_name -- the same
+# output ISSUER already used below -- rather than plain variables, so there
+# is no tfvars value an operator could leave unset: the wiring falls
+# directly out of the CloudFront distribution existing, which is
+# unconditionally true for this root module.
+locals {
+  # https, not http (ISSUE-043): CloudFront enforces
+  # viewer_protocol_policy = redirect-to-https on every behavior
+  # (modules/cdn/main.tf), so real traffic only ever reaches this
+  # distribution over HTTPS. app/auth's SecureCookiesFromIssuer
+  # (route/router.go) decides the idp_session/idp_pending cookies' Secure
+  # attribute purely from this string's scheme, so it must say https to
+  # match that reality.
+  auth_issuer = "https://${module.cdn.cloudfront_domain_name}/auth"
+
+  # Resource identifier (RFC 8707-style audience) for app/api's access
+  # tokens. Shared verbatim as auth's API_AUDIENCE (the "aud" claim
+  # app/auth writes into every access token) and api's AUTH_AUDIENCE (the
+  # "aud" app/api's Bearer JWT middleware requires) below so the two can
+  # never diverge (ISSUE-041, ISSUE-037).
+  auth_audience = "https://${module.cdn.cloudfront_domain_name}/api"
+
+  # api's Bearer JWT middleware fetches this over the same public
+  # CloudFront path a browser would use: both service_api and
+  # service_auth run in public subnets with assign_public_ip = true and
+  # no NAT gateway (modules/service/ecs.tf), so this is directly
+  # internet-reachable from inside the api task without needing the
+  # CloudFront<->ALB origin-verify secret (which only CloudFront itself
+  # injects). This is exactly the jwks_uri app/auth's own OIDC discovery
+  # document publishes (issuer + "/.well-known/jwks.json",
+  # app/auth/service/discovery_service.go), so api validates against the
+  # very endpoint auth advertises (ISSUE-041).
+  auth_jwks_url = "${local.auth_issuer}/.well-known/jwks.json"
+}
+
 module "service_api" {
   source = "../../modules/service"
 
@@ -132,8 +171,24 @@ module "service_api" {
   # See the database-bootstrap note on module.service_api's
   # migration_environment below for how that database comes to exist before
   # api's app container ever connects to it.
+  #
+  # ISSUE-041: AUTH_ISSUER/AUTH_JWKS_URL/AUTH_AUDIENCE wire app/api's Bearer
+  # JWT middleware (app/api/cmd/api/env.go's authEnabled()) to the auth
+  # server deployed as module.service_auth below -- without all three set,
+  # app/api's env.validate() treats the trio as an intentional dev opt-out
+  # (all-unset is accepted) and starts with no auth middleware at all, i.e.
+  # every /tasks* endpoint publicly reachable unauthenticated. All three
+  # values come from this file's shared `local.auth_*` block above (derived
+  # from module.cdn.cloudfront_domain_name, not a variable), so this
+  # binding cannot be silently left unset by a missing tfvars entry, and
+  # AUTH_ISSUER/AUTH_AUDIENCE are guaranteed to equal module.service_auth's
+  # ISSUER/API_AUDIENCE below (fixing the original drift risk without
+  # introducing a new one).
   environment = [
     { name = "PORT", value = tostring(var.container_port) },
+    { name = "AUTH_ISSUER", value = local.auth_issuer },
+    { name = "AUTH_JWKS_URL", value = local.auth_jwks_url },
+    { name = "AUTH_AUDIENCE", value = local.auth_audience },
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
     { name = "DB_NAME", value = "api" },
@@ -238,14 +293,26 @@ module "service_auth" {
   # modules/cdn). app/auth is unmodified: it derives every absolute OIDC URL
   # (authorize/token/userinfo/jwks) by concatenating this issuer string, so
   # each resolves back to a path actually reachable through the /auth/*
-  # behavior.
+  # behavior. Uses https (ISSUE-043): CloudFront enforces
+  # redirect-to-https, and app/auth's SecureCookiesFromIssuer decides the
+  # idp_session/idp_pending cookies' Secure attribute from this string's
+  # scheme, so http here would wrongly issue non-Secure session cookies
+  # despite every real request arriving over HTTPS.
+  #
+  # API_AUDIENCE (ISSUE-041/ISSUE-037) is the "aud" claim app/auth writes
+  # into every access token it issues; it must equal module.service_api's
+  # AUTH_AUDIENCE below or api's Bearer JWT middleware rejects every token
+  # auth issues. Both this and ISSUER come from this file's shared
+  # `local.auth_*` block above so the two module instances cannot drift.
+  #
   # SPEC-005 R6 discrete DB_* contract (app/auth's infra/postgres/db.go
   # ConfigFromEnv), on the same shared RDS instance as api but its own
   # dedicated database DB_NAME="auth" (SPEC-005 RF.1.1 database-per-service;
   # api and auth no longer share a database or a search_path).
   environment = [
     { name = "PORT", value = tostring(var.auth_container_port) },
-    { name = "ISSUER", value = "http://${module.cdn.cloudfront_domain_name}/auth" },
+    { name = "ISSUER", value = local.auth_issuer },
+    { name = "API_AUDIENCE", value = local.auth_audience },
     { name = "DB_HOST", value = module.db.db_endpoint },
     { name = "DB_PORT", value = tostring(module.db.db_port) },
     { name = "DB_NAME", value = "auth" },

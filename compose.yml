@@ -5,7 +5,7 @@ services:
   # split by schema/search_path. app/migrator (run via the root
   # Makefile's `migrate` target, a prerequisite of `up`/`up-d` below)
   # creates each database (if missing) and applies that stack's
-  # db/migrations against it -- there is no compose init script step
+  # schema/migrations against it -- there is no compose init script step
   # for this anymore (schema/database bootstrap moved from
   # docker-entrypoint-initdb.d into app/migrator so local/CI/prod share
   # one creation path). POSTGRES_DB below is only the Postgres image's
@@ -21,7 +21,7 @@ services:
     # tool/runtime version this repo uses) instead of a second hardcoded
     # copy of "17.5-alpine". The `:-17.5-alpine` fallback matters because,
     # unlike `db-up`/`migrate` (root Makefile, always invoked with
-    # `--env-file versions.env` — see COMPOSE_DB_FILES) and CI (which also
+    # `--env-file .devcontainer/versions.env` — see COMPOSE_DB_FILES) and CI (which also
     # always passes `--env-file`), the plain `up`/`up-d`/`build` targets
     # further up this same Makefile intentionally do NOT pass `--env-file`
     # (they never needed any versions.env value before this change), so
@@ -51,6 +51,38 @@ services:
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
+    # SPEC-013 R6 (revises SPEC-009 R3's "test phases stay fully
+    # offline"): also joins the `dbnet` internal network (declared in this
+    # file's own top-level `networks:` below, and identically in
+    # .devcontainer/compose.tools.yml's own top-level `networks:` so each
+    # file stays independently valid alone -- see that file's `tools-db`
+    # service comment for the full rationale), so the toolbox's `tools-db`
+    # service -- which has no route to the implicit default network / the
+    # public internet, by design -- can still reach `postgres` by service
+    # name for DB-backed test phases (SPEC-013). `default` must be listed
+    # explicitly alongside `dbnet` here: once a service declares an
+    # explicit `networks:` list, Compose no longer auto-attaches it to the
+    # implicit default network, and `api`/`auth` below (plus the `tools`
+    # service, when layered in via the root Makefile's `db-up`/`migrate`/
+    # `migrate-test` targets) still need to keep reaching `postgres` over
+    # that same default network exactly as before -- this must not
+    # regress.
+    networks:
+      - default
+      - dbnet
+    # SPEC-013 R6 review fix (Minor, defense-in-depth): explicitly disable
+    # IP forwarding inside this container's own network namespace. `net.*`
+    # sysctls are namespaced per-container in Linux, so this has no effect
+    # on the host or on any other container -- it only statically forecloses
+    # this specific container from ever being (mis)configured as a router
+    # between its two networks (`default`, which reaches the internet via
+    # `tools`, and `dbnet`, which `tools-db` uses precisely because it does
+    # NOT reach the internet). Postgres does not route traffic today and
+    # this container's image does not set ip_forward=1 on its own, so this
+    # is a static guard against that changing later (image bump, config
+    # drift), not a fix for an active bypass.
+    sysctls:
+      net.ipv4.ip_forward: "0"
 
   api:
     build:
@@ -65,6 +97,9 @@ services:
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
+      AUTH_ISSUER: http://localhost:8080/auth
+      AUTH_JWKS_URL: http://auth:8080/.well-known/jwks.json
+      AUTH_AUDIENCE: http://localhost:8081/api
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
@@ -79,13 +114,29 @@ services:
     ports:
       - "127.0.0.1:8082:8080"
     environment:
-      ISSUER: http://localhost:8082
+      ISSUER: http://localhost:8080/auth
+      API_AUDIENCE: http://localhost:8081/api
+      DEMO_PASSWORD: demo
+      DEMO_LOG_PASSWORD: "1"
+      ADMIN_API_KEY: local-dev-admin-key
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: auth
       DB_USER: app
       DB_PASSWORD: app
       DB_SSLMODE: disable
+      # ISSUE-036: persistent RSA signing keys (optional for local dev).
+      # When empty the auth server falls back to an ephemeral key that does
+      # not survive process restart. To enable persistence:
+      #   1. Run: make auth-signing-keys   (generates .secrets/auth-signing-keys.json)
+      #   2. Uncomment SIGNING_KEYS_FILE and the volumes stanza below.
+      #   3. Restart: make up-d
+      # SIGNING_KEYS_FILE: /run/secrets/auth-signing-keys.json
+    # volumes:
+    #   - type: bind
+    #     source: ./.secrets/auth-signing-keys.json
+    #     target: /run/secrets/auth-signing-keys.json
+    #     read_only: true
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
@@ -105,6 +156,37 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      auth:
+        condition: service_healthy
+
+  auth-web:
+    build:
+      context: ./app/auth-web
+    image: cc-orchestrator/auth-web:local
+    ports:
+      - "127.0.0.1:8083:80"
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+    depends_on:
+      auth:
+        condition: service_healthy
 
 volumes:
   pgdata:
+
+networks:
+  # internal: true -- SPEC-013 R6 (see the `postgres` service's own
+  # comment above and .devcontainer/compose.tools.yml's `tools-db`
+  # service comment for the full rationale: an isolated bridge network
+  # with no default route to the public internet, used only so the
+  # toolbox's `tools-db` service can reach `postgres` by service name for
+  # DB-backed test phases without also granting it internet egress).
+  # Declared here too (identically) so this file stays independently
+  # valid when composed alone (e.g. plain `make up`/`up-d`/`down`/`ps`,
+  # none of which layer .devcontainer/compose.tools.yml on top) --
+  # Compose validates every service's network references against this
+  # file's own top-level `networks:` regardless of which other files are
+  # layered in for a given invocation.
+  dbnet:
+    internal: true

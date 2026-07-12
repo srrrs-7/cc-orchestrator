@@ -7,7 +7,7 @@
 # check/run/test-integration) keeps its pre-SPEC-009 name and behaviour
 # (R4: the command contract does not change) but, when invoked on the
 # host, transparently re-runs itself inside the pinned toolchain image
-# (docker/toolchain, compose.tools.yml) instead of shelling out to a
+# (.devcontainer/toolchain, compose.tools.yml) instead of shelling out to a
 # host-installed go/golangci-lint. The actual recipes live in the
 # `-native` targets guarded by `ifdef IN_TOOLBOX` below; that variable is
 # already exported as a container env var by compose.tools.yml's
@@ -20,7 +20,9 @@
 # ---------------------------------------------------------------------------
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-include $(REPO_ROOT)/versions.env
+DEVCONTAINER_DIR := $(REPO_ROOT)/.devcontainer
+COMPOSE_TOOLS_FILE := $(DEVCONTAINER_DIR)/compose.tools.yml
+include $(DEVCONTAINER_DIR)/versions.env
 
 # Export every pinned version variable from versions.env as a real shell
 # environment variable, so `docker compose`'s own `${VAR}` substitution
@@ -39,7 +41,7 @@ MODULE_DIR := app/migrator
 
 # docker compose (プラグイン) があればそれを使い、無ければ standalone
 # docker-compose にフォールバックする (root Makefile の $(COMPOSE) と同じ
-# probe。docker/toolchain/README.md もこのフォールバックを前提にしている)。
+# probe。.devcontainer/toolchain/README.md もこのフォールバックを前提にしている)。
 COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 
 # TOOLBOX_UID/TOOLBOX_GID must be plain *shell* environment variables
@@ -53,17 +55,31 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # DB_COMPOSE_TOOLS below, compose.yml's postgres `image:`) comes from the
 # `export`ed versions.env variables above, not `--env-file` -- see that
 # export line's own comment for why.
-COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
+TOOLBOX_ENV_PREFIX := COMPOSE_PROJECT_NAME=cc-orchestrator \
+	TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
+	TOOLBOX_WORKSPACE=$(REPO_ROOT) TOOLBOX_CONTEXT=$(DEVCONTAINER_DIR)/toolchain
+COMPOSE_TOOLS := $(TOOLBOX_ENV_PREFIX) \
+	$(COMPOSE_BIN) -f $(COMPOSE_TOOLS_FILE)
 
 # network_mode:none -- fmt/fmt-check/lint/vet/build/test/test-race/check
 # never need the network themselves (this module's own go.sum deps are
 # pre-warmed into the gomodcache/gobuild named volumes by a one-time
 # `go mod download` via the network-enabled `tools` service first --
-# see docker/toolchain/README.md's "検証" section -- and GOPROXY=off
+# see .devcontainer/toolchain/README.md's "検証" section -- and GOPROXY=off
 # inside tools-offline makes any *unexpected* fetch fail loudly instead
 # of silently reaching out).
 OFFLINE := $(COMPOSE_TOOLS) run --rm tools-offline make -C $(MODULE_DIR)
+
+# `tools` (network enabled, no DB reachability needed) -- reserved for
+# phases that must reach the module proxy but not Postgres. `go mod
+# tidy` needs to resolve/verify module metadata (and fetch anything not
+# already in the shared gomodcache volume, e.g. after a manual go.mod
+# edit or a merge conflict), which tools-offline's GOPROXY=off would
+# make fail. Same lane/rationale as app/web/Makefile's `install` and
+# app/api/Makefile's own `tidy` (RETRO-004 / RETROSUM-001 提案 3):
+# unlike ONLINE_DB below, this does NOT layer the sibling compose.yml on
+# top, since `go mod tidy` never needs to reach the `postgres` service.
+ONLINE := $(COMPOSE_TOOLS) run --rm tools make -C $(MODULE_DIR)
 
 # `tools` (network enabled) layered on top of the sibling root
 # compose.yml, so the `postgres` service resolves by its compose
@@ -87,8 +103,8 @@ OFFLINE := $(COMPOSE_TOOLS) run --rm tools-offline make -C $(MODULE_DIR)
 # the sibling compose.yml's own postgres service credentials
 # (POSTGRES_USER=app/POSTGRES_PASSWORD=app) and app/{api,auth}/Makefile's
 # own DB_* defaults -- carrying no meaningful secret.
-DB_COMPOSE_TOOLS := TOOLBOX_UID=$(shell id -u) TOOLBOX_GID=$(shell id -g) \
-	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+DB_COMPOSE_TOOLS := $(TOOLBOX_ENV_PREFIX) \
+	$(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(COMPOSE_TOOLS_FILE)
 DB_ONLINE_ENV := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
 ONLINE_DB := $(DB_COMPOSE_TOOLS) run --rm $(DB_ONLINE_ENV) tools make -C $(MODULE_DIR)
 
@@ -111,12 +127,12 @@ ifdef IN_TOOLBOX
 # Makefile builds a command from -- see .claude/rules/db.md "版").
 #
 # goimports (GOIMPORTS_VERSION above, from versions.env) is baked into
-# docker/toolchain and already on PATH via
+# .devcontainer/toolchain and already on PATH via
 # GOBIN=/usr/local/go-tools/bin -- called here by its installed binary
 # name, not `go run pkg@version`: `go run` performs a module-proxy
 # lookup on every invocation regardless of cache state and fails under
 # this image's GOPROXY=off even with the exact module fully warmed (see
-# docker/toolchain/README.md's "go run pkg@version does not work
+# .devcontainer/toolchain/README.md's "go run pkg@version does not work
 # offline" note -- the SPEC-009 plan's own pre-approved fallback for
 # this, now confirmed necessary rather than hypothetical).
 GOIMPORTS := goimports
@@ -156,8 +172,12 @@ test-race-native: ## race detector 付きでテストを実行する
 .PHONY: check-native
 check-native: fmt-check-native lint-native vet-native build-native test-native ## 全チェックを実行する (fmt-check + lint + vet + build + test)
 
+.PHONY: tidy-native
+tidy-native: ## go.mod/go.sum を整理する (go mod tidy。check には含めない)
+	go mod tidy
+
 .PHONY: run-native
-run-native: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")
+run-native: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/infra/postgres/schema/migrations")
 	go run ./cmd/migrator $(ARGS)
 
 # Discrete DB_* settings for test-integration-native below, mirroring
@@ -218,8 +238,12 @@ test-race: ## race detector 付きでテストを実行する (toolbox 内 (tool
 check: ## 全チェックを実行する (fmt-check + lint + vet + build + test。toolbox 内 (tools-offline) で実行)
 	$(OFFLINE) check-native
 
+.PHONY: tidy
+tidy: ## go.mod/go.sum を整理する (go mod tidy。ネットワーク有効な tools 経由。check には含めない)
+	$(ONLINE) tidy-native
+
 .PHONY: run
-run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/db/migrations")。実 postgres 到達が要るため tools(+compose.yml) で実行する
+run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/infra/postgres/schema/migrations")。実 postgres 到達が要るため tools(+compose.yml) で実行する
 	$(ONLINE_DB) run-native ARGS="$(ARGS)"
 
 .PHONY: test-integration

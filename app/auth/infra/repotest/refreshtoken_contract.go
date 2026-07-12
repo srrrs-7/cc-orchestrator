@@ -15,8 +15,8 @@ import (
 // backed by a clean, empty store, ready for a single subtest.
 //
 // Implementations MUST return a repository whose store is empty every
-// time this is called (a fresh in-memory map for infra/memory; a
-// truncated table for infra/postgres), so that
+// time this is called (a truncated table for infra/postgres, the sole
+// implementation since SPEC-011), so that
 // RunRefreshTokenRepositoryContract's subtests never observe data
 // left behind by another subtest. Mirrors
 // repotest.NewAuthCodeRepository (authcode_contract.go).
@@ -30,7 +30,7 @@ type NewRefreshTokenRepository func(t *testing.T) refreshtoken.Repository
 // mechanism (Rotate, including its ErrReused vs ErrNotFound
 // precedence and behavior under concurrency), family-wide revocation
 // (RevokeFamily), and TTL-based expiry (including lazy eviction) --
-// all behave identically for infra/memory and infra/postgres.
+// all hold for infra/postgres, the sole implementation since SPEC-011.
 //
 // Real-time sleeps are never used to exercise TTL: every
 // expiring/expired fixture is built via refreshtoken.Reconstruct with
@@ -318,6 +318,7 @@ func newTestRefreshToken(t *testing.T) (*refreshtoken.RefreshToken, refreshtoken
 		refreshtoken.NewClientID("client-1"),
 		refreshtoken.NewUserID("user-1"),
 		scope,
+		time.Time{}, // authTime: zero in contract tests (not needed for repo behavior)
 	)
 	if err != nil {
 		t.Fatalf("setup Issue() unexpected error: %v", err)
@@ -351,6 +352,7 @@ func newRefreshTokenExpiringAt(t *testing.T, offset time.Duration) *refreshtoken
 	base, _ := newTestRefreshToken(t)
 	return refreshtoken.Reconstruct(
 		base.TokenHash(), base.FamilyID(), base.ClientID(), base.UserID(), base.Scope(),
+		time.Time{}, // authTime: zero in contract tests
 		time.Now().Add(offset), false,
 	)
 }
@@ -385,5 +387,12 @@ func assertSameRefreshToken(t *testing.T, got, want *refreshtoken.RefreshToken) 
 	}
 	if !got.ExpiresAt().Truncate(time.Microsecond).Equal(want.ExpiresAt().Truncate(time.Microsecond)) {
 		t.Errorf("ExpiresAt() = %v, want %v", got.ExpiresAt(), want.ExpiresAt())
+	}
+	// AuthTime persisted/loaded via the nullable auth_time column (ISSUE-038,
+	// migration 000005): SQL NULL ↔ time.Time{}. Truncate to microsecond
+	// precision for the same reason as ExpiresAt -- Postgres timestamptz has
+	// microsecond resolution while Go's time.Time carries nanoseconds.
+	if !got.AuthTime().Truncate(time.Microsecond).Equal(want.AuthTime().Truncate(time.Microsecond)) {
+		t.Errorf("AuthTime() = %v, want %v", got.AuthTime(), want.AuthTime())
 	}
 }

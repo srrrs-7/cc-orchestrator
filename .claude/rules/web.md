@@ -1,25 +1,34 @@
 ---
 paths:
   - "app/web/**"
+  - "app/auth-web/**"
 ---
 
-# app/web — TypeScript / React 規約
+# app/web / app/auth-web — TypeScript / React 規約
 
-## コマンド(package.json scripts 契約)
+本規約は `app/web`(タスク UI)と `app/auth-web`(IdP 管理 UI。auth の admin API を操作)の両 TypeScript / React stack に適用する。コマンド・レイアウト・コーディング規約は共通で、本文の `app/web` は原則 `app/auth-web` にも読み替える。差分は 2 点のみ: `generate`(OpenAPI 型生成)は app/web だけが持ち、auth-web は admin API の型を zod スキーマで直接定義する。実行は各 stack 自身のディレクトリ / `Makefile` で行う。
 
-`app/web/package.json` は必ず以下の scripts を提供する。checker / tester はこれを実行する。
+## コマンド(app/web/Makefile 契約)
 
-| 目的 | コマンド |
+`app/web/Makefile`(auth-web は `app/auth-web/Makefile`)は必ず以下のターゲットを提供する。checker / tester はこれを実行する。**ホストで bun / go を直接実行しない**(SPEC-009: toolchain コンテナ内のみ。`make` が `docker compose run` へ委譲する)。
+
+| 目的 | コマンド (`app/web` で実行) |
 |---|---|
-| format(チェック) | `bun run format:check` |
-| format(自動修正) | `bun run format` |
-| lint | `bun run lint` |
-| type check | `bun run typecheck` |
-| test | `bun run test` |
-| build | `bun run build` |
-| OpenAPI 契約消費・生成 | `bun run generate`(`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
+| 依存インストール | `make install` (`INSTALL_FLAGS=--frozen-lockfile` で CI 固定) |
+| format(チェック) | `make format-check` |
+| format(自動修正) | `make format` |
+| lint | `make lint` |
+| type check | `make typecheck` |
+| test | `make test` (単一ファイルは `make test TEST=<path>`) |
+| build | `make build` |
+| 全チェック | `make check` (= format-check + lint + typecheck + test + build) |
+| OpenAPI 契約消費・生成 | `make generate` (`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
 
-package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `tsc --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**(`test` script の実体は `vitest run`。RTL / jsdom / MSW と組み合わせるため Bun 標準ランナーではなく Vitest を採用)。実行はすべて `app/web` ディレクトリで行う。
+ルートからは `make web-<target>` / `make auth-web-<target>` でも同じターゲットを呼べる(例: `make web-check` / `make auth-web-check`)。
+
+`app/web/package.json` の scripts はコンテナ内で `bun run <script>` として実行される実体。scripts 名・内容は変更しない。
+
+package manager / runtime は **Bun**(コンテナ内)。依存導入は `make install`、スクリプト実行は上表の `make` ターゲット経由。バンドラは Vite(`build` = `tsc --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**。
 
 lint / format は **Biome** 単一ツールで行う(`lint` = `biome lint`、`format` / `format:check` = `biome format`。設定は `biome.json`)。**ESLint / Prettier は使わない。**
 

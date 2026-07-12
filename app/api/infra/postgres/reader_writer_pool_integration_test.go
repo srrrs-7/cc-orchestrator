@@ -1,20 +1,10 @@
-//go:build integration
-
-// reader_writer_pool_integration_test.go is SPEC-010's integration
-// suite for infra/postgres's writer/reader pool split
-// (docs/plans/SPEC-010-plan.md フェーズ1): postgres.OpenPair's pool-
+// reader_writer_pool_integration_test.go is SPEC-010's test suite for
+// infra/postgres's writer/reader pool split: postgres.OpenPair's pool-
 // sharing/opening decision, and proof that task.Reader/task.Writer
 // implementations (postgres.NewTaskReader/postgres.NewTaskWriter) each
-// route through their own *sql.DB pool, not the other's.
-//
-// As of the TDD "red" phase, infra/postgres has neither OpenPair nor
-// NewTaskReader/NewTaskWriter yet: this file is written against their
-// *planned* signatures (SPEC-010-plan.md "固定された対象シグネチャ") and
-// therefore intentionally fails to compile with -tags=integration
-// until impl-db lands infra/postgres/db.go's OpenPair and
-// infra/postgres/task_reader.go / task_writer.go. That is expected and
-// does not affect the default (untagged) build/vet/test, which never
-// parses this file.
+// route through their own *sql.DB pool, not the other's. As of
+// SPEC-013 it runs as part of the default `make test` / `make check`,
+// against the dedicated `api_test` database.
 //
 // Per the plan's "別ホスト reader の再現" note, the pool-routing proof
 // below deliberately avoids requiring a second live database: it opens
@@ -26,43 +16,20 @@ package postgres_test
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres/testsupport"
 )
-
-// testConfig builds a postgres.Config from the same discrete DB_*
-// environment variables (and defaults) openTestDB/testDSN use, so
-// OpenPair-focused tests below can pass a postgres.Config directly
-// instead of round-tripping through a DSN string.
-func testConfig() postgres.Config {
-	env := func(key, def string) string {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-		return def
-	}
-	return postgres.Config{
-		Host:     env("DB_HOST", "127.0.0.1"),
-		Port:     env("DB_PORT", "5432"),
-		Name:     env("DB_NAME", "api"),
-		User:     env("DB_USER", "app"),
-		Password: env("DB_PASSWORD", "app"),
-		SSLMode:  env("DB_SSLMODE", "disable"),
-	}
-}
 
 // TestOpenPair_SharesPoolWhenConfigEqual covers SPEC-010 R3 and the
 // non-functional "二重に開かない" requirement: OpenPair called with an
 // identical writer/reader Config must not open a second *sql.DB -- the
 // returned reader pointer must be the exact same *sql.DB as writer.
 func TestOpenPair_SharesPoolWhenConfigEqual(t *testing.T) {
-	if os.Getenv("DB_HOST") == "" {
-		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
-	cfg := testConfig()
+	testsupport.RequireDBHost(t)
+	cfg := testsupport.TestConfig()
 	ctx := context.Background()
 
 	writer, reader, closeFn, err := postgres.OpenPair(ctx, cfg, cfg)
@@ -101,10 +68,8 @@ func TestOpenPair_SharesPoolWhenConfigEqual(t *testing.T) {
 // reused the writer pool whenever opening the reader is inconvenient,
 // this call would succeed instead of failing.
 func TestOpenPair_DifferentReaderConfig_FailsWithoutLeakingWriter(t *testing.T) {
-	if os.Getenv("DB_HOST") == "" {
-		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
-	writerCfg := testConfig()
+	testsupport.RequireDBHost(t)
+	writerCfg := testsupport.TestConfig()
 	readerCfg := writerCfg
 	// "invalid" is an IANA-reserved TLD (RFC 2606) guaranteed never to
 	// resolve, so this failure is deterministic and independent of the
@@ -137,9 +102,9 @@ func TestOpenPair_DifferentReaderConfig_FailsWithoutLeakingWriter(t *testing.T) 
 // pool's operations unaffected.
 func TestTaskReaderWriter_PoolRouting_CloseVisualizes(t *testing.T) {
 	t.Run("closing the reader pool fails reads but not writes", func(t *testing.T) {
-		writerDB := openTestDB(t)
-		readerDB := openTestDB(t)
-		truncateTasks(t, writerDB)
+		writerDB := testsupport.OpenTestDB(t)
+		readerDB := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, writerDB)
 
 		writer := postgres.NewTaskWriter(writerDB)
 		reader := postgres.NewTaskReader(readerDB)
@@ -173,9 +138,9 @@ func TestTaskReaderWriter_PoolRouting_CloseVisualizes(t *testing.T) {
 	})
 
 	t.Run("closing the writer pool fails writes but not reads", func(t *testing.T) {
-		writerDB := openTestDB(t)
-		readerDB := openTestDB(t)
-		truncateTasks(t, writerDB)
+		writerDB := testsupport.OpenTestDB(t)
+		readerDB := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, writerDB)
 
 		writer := postgres.NewTaskWriter(writerDB)
 		reader := postgres.NewTaskReader(readerDB)

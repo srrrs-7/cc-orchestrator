@@ -1,48 +1,30 @@
-//go:build integration
-
-// Package postgres_test holds the SPEC-005 integration suite for
-// infra/postgres. It is gated behind the "integration" build tag so
-// the default `make test` (no build tags, no DB required) stays
-// green; it is meant to be run explicitly once impl-db wires it up as
-// `make test-integration` (docs/plans/SPEC-005-plan.md §0 "Make
-// ターゲット名"), e.g.:
-//
-//	go test -tags=integration ./infra/postgres/...
-//
-// against a live Postgres that already has `make migrate-up` applied
-// (this suite does not run migrations itself -- see openTestDB).
-//
-// As of SPEC-005 phase B1 (TDD), infra/postgres does not exist yet:
-// this file is written against its *planned* constructor,
-// postgres.NewTaskRepository(db *sql.DB) (plan §2.1), and therefore
-// intentionally fails to compile with -tags=integration until impl-db
-// lands infra/postgres/task_repository.go. That is expected and does
-// not affect the default (untagged) build/vet/test, which never
-// parses this file.
+// Package postgres_test holds the SPEC-005 test suite for
+// infra/postgres. As of SPEC-013 it runs as part of the default
+// `make test` / `make check`, against the dedicated `api_test`
+// database (see infra/postgres/testsupport), which `app/migrator`
+// creates and migrates ahead of time (this suite does not run
+// migrations itself).
 package postgres_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"net/url"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres/testsupport"
 	"github.com/srrrs-7/cc-orchestrator/app/api/infra/repotest"
 )
 
-// TestTaskRepository_Contract runs the same behavioral contract as
-// infra/memory (infra/memory/task_repository_contract_test.go)
-// against a real Postgres-backed task.Repository, proving R1
-// ("infra/postgres の振る舞いは infra/memory と同じ").
+// TestTaskRepository_Contract runs the behavioral contract shared by
+// every task.Repository implementation (SPEC-005 R1 / SPEC-011 R3)
+// against a real Postgres-backed task.Repository.
 func TestTaskRepository_Contract(t *testing.T) {
 	repotest.RunTaskRepositoryContract(t, func(t *testing.T) task.Repository {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		return postgres.NewTaskRepository(db)
 	})
 }
@@ -63,8 +45,8 @@ func TestTaskRepository_Contract(t *testing.T) {
 // defense-in-depth failure mode matches the rest of the codebase's
 // error taxonomy instead of leaking a raw database/sql or pgx error.
 func TestTaskRepository_UniqueTitle_ViolatesConstraint(t *testing.T) {
-	db := openTestDB(t)
-	truncateTasks(t, db)
+	db := testsupport.OpenTestDB(t)
+	testsupport.TruncateTasks(t, db)
 	repo := postgres.NewTaskRepository(db)
 	ctx := context.Background()
 
@@ -110,8 +92,8 @@ func TestTaskRepository_UniqueTitle_ViolatesConstraint(t *testing.T) {
 //     "リスク / 未確定事項").
 func TestTaskRepository_ErrorCategories_ISSUE018(t *testing.T) {
 	t.Run("FindByID not found maps to *task.NotFoundError", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		repo := postgres.NewTaskRepository(db)
 
 		_, err := repo.FindByID(context.Background(), task.NewID())
@@ -126,8 +108,8 @@ func TestTaskRepository_ErrorCategories_ISSUE018(t *testing.T) {
 	})
 
 	t.Run("corrupt row (empty title bypassing domain validation) maps to *task.DBError, not *task.ValidationError", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		ctx := context.Background()
 
 		// Insert a row directly, bypassing task.NewTitle's
@@ -165,8 +147,8 @@ func TestTaskRepository_ErrorCategories_ISSUE018(t *testing.T) {
 	})
 
 	t.Run("forced driver failure (closed connection) maps to *task.DBError", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		repo := postgres.NewTaskRepository(db)
 		if err := db.Close(); err != nil {
 			t.Fatalf("setup: close db: %v", err)
@@ -241,8 +223,8 @@ func newIntegrationTaskAt(t *testing.T, id, title string, createdAt time.Time) *
 // infra/memory と同じ") for the paginated read path specifically.
 func TestTaskRepository_ListPage_Boundaries(t *testing.T) {
 	t.Run("offset beyond total yields empty items and the store's full total", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		repo := postgres.NewTaskRepository(db)
 		ctx := context.Background()
 
@@ -268,8 +250,8 @@ func TestTaskRepository_ListPage_Boundaries(t *testing.T) {
 	})
 
 	t.Run("orders by created_at then id ascending, ties broken by id", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		repo := postgres.NewTaskRepository(db)
 		ctx := context.Background()
 		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -311,8 +293,8 @@ func TestTaskRepository_ListPage_Boundaries(t *testing.T) {
 	})
 
 	t.Run("limit slices the requested window across successive pages", func(t *testing.T) {
-		db := openTestDB(t)
-		truncateTasks(t, db)
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTasks(t, db)
 		repo := postgres.NewTaskRepository(db)
 		ctx := context.Background()
 		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -372,89 +354,4 @@ func mustIntegrationTitle(t *testing.T, s string) task.Title {
 		t.Fatalf("NewTitle(%q) unexpected error: %v", s, err)
 	}
 	return title
-}
-
-// openTestDB opens a *sql.DB against the Postgres instance described
-// by the same discrete DB_* environment variables the application
-// itself will use to configure persistence (docs/plans/SPEC-005-plan.md
-// §0 "切替の env / DSN / 本番必須強制"). It skips the test (rather than
-// failing) when DB_HOST is unset, so this file does not require a
-// live database merely to be present in the tree; CI wires these
-// variables to the postgres service container (plan §D2).
-//
-// It intentionally does not run goose migrations itself (see the
-// package doc comment): the target database is expected to already
-// have `make migrate-up` applied before this suite runs.
-func openTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-
-	host := os.Getenv("DB_HOST")
-	if host == "" {
-		t.Skip("DB_HOST not set; skipping infra/postgres integration test (see docs/plans/SPEC-005-plan.md §0)")
-	}
-
-	// "pgx" is registered as a database/sql driver name by
-	// infra/postgres's own db.go (via a blank import of
-	// github.com/jackc/pgx/v5/stdlib) once impl-db implements it; this
-	// file deliberately never imports pgx directly, so it adds no
-	// dependency of its own on go.mod/go.sum beyond this module's own
-	// packages.
-	db, err := sql.Open("pgx", testDSN())
-	if err != nil {
-		t.Fatalf("sql.Open(\"pgx\", ...) unexpected error: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	if err := db.PingContext(context.Background()); err != nil {
-		t.Fatalf("db.PingContext() unexpected error: %v (is DB_* pointing at a reachable, migrated Postgres?)", err)
-	}
-	return db
-}
-
-// testDSN assembles a libpq-style connection string from the discrete
-// DB_* environment variables (DB_HOST/DB_PORT/DB_NAME/DB_USER/
-// DB_PASSWORD/DB_SSLMODE). DB_NAME defaults to "api" (this stack's own
-// dedicated Postgres database, per the 2026-07-09 refactor, SPEC-005
-// plan §RF.1.1: api and auth are separated by database, not by schema/
-// search_path -- app/migrator creates and migrates it, see
-// .claude/rules/db.md). The defaults below are fallbacks for local
-// ad-hoc runs and are expected to mirror compose.yml's api service
-// (impl-db); they carry no meaningful secret (matching values only
-// exist in a local, disposable compose Postgres).
-func testDSN() string {
-	env := func(key, def string) string {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-		return def
-	}
-	host := env("DB_HOST", "127.0.0.1")
-	port := env("DB_PORT", "5432")
-	name := env("DB_NAME", "api")
-	user := env("DB_USER", "app")
-	password := env("DB_PASSWORD", "app")
-	sslmode := env("DB_SSLMODE", "disable")
-
-	values := url.Values{}
-	values.Set("sslmode", sslmode)
-
-	u := url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(user, password),
-		Host:     host + ":" + port,
-		Path:     "/" + name,
-		RawQuery: values.Encode(),
-	}
-	return u.String()
-}
-
-// truncateTasks empties the tasks table between subtests so each
-// newRepo(t) call in the shared contract (see
-// repotest.NewTaskRepository's doc comment) observes a store as empty
-// as memory.NewTaskRepository()'s fresh map.
-func truncateTasks(t *testing.T, db *sql.DB) {
-	t.Helper()
-	if _, err := db.ExecContext(context.Background(), "TRUNCATE TABLE tasks"); err != nil {
-		t.Fatalf("truncate tasks: %v", err)
-	}
 }

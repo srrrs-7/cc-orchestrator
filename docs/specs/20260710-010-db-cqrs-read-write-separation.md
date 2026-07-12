@@ -3,8 +3,8 @@ id: SPEC-010
 title: DB infra 層の CQRS read/write 分離(Reader/Writer + writer/reader 2 プール)
 status: done  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
-updated: 2026-07-10
-issues: []       # 関連Issue ID (例: [ISSUE-003])
+updated: 2026-07-12
+issues: [ISSUE-045]       # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 
@@ -46,6 +46,7 @@ supersedes: null # 置き換える旧Spec ID
 - [x] R1: 各集約の永続化ポートを **Reader**(query 系)と **Writer**(command 系)の 2 つの interface に分割する。対象集約:
   - app/api: `task`(Reader: `FindByID` / `FindByTitle` / `ListPage`、Writer: `Save`)
   - app/auth: `authcode`(Reader: `FindByCode`、Writer: `Save` / `Consume`)/ `refreshtoken`(Reader: `FindByTokenHash`、Writer: `Save` / `Rotate` / `RevokeFamily`)。**`user` / `client` は command メソッドを持たない read-only 集約のため Reader-only(既存ポートを Reader 相当として据え置き、空 Writer を作らない)**。「Save/Delete/消費系 → Writer」規則は Writer 系メソッドが存在する集約にのみ適用する
+    - ⚠️ **2026-07-12 追記(ISSUE-045)**: この「`user` / `client` は Reader-only・空 Writer を作らない」前提は SPEC-010 完了後に**覆った**。ISSUE-039(client / user 管理 API)で `app/auth/infra/postgres/client_writer.go` / `user_writer.go` が追加され、両集約は現在 Writer を持つ。本 R1 の記述は SPEC-010 実装時点の設計判断の記録であり、現状の実装は §6 経緯 2026-07-12 を正とする
 - [x] R2: `infra/postgres` は **writer 用**と **reader 用**の 2 つの `*sql.DB` プールを持ち、Reader 実装は reader プール、Writer 実装は writer プールを使ってクエリを発行する
 - [x] R3: reader 接続が未設定(`DB_READER_HOST` が空)のときは reader は **writer 接続にフォールバック**し、単一ホスト運用で全クエリが従来どおり動く(後方互換・fail-safe。既存デプロイ・ローカル・CI は env 追加なしで無変更動作する)
 - [x] R4: 実行時本体(`cmd/api` / `cmd/authz`)の env 契約に reader 用 `DB_READER_HOST` / `DB_READER_PORT` / `DB_READER_NAME` / `DB_READER_USER` / `DB_READER_PASSWORD` / `DB_READER_SSLMODE` を追加する。各項目は **未設定時に対応する writer 値へフォールバック**する(例: `DB_READER_HOST` 未設定 → `DB_HOST`)。`SelectMode`(Postgres / memory 選択)と memory フォールバック条件は不変
@@ -152,3 +153,9 @@ cmd/api/env.go
   - **将来の read replica 実配線 Spec への申し送り**(いずれも本 Spec のスコープ外・別 Spec で再検討): (i) reader を「同一インスタンス・別資格情報(reader 専用低権限ロール; ISSUE-016 の文脈)」で使う構成では `Config` 全項目一致でないため 2 本目のプールを開き、共有 RDS の接続予算が倍化する(`database/sql` 仕様上不可避)。iac 側で総接続数 ≤ `max_connections` を検証する仕組み、または当該構成での `maxOpenConns` 明示縮小を検討(perf Minor-1)。(ii) 別ホスト reader 時、`OpenPair` は writer→reader を逐次 `Open`(各 ping 5s)するため起動レイテンシが最大 2 倍。並列 `Open` を検討(perf Info-1)。(iii) 将来 client 失効・user 更新の runtime 書き込み機能を追加する際は、`user`/`client` の read を reader(replica)に固定したままだと失効直後の stale read で認可上のリスクが生じうるため、その時点で reader 固定を再評価(security Info)。(iv) api の read-modify-write(`FindByID`→`Save`)を replica 導入時に writer へ寄せるか(R-1)。
   - **付随発見**: tester が SPEC-010 と無関係の既存バグ(`app/auth/Makefile` の `test-integration` が `docker compose run` の `-e` 引数順違反で exec error。SPEC-009 由来・api と非対称)を発見。**ISSUE-026**(severity: medium)として起票済み。CI の `auth-integration` ジョブも同経路で失敗している可能性があり、修正(impl-auth)は本 Spec と切り離して別途対応。
   - コミットは未実施(ユーザー指示があれば行う)。
+
+### 2026-07-12
+
+- **R1 の「`user` / `client` は Reader-only」前提が後続実装で覆ったことを記録(ISSUE-045。リポジトリ全体レビューで検出)**。SPEC-010 完了後の AUTH-002 ロードマップ ISSUE-039(client / user 管理 API)により、`app/auth/infra/postgres/client_writer.go` / `user_writer.go` が追加され、`user` / `client` は現在 Writer(command 側)を持つ。SPEC-010 は「両集約は read-only ゆえ空 Writer を作らない」を確定設計として書いていたため、実装と Spec が矛盾していた。
+  - **是正方針**: 実装(user/client が Writer を持つ)を正とし、Spec を現実に合わせて注記した(R1 の該当 bullet に ⚠️ 追記)。SPEC-010 の中心価値(read/write のポート分割・2 プール・reader フォールバック)は不変で、変わったのは「read-only 集約の分類」だけ。この管理 API が追加された際に CQRS 分離の観点(user/client の write を writer プールへ、read を reader プールへ振り分ける方針・replica lag 下での失効直後 stale read の扱い)が SPEC-010 の設計レビューを経ずに入った点は、プロセス上の課題として `.claude/retro`(RETRO-002)に記録済み。
+  - **申し送り**: §6 2026-07-10 の「将来 client 失効・user 更新の runtime 書き込み機能を追加する際は reader 固定を再評価(security Info)」で予見していた事象が現実化したことになる。user/client の read を将来 replica へ固定する場合、失効・更新直後の stale read が認可判断に影響しうるため、その配置は別途 review-security で確認すること。status は `done` を維持(コア設計は充足済み。本更新はドキュメントの現実同期)。

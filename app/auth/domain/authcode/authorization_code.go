@@ -81,14 +81,18 @@ type AuthorizationCode struct {
 	scope       Scope
 	nonce       Nonce
 	challenge   CodeChallenge
+	authTime    time.Time // IdP session login time (OIDC auth_time); zero when unavailable
 	expiresAt   time.Time
 	consumed    bool
 }
 
 // New is the factory for issuing a brand new AuthorizationCode. It
 // generates a fresh opaque Code and fixes expiresAt to time.Now() +
-// TTL at creation time; the code starts unconsumed.
-func New(clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope, nonce Nonce, challenge CodeChallenge) (*AuthorizationCode, error) {
+// TTL at creation time; the code starts unconsumed. authTime is the
+// IdP session login timestamp for the resource owner (OIDC auth_time
+// claim); a zero time.Time is valid and means the timestamp is not
+// available.
+func New(clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope, nonce Nonce, challenge CodeChallenge, authTime time.Time) (*AuthorizationCode, error) {
 	code, err := NewCode()
 	if err != nil {
 		return nil, err
@@ -101,6 +105,7 @@ func New(clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope,
 		scope:       scope,
 		nonce:       nonce,
 		challenge:   challenge,
+		authTime:    authTime,
 		expiresAt:   time.Now().Add(TTL),
 		consumed:    false,
 	}, nil
@@ -109,8 +114,9 @@ func New(clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope,
 // Reconstruct rebuilds an AuthorizationCode from already-validated
 // persisted state. It is intended to be used exclusively by
 // infrastructure-layer repository implementations when loading an
-// AuthorizationCode from storage.
-func Reconstruct(code Code, clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope, nonce Nonce, challenge CodeChallenge, expiresAt time.Time, consumed bool) *AuthorizationCode {
+// AuthorizationCode from storage. authTime is the IdP session login
+// timestamp; pass time.Time{} when the column is not yet persisted.
+func Reconstruct(code Code, clientID ClientID, userID UserID, redirectURI RedirectURI, scope Scope, nonce Nonce, challenge CodeChallenge, authTime time.Time, expiresAt time.Time, consumed bool) *AuthorizationCode {
 	return &AuthorizationCode{
 		code:        code,
 		clientID:    clientID,
@@ -119,6 +125,7 @@ func Reconstruct(code Code, clientID ClientID, userID UserID, redirectURI Redire
 		scope:       scope,
 		nonce:       nonce,
 		challenge:   challenge,
+		authTime:    authTime,
 		expiresAt:   expiresAt,
 		consumed:    consumed,
 	}
@@ -225,6 +232,14 @@ func (a *AuthorizationCode) Challenge() CodeChallenge {
 // redeemed.
 func (a *AuthorizationCode) Consumed() bool {
 	return a.consumed
+}
+
+// AuthTime returns the IdP session login time bound to this code (OIDC
+// auth_time). A zero time.Time means the timestamp was not available
+// when the code was issued (e.g. loaded from a DB row that predates
+// the auth_time column).
+func (a *AuthorizationCode) AuthTime() time.Time {
+	return a.authTime
 }
 
 // ExpiresAt returns the time at which the AuthorizationCode expires.

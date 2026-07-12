@@ -1,125 +1,32 @@
-// persistence_selection_test.go exercises the "DB_HOST" / "APP_ENV"
-// persistence-selection contract from docs/plans/SPEC-005-plan.md §0
-// "切替の env / DSN / 本番必須強制" (SPEC-005 R6), as it applies to
-// app/auth's cmd/authz wiring (client / user / authcode repositories,
-// plus which seed path runs):
+// persistence_selection_test.go exercises the pure connection-config
+// helpers in infra/postgres that are DB-independent (SPEC-005 R6 /
+// SPEC-011 R2):
 //
-//	DB_HOST set                     -> Postgres, regardless of APP_ENV
-//	DB_HOST unset, APP_ENV=local    -> memory
-//	DB_HOST unset, APP_ENV=test     -> memory
-//	DB_HOST unset, otherwise        -> fail-closed error (no memory
-//	                                    fallback; this includes
-//	                                    APP_ENV=production, an unset
-//	                                    APP_ENV, and any unrecognized
-//	                                    APP_ENV value)
+//   - Config.DSN() reflects every field (and no search_path, per the
+//     2026-07-09 refactor's database-level separation, SPEC-005 §RF.2.3)
+//   - Config.Validate() rejects missing required fields by name (never
+//     by value, so DB_PASSWORD is never echoed) and accepts a complete
+//     Config without error
+//   - Config is an ordinary comparable struct, so plain "==" works for
+//     SPEC-010's OpenPair pool-sharing decision
 //
-// This file carries no build tag: selecting a persistence mode and
-// assembling a DSN are pure, DB-independent decisions (plan §5.1 "選択
-// ロジック/DSN 組み立て(ユニット・DB 非依存)"), so it runs as part of the
+// Persistence is now Postgres-only (SPEC-011): Mode / SelectMode /
+// ErrPersistenceNotConfigured / infra/memory fallback are removed.
+// fail-closed is enforced by Config.Validate (DB_HOST/DB_NAME/DB_USER/
+// DB_PASSWORD required).
+//
+// This file carries no build tag: DSN assembly and config validation
+// are pure, DB-independent decisions, so it runs as part of the
 // default `make test` and requires no live Postgres.
-//
-// env.go refactor note: postgres.ConfigFromEnv is removed entirely --
-// cmd/authz's env.go (package main) is now the sole place this module
-// reads os.Getenv (see cmd/authz/env_test.go for that coverage,
-// including the defaults previously asserted here via ConfigFromEnv).
-// postgres.SelectMode's signature is unchanged (it already took the
-// two already-read string values, dbHost/appEnv, directly rather than
-// reading os.Getenv itself), so those tests are kept as-is below. This
-// file now covers only postgres.SelectMode and the pure
-// postgres.Config methods (Validate/DSN), built from explicit literals
-// instead of the removed setDBEnv/t.Setenv helper.
 package postgres_test
 
 import (
-	"errors"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
 )
-
-func TestSelectMode(t *testing.T) {
-	cases := []struct {
-		name     string
-		dbHost   string
-		appEnv   string
-		wantMode postgres.Mode
-		wantErr  bool // fail-closed: no repositories, an error instead
-	}{
-		{
-			name:     "DB_HOST set, APP_ENV=production -> postgres",
-			dbHost:   "db.internal",
-			appEnv:   "production",
-			wantMode: postgres.ModePostgres,
-		},
-		{
-			name:     "DB_HOST set, APP_ENV unset -> postgres (DB_HOST alone is sufficient)",
-			dbHost:   "db.internal",
-			wantMode: postgres.ModePostgres,
-		},
-		{
-			name:     "DB_HOST unset, APP_ENV=local -> memory",
-			appEnv:   "local",
-			wantMode: postgres.ModeMemory,
-		},
-		{
-			name:     "DB_HOST unset, APP_ENV=test -> memory",
-			appEnv:   "test",
-			wantMode: postgres.ModeMemory,
-		},
-		{
-			name:    "DB_HOST unset, APP_ENV=production -> fail-closed error, no memory fallback",
-			appEnv:  "production",
-			wantErr: true,
-		},
-		{
-			name:    "DB_HOST unset, APP_ENV unset entirely (the real default) -> fail-closed error",
-			wantErr: true,
-		},
-		{
-			name:    "DB_HOST unset, APP_ENV set to an unrecognized value -> fail-closed error, not silently memory",
-			appEnv:  "staging",
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			mode, err := postgres.SelectMode(tc.dbHost, tc.appEnv)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("SelectMode(%q, %q) = (%q, nil), want a fail-closed error", tc.dbHost, tc.appEnv, mode)
-				}
-				if !errors.Is(err, postgres.ErrPersistenceNotConfigured) {
-					t.Errorf("SelectMode(%q, %q) error = %v, want wrapping %v", tc.dbHost, tc.appEnv, err, postgres.ErrPersistenceNotConfigured)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("SelectMode(%q, %q) unexpected error: %v", tc.dbHost, tc.appEnv, err)
-			}
-			if mode != tc.wantMode {
-				t.Errorf("SelectMode(%q, %q) = %q, want %q", tc.dbHost, tc.appEnv, mode, tc.wantMode)
-			}
-		})
-	}
-}
-
-// TestSelectMode_FailClosedErrorNeverLeaksDBPassword covers the R6
-// security requirement that a fail-closed configuration error is safe
-// to log: SelectMode's signature does not even accept a password, so
-// the error it returns cannot echo one.
-func TestSelectMode_FailClosedErrorNeverLeaksDBPassword(t *testing.T) {
-	_, err := postgres.SelectMode("", "production")
-	if err == nil {
-		t.Fatal("SelectMode(\"\", \"production\") = nil error, want a fail-closed error")
-	}
-	const secret = "sup3r-s3cret-db-password"
-	if strings.Contains(err.Error(), secret) {
-		t.Errorf("SelectMode() error %q unexpectedly contains a password-shaped value", err.Error())
-	}
-}
 
 // TestConfigDSN_ReflectsEveryField asserts every field of a
 // fully-populated postgres.Config is represented in the DSN string

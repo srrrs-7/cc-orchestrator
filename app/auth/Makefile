@@ -8,15 +8,15 @@
 # `make test`, `make sqlc`, ... -- see .claude/rules/auth.md's command
 # table, which this Makefile remains the single source of truth for);
 # what changed is that the real recipe now runs inside the pinned
-# toolbox container (docker/toolchain/Dockerfile via compose.tools.yml,
+# toolbox container (.devcontainer/toolchain/Dockerfile via compose.tools.yml,
 # docs/plans/SPEC-009-plan.md) instead of directly on the host, so a
 # host with no go/golangci-lint/etc. installed can still run every
 # target here. This Makefile mirrors app/api/Makefile's wrapper shape
 # 1:1 (SPEC-009 plan §手順 B1/B2 -- api and auth are meant to share one
 # pattern), adjusted only for this stack's module path / DB name.
 #
-# `IN_TOOLBOX` (baked into compose.tools.yml's `tools`/`tools-offline`
-# services' `environment:`) is the multi-wrap guard: GNU make's `ifdef`
+# `IN_TOOLBOX` (baked into compose.tools.yml's `tools`/`tools-offline`/
+# `tools-db` services' `environment:`) is the multi-wrap guard: GNU make's `ifdef`
 # below is evaluated at parse time, so exactly one branch's targets
 # exist in a given `make` invocation --
 #   - IN_TOOLBOX unset (host):      only the public targets (`check`,
@@ -28,7 +28,9 @@
 #     already-toolboxed container fails fast (target not found) instead
 #     of nesting another container.
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-include $(REPO_ROOT)/versions.env
+DEVCONTAINER_DIR := $(REPO_ROOT)/.devcontainer
+COMPOSE_TOOLS_FILE := $(DEVCONTAINER_DIR)/compose.tools.yml
+include $(DEVCONTAINER_DIR)/versions.env
 
 # `docker compose`'s top-level `--env-file` flag is not portable across all
 # `docker compose` implementations this Makefile is run against (e.g.
@@ -52,7 +54,8 @@ export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VER
 # variable *inside* the already-created container -- too late to affect
 # `user:`. See compose.tools.yml's own header comment for the same
 # note.
-TOOLBOX_ENV := TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)"
+TOOLBOX_ENV := COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_UID="$$(id -u)" TOOLBOX_GID="$$(id -g)" \
+	TOOLBOX_WORKSPACE="$(REPO_ROOT)" TOOLBOX_CONTEXT="$(DEVCONTAINER_DIR)/toolchain"
 
 # docker compose (プラグイン) があればそれを使い、無ければ standalone
 # docker-compose にフォールバックする(root Makefile / app/api/Makefile /
@@ -65,31 +68,51 @@ COMPOSE_BIN := $(shell docker compose version >/dev/null 2>&1 && echo "docker co
 # DB_COMPOSE below, compose.yml's postgres `image:`) comes from the
 # `export`ed versions.env variables above, not `--env-file` -- see that
 # export line's own comment for why.
-COMPOSE    := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.tools.yml
-# `test-integration` is the one exception that needs a reachable
-# Postgres: layering the sibling compose.yml (which owns the `postgres`
-# service) on top lets `tools` join that project's network and resolve
-# `postgres` by service name (SPEC-009 plan network 切り分け表; the
-# offline `tools-offline` service cannot reach it at all under
-# network_mode:none).
-DB_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(REPO_ROOT)/compose.tools.yml
+COMPOSE    := $(COMPOSE_BIN) -f $(COMPOSE_TOOLS_FILE)
+# The DB phase (test, folded into check) is the one exception that
+# needs a reachable Postgres: layering the sibling compose.yml (which
+# owns the `postgres` service) on top lets `tools-db` join that
+# project's network and resolve `postgres` by service name, while still
+# giving that phase no internet egress (SPEC-013 R6 revises SPEC-009's
+# network 切り分け表 from two layers to three: `tools`=full network,
+# `tools-offline`=network_mode:none, `tools-db`=postgres-reachable only.
+# `tools-db` itself is defined in compose.tools.yml; the offline
+# `tools-offline` service still cannot reach postgres at all).
+DB_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml -f $(COMPOSE_TOOLS_FILE)
 WORKDIR    := --workdir /workspace/app/auth
 
-# tools-offline (network_mode:none): the default execution service for
-# everything below except test-integration -- fmt/fmt-check/lint/vet/
-# build/test/test-race/check/sqlc/migrate-create all run offline (no
-# deps/install phase exists in this Makefile that would need network).
+# tools-offline (network_mode:none): the execution service for the
+# offline phase -- fmt/fmt-check/lint/vet/build/sqlc/migrate-create.
+# `go mod tidy` (below) is the one exception that needs network; see
+# ONLINE for that lane.
 OFFLINE  := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools-offline
-# tools (network enabled) + compose.yml layered in, for test-integration
-# only (see DB_COMPOSE above).
-DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR) tools
+# tools (network enabled; compose.tools.yml file header's "deps" lane,
+# the same one app/web/Makefile's `install` and app/api/Makefile's
+# `tidy` use): reserved for phases that must reach the module proxy.
+# `go mod tidy` needs to resolve/verify module metadata (and fetch
+# anything not already in the shared gomodcache volume, e.g. after a
+# manual go.mod edit or a merge conflict), which `tools-offline`'s
+# GOPROXY=off would make fail -- unlike sqlc/goose/goimports (installed
+# CLIs invoked by binary name, per compose.tools.yml's own header
+# comment), `go mod tidy` is the `go` toolchain itself doing real
+# proxy/module-graph work, so it stays on this lane rather than
+# tools-offline.
+ONLINE   := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools
+# tools-db (postgres-reachable, no internet egress; see DB_COMPOSE
+# above) + compose.yml layered in, for the test/check DB phase.
+# Deliberately stops short of the service name/command: `docker compose
+# run [OPTIONS] SERVICE [COMMAND...]` requires any `-e` flags to
+# precede SERVICE (anything after it is parsed as the in-container
+# command instead) -- test below appends its per-invocation `-e DB_*`
+# flags, then `tools-db`, itself.
+DB_ONLINE := $(TOOLBOX_ENV) $(DB_COMPOSE) run --rm $(WORKDIR)
 
 # Tool CLIs previously invoked as `go run <pkg>@<version>` (a separate
 # pinned version per stack Makefile). SPEC-009 Phase A found that `go
 # run pkg@version` cannot resolve offline even with the exact
 # module+version fully warmed in GOMODCACHE (it performs an
 # unconditional module-proxy lookup every invocation) -- see
-# compose.tools.yml's and docker/toolchain/Dockerfile's header comments
+# compose.tools.yml's and .devcontainer/toolchain/Dockerfile's header comments
 # for the verified detail. The toolbox image instead `go install`s each
 # at its pinned version (versions.env's SQLC_VERSION / GOOSE_VERSION /
 # GOIMPORTS_VERSION, `include`d above) onto
@@ -104,23 +127,27 @@ GOIMPORTS := goimports
 GOOSE     := goose
 SQLC      := sqlc
 
-MIGRATIONS_DIR := db/migrations
+MIGRATIONS_DIR := infra/postgres/schema/migrations
+SQLC_CONFIG := infra/postgres/sqlc.yaml
 
 # Local-only, non-secret DB_* defaults (SPEC-005), matching
 # compose.yml's `postgres` service and app/api/Makefile's own copies.
 # DB_HOST defaults to the compose *service* name `postgres` (not
-# 127.0.0.1) because test-integration now always runs inside the
-# `tools` container joined to compose.yml's network (SPEC-009) rather
-# than directly on the host against a published port -- see
-# test-integration below, which forwards each of these into the
-# container explicitly via `docker compose run -e` (docker isolates
-# env by default; a plain host-shell `export DB_HOST=...`, this
-# Makefile's pre-SPEC-009 contract, would not otherwise reach the
-# containerized `go test` process). Every value is still overridable at
-# invocation time, e.g. `make test-integration DB_HOST=other-host`.
+# 127.0.0.1) because the DB phase of test/check now always runs inside
+# the `tools-db` container joined to compose.yml's network (SPEC-009 /
+# SPEC-013) rather than directly on the host against a published port
+# -- see test below, which forwards each of these into the container
+# explicitly via `docker compose run -e` (docker isolates env by
+# default; a plain host-shell `export DB_HOST=...` would not otherwise
+# reach the containerized `go test` process). Every value is still
+# overridable at invocation time, e.g. `make test DB_HOST=other-host`.
+#
+# DB_NAME defaults to "auth_test" (SPEC-013 R3): a dedicated test
+# database, separate from the "auth" database `make up`/local
+# development uses, so running tests never touches development data.
 DB_HOST ?= postgres
 DB_PORT ?= 5432
-DB_NAME ?= auth
+DB_NAME ?= auth_test
 DB_USER ?= app
 DB_PASSWORD ?= app
 DB_SSLMODE ?= disable
@@ -159,28 +186,42 @@ build-native: ## 全パッケージをビルドする
 	go build ./...
 
 .PHONY: test-native
-test-native: ## テストを実行する
-	go test ./...
+test-native: ## テストを実行する (SPEC-013: DB 依存テストを含む。要: 到達可能な Postgres, DB_* 環境変数。-p 1 でパッケージ間をシリアライズし truncate ベースの隔離を成立させる)
+	go test -p 1 ./...
 
 .PHONY: test-race-native
-test-race-native: ## race detector 付きでテストを実行する
-	go test -race ./...
+test-race-native: ## race detector 付きでテストを実行する (test-native 同様 -p 1 + 要 Postgres)
+	go test -race -p 1 ./...
 
 .PHONY: check-native
-check-native: fmt-check-native lint-native vet-native build-native test-native ## 全チェックを実行する (fmt-check + lint + vet + build + test)
+check-native: fmt-check-native lint-native vet-native build-native ## オフラインの全チェックを実行する (fmt-check + lint + vet + build。test は DB フェーズのため含まない。host 側 `make check` が offline フェーズ + DB フェーズ [test-native] を両方実行する)
 
 .PHONY: sqlc-native
-sqlc-native: ## db/queries から sqlcgen (infra/postgres/sqlcgen) を生成する (check には含めない。生成後は commit する)
-	$(SQLC) generate
+sqlc-native: ## infra/postgres/schema/queries から sqlcgen (infra/postgres/sqlcgen) を生成する (check には含めない。生成後は commit する)
+	$(SQLC) generate -f $(SQLC_CONFIG)
 
 .PHONY: migrate-create-native
 migrate-create-native: ## 新しい goose マイグレーションファイルを作成する (name=<slug> 必須)
 	@if [ -z "$(name)" ]; then echo "usage: make migrate-create name=<slug>"; exit 1; fi
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
 
-.PHONY: test-integration-native
-test-integration-native: ## infra/postgres の実 DB 統合テストを実行する (要: app/migrator で DB 作成 + up 適用済みの Postgres, DB_* 環境変数)
-	go test -tags=integration ./infra/postgres/...
+# SIGNING_KEYS_OUT is the output path for the auth-signing-keys target.
+# Resolved relative to /workspace (the bind-mounted repo root inside the
+# toolchain container). Override with `make auth-signing-keys OUT=<path>`.
+SIGNING_KEYS_OUT ?= /workspace/.secrets/auth-signing-keys.json
+SIGNING_KEYS_OUT_HOST ?= $(REPO_ROOT)/.secrets/auth-signing-keys.json
+
+.PHONY: signing-keys-native
+signing-keys-native: ## RSA 署名鍵リングを生成する (.secrets/auth-signing-keys.json。秘密鍵を含むため絶対にコミットしない)
+	go run ./cmd/keygen -out $(SIGNING_KEYS_OUT)
+
+.PHONY: rotate-signing-keys-native
+rotate-signing-keys-native: ## 既存の署名鍵をローテーションする (旧 active 鍵を verify-only に降格し新しい鍵を生成)
+	go run ./cmd/keygen -out $(SIGNING_KEYS_OUT) -rotate
+
+.PHONY: tidy-native
+tidy-native: ## go.mod/go.sum を整理する (go mod tidy。check には含めない)
+	go mod tidy
 
 else
 # =============================================================================
@@ -209,32 +250,56 @@ vet: ## go vet を実行する
 build: ## 全パッケージをビルドする
 	$(OFFLINE) make build-native
 
+# DB_TEST_ENV is the shared set of `-e` flags the DB phase (test,
+# folded into check) forwards into tools-db: the discrete DB_* values
+# this Makefile defaults above, plus a bare `-e REQUIRE_DB` that
+# passes REQUIRE_DB through from the *caller's* shell environment
+# as-is (no value assigned here) -- `docker compose run -e KEY` with no
+# `=value` forwards the invoking process's own KEY, or leaves it unset
+# if the caller never set it. This Makefile deliberately never
+# hardcodes REQUIRE_DB=1 itself: the regular entrypoints (CI check
+# jobs, the pre-commit DB phase, root-level `make test`) are
+# responsible for exporting REQUIRE_DB=1 before invoking `make test`/
+# `make check` here, so that a misconfigured DB_HOST fails loudly
+# (t.Fatal, see testsupport.OpenTestDB) instead of silently skipping
+# DB-backed tests; an ad-hoc `make test` with no REQUIRE_DB set keeps
+# the graceful-skip fallback (.claude/rules/db.md §1.5).
+DB_TEST_ENV := -e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
+	-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \
+	-e REQUIRE_DB
+
 .PHONY: test
-test: ## テストを実行する
-	$(OFFLINE) make test-native
+test: ## テストを実行する (DB フェーズ。tools-db 経由で postgres [auth_test] へ接続。事前に app/migrator で auth_test 作成 + up 適用が必要)
+	$(DB_ONLINE) $(DB_TEST_ENV) tools-db make test-native
 
 .PHONY: test-race
-test-race: ## race detector 付きでテストを実行する
-	$(OFFLINE) make test-race-native
+test-race: ## race detector 付きでテストを実行する (test 同様の DB フェーズ)
+	$(DB_ONLINE) $(DB_TEST_ENV) tools-db make test-race-native
 
 .PHONY: check
-check: ## 全チェックを実行する (fmt-check + lint + vet + build + test)
+check: ## 全チェックを実行する (offline フェーズ: fmt-check+lint+vet+build → DB フェーズ: test)
 	$(OFFLINE) make check-native
+	$(DB_ONLINE) $(DB_TEST_ENV) tools-db make test-native
 
 .PHONY: sqlc
-sqlc: ## db/queries から sqlcgen (infra/postgres/sqlcgen) を生成する (check には含めない。生成後は commit する)
+sqlc: ## infra/postgres/schema/queries から sqlcgen (infra/postgres/sqlcgen) を生成する (check には含めない。生成後は commit する)
 	$(OFFLINE) make sqlc-native
 
 .PHONY: migrate-create
 migrate-create: ## 新しい goose マイグレーションファイルを作成する (name=<slug> 必須)
 	$(OFFLINE) make migrate-create-native name=$(name)
 
-.PHONY: test-integration
-test-integration: ## infra/postgres の実 DB 統合テストを実行する (offline 不可。tools サービス + compose.yml の postgres へ接続。事前に app/migrator で DB 作成 + up 適用が必要)
-	$(DB_ONLINE) \
-		-e DB_HOST=$(DB_HOST) -e DB_PORT=$(DB_PORT) -e DB_NAME=$(DB_NAME) \
-		-e DB_USER=$(DB_USER) -e DB_PASSWORD=$(DB_PASSWORD) -e DB_SSLMODE=$(DB_SSLMODE) \
-		make test-integration-native
+.PHONY: auth-signing-keys
+auth-signing-keys: ## RSA 署名鍵リングを生成する (.secrets/auth-signing-keys.json, repo root。gitignore 済み。秘密鍵を含むため絶対にコミットしない)
+	$(OFFLINE) make signing-keys-native SIGNING_KEYS_OUT=$(SIGNING_KEYS_OUT)
+
+.PHONY: rotate-signing-keys
+rotate-signing-keys: ## 署名鍵をローテーションする (旧 active 鍵を verify-only に降格し新しい active 鍵を追加。JWKS overlap 対応)
+	$(OFFLINE) make rotate-signing-keys-native SIGNING_KEYS_OUT=$(SIGNING_KEYS_OUT)
+
+.PHONY: tidy
+tidy: ## go.mod/go.sum を整理する (go mod tidy; ネットワーク有効な tools 経由。check には含めない)
+	$(ONLINE) make tidy-native
 
 endif
 

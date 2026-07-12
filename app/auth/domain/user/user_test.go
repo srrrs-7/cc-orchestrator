@@ -22,7 +22,11 @@ func newTestUser(t *testing.T, password string) *user.User {
 		t.Fatalf("setup NewProfile() unexpected error: %v", err)
 	}
 
-	return user.New(id, username, password, profile)
+	u, err := user.New(id, username, password, profile)
+	if err != nil {
+		t.Fatalf("setup user.New() unexpected error: %v", err)
+	}
+	return u
 }
 
 func TestUser_VerifyPassword(t *testing.T) {
@@ -59,5 +63,8 @@ func TestUser_Getters(t *testing.T) {
 	}
 	if u.Profile().Email() != "demo@example.com" {
 		t.Errorf("Profile().Email() = %q, want %q", u.Profile().Email(), "demo@example.com")
+	}
+	if u.PasswordHash() == "" {
+		t.Error("PasswordHash() must not be empty after New")
 	}
 }

@@ -83,6 +83,13 @@ components:
       - title
       - updated_at
       type: object
+  securitySchemes:
+    BearerAuth:
+      description: 'RS256 JWT access token issued by the auth server. Format: "Bearer
+        <token>".'
+      in: header
+      name: Authorization
+      type: apiKey
 externalDocs:
   description: ""
   url: ""
@@ -106,7 +113,7 @@ paths:
         name: limit
         schema:
           type: integer
-      - description: Number of tasks to skip (default 0)
+      - description: Number of tasks to skip (default 0, max 10000)
         in: query
         name: offset
         schema:
@@ -123,14 +130,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
-          description: limit or offset is not an integer, limit is less than 1, or
-            offset is negative
+          description: limit or offset is not an integer, limit is less than 1, offset
+            is negative, or offset exceeds 10000
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "500":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: List tasks
       tags:
       - tasks
@@ -159,6 +174,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: invalid body, empty title, title too long, or invalid priority
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "409":
           content:
             application/json:
@@ -171,6 +192,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: Create a task
       tags:
       - tasks
@@ -191,6 +214,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.taskResponse'
           description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "404":
           content:
             application/json:
@@ -203,6 +232,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: Get a task
       tags:
       - tasks
@@ -223,6 +254,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.taskResponse'
           description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "404":
           content:
             application/json:
@@ -241,6 +278,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: Complete a task
       tags:
       - tasks
@@ -277,6 +316,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: invalid body or invalid priority
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "404":
           content:
             application/json:
@@ -289,6 +334,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: Change a task's priority
       tags:
       - tasks
@@ -309,6 +356,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.taskResponse'
           description: OK
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/route.errorResponse'
+          description: missing or invalid Authorization header
         "404":
           content:
             application/json:
@@ -327,6 +380,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/route.errorResponse'
           description: Internal Server Error
+      security:
+      - BearerAuth: []
       summary: Start a task
       tags:
       - tasks

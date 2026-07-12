@@ -22,6 +22,10 @@ var (
 	// does not match any of the Client's registered redirect URIs.
 	ErrRedirectURIMismatch = errors.New("client: redirect uri mismatch")
 
+	// ErrMissingResponseType is returned when the authorize request
+	// omits the required response_type parameter (RFC 6749 §4.1.2.1).
+	ErrMissingResponseType = errors.New("client: missing response type")
+
 	// ErrUnsupportedResponseType is returned when a Client does not
 	// support the requested OAuth response_type.
 	ErrUnsupportedResponseType = errors.New("client: unsupported response type")
@@ -29,4 +33,9 @@ var (
 	// ErrUnsupportedGrantType is returned when a Client does not
 	// support the requested OAuth grant_type.
 	ErrUnsupportedGrantType = errors.New("client: unsupported grant type")
+
+	// ErrClientAuthFailed is returned when a confidential client
+	// presents an incorrect or missing client_secret at the token or
+	// revocation endpoint (RFC 6749 2.3.1, 5.2 invalid_client).
+	ErrClientAuthFailed = errors.New("client: authentication failed")
 )

@@ -34,6 +34,11 @@
       "semicolons": "always"
     }
   },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
   "overrides": [
     {
       "includes": ["vite.config.ts", "vitest.config.ts", "openapi-ts.config.ts"],
