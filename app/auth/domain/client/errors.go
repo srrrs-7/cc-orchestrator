@@ -29,4 +29,9 @@ var (
 	// ErrUnsupportedGrantType is returned when a Client does not
 	// support the requested OAuth grant_type.
 	ErrUnsupportedGrantType = errors.New("client: unsupported grant type")
+
+	// ErrClientAuthFailed is returned when a confidential client
+	// presents an incorrect or missing client_secret at the token or
+	// revocation endpoint (RFC 6749 2.3.1, 5.2 invalid_client).
+	ErrClientAuthFailed = errors.New("client: authentication failed")
 )

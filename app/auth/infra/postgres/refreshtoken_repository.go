@@ -161,6 +161,23 @@ func (r *RefreshTokenRepository) Rotate(ctx context.Context, oldHash refreshtoke
 	return nil
 }
 
+// PurgeExpired deletes every expired refresh_token row in a single
+// statement (ISSUE-019 item 1: bulk eviction). It returns the number of
+// rows deleted. Returning 0 (with nil error) is normal when no expired rows
+// exist. This covers both consumed (already-rotated) rows that were
+// intentionally kept for reuse detection during their TTL, and unconsumed
+// rows that were never exchanged -- all are safe to delete once expires_at
+// is in the past. This method is not part of the refreshtoken.Repository
+// domain interface: it is an infra-layer GC concern called by the background
+// purge ticker in cmd/authz/main.go, not by the service layer.
+func (r *RefreshTokenRepository) PurgeExpired(ctx context.Context) (int64, error) {
+	n, err := r.q.PurgeExpiredRefreshTokens(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: purge expired refresh tokens: %w", err)
+	}
+	return n, nil
+}
+
 // RevokeFamily deletes every refresh token whose family_id matches
 // familyID in a single statement (RevokeFamilyRefreshTokens). Deleting
 // zero rows is not an error -- idempotent, matching

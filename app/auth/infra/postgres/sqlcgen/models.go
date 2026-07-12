@@ -26,11 +26,12 @@ type AuthorizationCode struct {
 }
 
 type Client struct {
-	ID            string
-	RedirectUris  json.RawMessage
-	AllowedScopes json.RawMessage
-	ResponseTypes json.RawMessage
-	GrantTypes    json.RawMessage
+	ID               string
+	RedirectUris     json.RawMessage
+	AllowedScopes    json.RawMessage
+	ResponseTypes    json.RawMessage
+	GrantTypes       json.RawMessage
+	ClientSecretHash sql.NullString
 }
 
 type Consent struct {

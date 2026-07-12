@@ -16,10 +16,13 @@ func (h *revokeHandler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientID, clientSecret := extractClientCredentials(r)
+
 	req := service.RevokeRequest{
 		Token:         r.PostFormValue("token"),
 		TokenTypeHint: r.PostFormValue("token_type_hint"),
-		ClientID:      r.PostFormValue("client_id"),
+		ClientID:      clientID,
+		ClientSecret:  clientSecret,
 	}
 
 	if err := h.svc.Revoke(r.Context(), req); err != nil {

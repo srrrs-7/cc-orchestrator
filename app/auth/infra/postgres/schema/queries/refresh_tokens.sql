@@ -45,6 +45,18 @@ WHERE token_hash = $1 AND expires_at > now();
 DELETE FROM refresh_tokens
 WHERE token_hash = $1 AND expires_at <= now();
 
+-- name: PurgeExpiredRefreshTokens :execrows
+-- Bulk eviction companion to DeleteExpiredRefreshToken (ISSUE-019 item 1):
+-- deletes ALL rows whose expires_at is in the past in a single statement.
+-- This covers both consumed (already-rotated) rows that were intentionally
+-- kept for reuse detection during their TTL and unconsumed rows that were
+-- never exchanged. Called by the background purge ticker in
+-- cmd/authz/main.go (every 15 min).
+-- Returns the number of rows deleted (sqlc :execrows).
+-- Safe to call at any time: the WHERE guard makes it a no-op when no expired
+-- rows exist, and it never touches live (unexpired) refresh tokens.
+DELETE FROM refresh_tokens WHERE expires_at <= now();
+
 -- name: ConsumeRefreshToken :one
 -- Backs the "consume old" half of refreshtoken.Repository.Rotate
 -- (SPEC-006 付録 A): the sole, atomic single-use mechanism for a

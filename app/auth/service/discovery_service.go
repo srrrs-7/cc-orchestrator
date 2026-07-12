@@ -50,7 +50,7 @@ func (s *DiscoveryService) Metadata(_ context.Context) ProviderMetadata {
 		ClaimsSupported:                   []string{"sub", "iss", "aud", "exp", "iat", "nonce", "auth_time", "at_hash", "name", "email"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
-		TokenEndpointAuthMethodsSupported: []string{"none"},
+		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_post", "client_secret_basic"},
 	}
 }
 

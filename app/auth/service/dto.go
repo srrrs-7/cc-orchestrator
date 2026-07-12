@@ -44,11 +44,14 @@ type AuthorizeResult struct {
 // the /token form body. RefreshToken and Scope are used only by
 // grant_type=refresh_token (SPEC-006 R1/R7); Code/RedirectURI/
 // CodeVerifier are used only by grant_type=authorization_code.
+// ClientSecret is the plaintext secret for confidential clients
+// (ISSUE-035); empty for public clients (token_endpoint_auth_method=none).
 type TokenRequest struct {
 	GrantType    string
 	Code         string
 	RedirectURI  string
 	ClientID     string
+	ClientSecret string
 	CodeVerifier string
 	RefreshToken string
 	Scope        string

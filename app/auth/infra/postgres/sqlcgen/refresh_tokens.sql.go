@@ -145,6 +145,27 @@ func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshToken
 	return err
 }
 
+const purgeExpiredRefreshTokens = `-- name: PurgeExpiredRefreshTokens :execrows
+DELETE FROM refresh_tokens WHERE expires_at <= now()
+`
+
+// Bulk eviction companion to DeleteExpiredRefreshToken (ISSUE-019 item 1):
+// deletes ALL rows whose expires_at is in the past in a single statement.
+// This covers both consumed (already-rotated) rows that were intentionally
+// kept for reuse detection during their TTL and unconsumed rows that were
+// never exchanged. Called by the background purge ticker in
+// cmd/authz/main.go (every 15 min).
+// Returns the number of rows deleted (sqlc :execrows).
+// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+// rows exist, and it never touches live (unexpired) refresh tokens.
+func (q *Queries) PurgeExpiredRefreshTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeExpiredRefreshTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const revokeFamilyRefreshTokens = `-- name: RevokeFamilyRefreshTokens :exec
 DELETE FROM refresh_tokens
 WHERE family_id = $1

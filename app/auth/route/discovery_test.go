@@ -86,8 +86,12 @@ func TestDiscovery_Metadata(t *testing.T) {
 	if !reflect.DeepEqual(meta.GrantTypesSupported, []string{"authorization_code", "refresh_token"}) {
 		t.Errorf("grant_types_supported = %v, want [authorization_code refresh_token] (SPEC-006 R9)", meta.GrantTypesSupported)
 	}
-	if !reflect.DeepEqual(meta.TokenEndpointAuthMethodsSupported, []string{"none"}) {
-		t.Errorf("token_endpoint_auth_methods_supported = %v, want [none] (public client, no client_secret support)", meta.TokenEndpointAuthMethodsSupported)
+	// ISSUE-035: client_secret_post and client_secret_basic are now
+	// supported in addition to none (public clients). Order is stable
+	// (defined in service/discovery_service.go).
+	wantAuthMethods := []string{"none", "client_secret_post", "client_secret_basic"}
+	if !reflect.DeepEqual(meta.TokenEndpointAuthMethodsSupported, wantAuthMethods) {
+		t.Errorf("token_endpoint_auth_methods_supported = %v, want %v (ISSUE-035)", meta.TokenEndpointAuthMethodsSupported, wantAuthMethods)
 	}
 	if len(meta.ScopesSupported) == 0 {
 		t.Error("scopes_supported is empty, want at least openid")

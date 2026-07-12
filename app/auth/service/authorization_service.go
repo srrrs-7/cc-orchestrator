@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
@@ -221,6 +222,12 @@ func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req T
 	if !c.SupportsGrantType(grantTypeAuthorizationCode) {
 		return TokenResponse{}, fmt.Errorf("service: token: %w", client.ErrUnsupportedGrantType)
 	}
+	// Confidential client authentication (ISSUE-035, RFC 6749 2.3.1):
+	// verify the presented client_secret against the stored bcrypt hash.
+	// Public clients (IsConfidential() == false) skip this check.
+	if c.IsConfidential() && !c.VerifySecret(req.ClientSecret) {
+		return TokenResponse{}, fmt.Errorf("service: token: %w", client.ErrClientAuthFailed)
+	}
 
 	code, err := authcode.ParseCode(req.Code)
 	if err != nil {
@@ -319,6 +326,17 @@ func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req T
 	return newTokenResponse(accessToken, idToken, scope.String(), refreshTokenPlaintext), nil
 }
 
+// minRefreshGrantDuration is the constant-time floor applied in
+// refreshTokenGrant when FindByTokenHash returns ErrNotFound
+// (ISSUE-019 item 2: timing side-channel mitigation). Without this
+// floor, an attacker can distinguish "token hash unknown" (fast: one
+// index miss) from "token hash found but valid" (slower: several more
+// DB operations) purely by response latency. 10 ms is low enough not
+// to noticeably affect legitimate clients, but high enough to mask
+// the sub-millisecond difference between an index miss and a hit on a
+// well-tuned Postgres host.
+const minRefreshGrantDuration = 10 * time.Millisecond
+
 // refreshTokenGrant implements grant_type=refresh_token (RFC 6749 6,
 // SPEC-006 R1). It validates the presented refresh token (existence,
 // reuse detection, client binding, scope narrowing), reissues an
@@ -347,12 +365,30 @@ func (s *AuthorizationService) refreshTokenGrant(ctx context.Context, req TokenR
 	if !c.SupportsGrantType(grantTypeRefreshToken) {
 		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", client.ErrUnsupportedGrantType)
 	}
+	// Confidential client authentication (ISSUE-035): same check as in
+	// authorizationCodeGrant -- the grant_type=refresh_token flow also
+	// requires the client to authenticate if it is confidential.
+	if c.IsConfidential() && !c.VerifySecret(req.ClientSecret) {
+		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", client.ErrClientAuthFailed)
+	}
 
 	// 3. Look the presented token up by its hash; consumed-but-unexpired
 	// rows are returned on purpose (see refreshtoken.Repository.FindByTokenHash).
+	// Record the wall-clock start just before the DB lookup so that the
+	// ErrNotFound path below can apply a constant-time floor
+	// (minRefreshGrantDuration) to mitigate timing side-channel attacks
+	// (ISSUE-019 item 2): an index miss is faster than a hit + subsequent
+	// operations, and we do not want that difference to be observable.
+	lookupStart := time.Now()
 	oldHash := refreshtoken.HashToken(req.RefreshToken)
 	rt, err := s.refreshTokens.FindByTokenHash(ctx, oldHash)
 	if err != nil {
+		// Timing mitigation: pad the ErrNotFound path to at least
+		// minRefreshGrantDuration so callers cannot distinguish a missing
+		// token from a valid one by response latency alone.
+		if elapsed := time.Since(lookupStart); elapsed < minRefreshGrantDuration {
+			time.Sleep(minRefreshGrantDuration - elapsed)
+		}
 		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
 	}
 

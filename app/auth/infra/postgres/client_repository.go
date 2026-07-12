@@ -88,7 +88,13 @@ func rowToClient(row sqlcgen.Client) (*client.Client, error) {
 		return nil, fmt.Errorf("decode grant_types: %w", err)
 	}
 
-	return client.Reconstruct(id, redirectURIs, allowedScopes, responseTypes, grantTypes), nil
+	var secretHash *string
+	if row.ClientSecretHash.Valid {
+		h := row.ClientSecretHash.String
+		secretHash = &h
+	}
+
+	return client.Reconstruct(id, redirectURIs, allowedScopes, responseTypes, grantTypes, secretHash), nil
 }
 
 // decodeStringSlice unmarshals a jsonb column (stored as a JSON array

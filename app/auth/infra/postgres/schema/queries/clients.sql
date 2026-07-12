@@ -7,7 +7,7 @@
 -- Backs client.Repository.FindByID. Returns sql.ErrNoRows when
 -- absent; infra/postgres/client_repository.go maps that to
 -- client.ErrNotFound.
-SELECT id, redirect_uris, allowed_scopes, response_types, grant_types
+SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash
 FROM clients
 WHERE id = $1;
 
@@ -17,10 +17,13 @@ WHERE id = $1;
 -- Inserts a new row, or overwrites every column in place when id
 -- already exists, so repeated process starts converge on the same
 -- seed data rather than erroring on the second run.
-INSERT INTO clients (id, redirect_uris, allowed_scopes, response_types, grant_types)
-VALUES ($1, $2, $3, $4, $5)
+-- client_secret_hash is NULL for public clients, non-NULL (bcrypt hash)
+-- for confidential clients (ISSUE-035).
+INSERT INTO clients (id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE SET
-    redirect_uris  = EXCLUDED.redirect_uris,
-    allowed_scopes = EXCLUDED.allowed_scopes,
-    response_types = EXCLUDED.response_types,
-    grant_types    = EXCLUDED.grant_types;
+    redirect_uris       = EXCLUDED.redirect_uris,
+    allowed_scopes      = EXCLUDED.allowed_scopes,
+    response_types      = EXCLUDED.response_types,
+    grant_types         = EXCLUDED.grant_types,
+    client_secret_hash  = EXCLUDED.client_secret_hash;

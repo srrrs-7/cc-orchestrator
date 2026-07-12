@@ -174,6 +174,9 @@ func tokenErrorCode(err error) (status int, code, description string) {
 		return http.StatusBadRequest, "invalid_request", "client_id is required"
 	case errors.Is(err, client.ErrNotFound):
 		return http.StatusBadRequest, "invalid_client", "unknown client"
+	case errors.Is(err, client.ErrClientAuthFailed):
+		// RFC 6749 5.2: invalid_client with 401 when client authentication fails.
+		return http.StatusUnauthorized, "invalid_client", "client authentication failed"
 	case errors.Is(err, user.ErrNotFound):
 		// The authorization code / refresh token itself resolved
 		// successfully but the resource owner it names no longer

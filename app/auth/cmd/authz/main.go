@@ -31,8 +31,25 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/service"
 )
 
+// expiredPurger is a local interface for the background purge goroutine.
+// Implemented by *postgres.AuthCodeRepository and
+// *postgres.RefreshTokenRepository. PurgeExpired is an infra-layer GC
+// concern, not a domain invariant, so it is intentionally absent from the
+// authcode/refreshtoken domain Repository interfaces (ISSUE-015,
+// ISSUE-019).
+type expiredPurger interface {
+	PurgeExpired(ctx context.Context) (int64, error)
+}
+
 const (
 	shutdownTimeout = 10 * time.Second
+
+	// purgeInterval is how often the background goroutine calls
+	// PurgeExpired on the authcode and refresh-token repositories
+	// (ISSUE-015, ISSUE-019). 15 minutes is a conservative default:
+	// authorization codes have a 10-minute TTL and refresh tokens a
+	// 24-hour TTL, so the table sizes stay bounded even under load.
+	purgeInterval = 15 * time.Minute
 
 	// HTTP server timeouts. In particular, ReadHeaderTimeout bounds how
 	// long a client may take to send request headers, which mitigates
@@ -104,7 +121,11 @@ func run() error {
 	// writer/reader pool pair via postgres.OpenPair and wires each
 	// repository to the pool the "auth の correctness-critical read の
 	// 配置" table (docs/plans/SPEC-010-plan.md) assigns it.
-	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
+	// authCodePurger / refreshTokenPurger are the same concrete objects
+	// as authCodeRepo / refreshTokenRepo but typed as expiredPurger so
+	// the background purge ticker can call PurgeExpired (ISSUE-015,
+	// ISSUE-019) without exposing that method on the domain interface.
+	clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, authCodePurger, refreshTokenPurger, closePersistence, demoPassword, err := setupPersistence(ctx, e.writerConfig(), e.readerConfig(), e.DemoPassword)
 	if err != nil {
 		return fmt.Errorf("authz: setup persistence: %w", err)
 	}
@@ -113,6 +134,14 @@ func run() error {
 			slog.Error("authz: close persistence", "error", err)
 		}
 	}()
+
+	// Background purge ticker (ISSUE-015 / ISSUE-019): sweep expired
+	// authorization_codes and refresh_tokens every purgeInterval so the
+	// tables do not grow without bound between lazy-eviction
+	// opportunities. The goroutine exits when ctx is cancelled (SIGINT /
+	// SIGTERM) via the select's ctx.Done() arm; it does not block the
+	// server's graceful shutdown path.
+	go runPurgeTicker(ctx, purgeInterval, authCodePurger, refreshTokenPurger)
 	if e.DemoPassword != "" || os.Getenv("DEMO_LOG_PASSWORD") == "1" {
 		slog.Info("authz: demo user password", "username", demoUsername, "password", demoPassword)
 	}
@@ -171,6 +200,51 @@ func run() error {
 	return nil
 }
 
+// runPurgeTicker runs a background loop that calls PurgeExpired on
+// authCodePurger and refreshTokenPurger every interval. It is designed
+// to be launched as a goroutine from run(); it exits cleanly when ctx
+// is cancelled (i.e. when the process receives SIGINT/SIGTERM and run's
+// signal.NotifyContext fires).
+//
+// Errors from individual purge calls are logged but do not stop the
+// ticker: a transient DB failure during GC should not escalate to a
+// process crash. The first purge fires after the first tick, not at
+// startup, so it does not delay the server's readiness.
+func runPurgeTicker(ctx context.Context, interval time.Duration, authCodePurger, refreshTokenPurger expiredPurger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			purgeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			acN, acErr := authCodePurger.PurgeExpired(purgeCtx)
+			rtN, rtErr := refreshTokenPurger.PurgeExpired(purgeCtx)
+			cancel()
+
+			switch {
+			case acErr != nil && rtErr != nil:
+				slog.Error("authz: purge expired tokens: both failed",
+					"authcode_error", acErr, "refresh_token_error", rtErr)
+			case acErr != nil:
+				slog.Error("authz: purge expired authorization codes", "error", acErr,
+					"refresh_tokens_purged", rtN)
+			case rtErr != nil:
+				slog.Error("authz: purge expired refresh tokens", "error", rtErr,
+					"authorization_codes_purged", acN)
+			default:
+				if acN > 0 || rtN > 0 {
+					slog.Info("authz: purge expired tokens",
+						"authorization_codes_purged", acN,
+						"refresh_tokens_purged", rtN)
+				}
+			}
+		}
+	}
+}
+
 // buildKeyRingLoader selects the appropriate token.KeyRingLoader
 // implementation based on the signingKeysFile env value:
 //   - non-empty: jwt.FileLoader reads from that path (production)
@@ -202,20 +276,24 @@ func buildKeyRingLoader(signingKeysFile string) token.KeyRingLoader {
 // readerCfg == writerCfg (the DB_READER_* -unset default) or two
 // independent pools otherwise.
 //
-// It returns the four repositories as their domain-declared interfaces
-// plus a closePersistence func the caller MUST defer-call during
-// shutdown to release pooled connections.
-func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, func() error, string, error) {
+// It returns the four repositories as their domain-declared interfaces,
+// two expiredPurger values for the background purge ticker
+// (authCodePurger, refreshTokenPurger -- the same concrete objects as
+// authCodeRepo/refreshTokenRepo, exposed through the infra-only
+// expiredPurger interface so the service layer remains unaware), and a
+// closePersistence func the caller MUST defer-call during shutdown to
+// release pooled connections.
+func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config, demoPassword string) (client.Repository, user.Repository, authcode.Repository, refreshtoken.Repository, consent.Repository, expiredPurger, expiredPurger, func() error, string, error) {
 	noopClose := func() error { return nil }
 
 	writerDB, readerDB, closeFn, err := postgres.OpenPair(ctx, writerCfg, readerCfg)
 	if err != nil {
-		return nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("postgres open pair: %w", err)
 	}
 	seededPassword, err := seedPostgres(ctx, writerDB, demoPassword)
 	if err != nil {
 		_ = closeFn()
-		return nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
+		return nil, nil, nil, nil, nil, nil, nil, noopClose, "", fmt.Errorf("seed demo data (postgres): %w", err)
 	}
 	// Reader pool: seeded, read-only-at-runtime aggregates.
 	clientRepo := postgres.NewClientRepository(readerDB)
@@ -226,7 +304,10 @@ func setupPersistence(ctx context.Context, writerCfg, readerCfg postgres.Config,
 	refreshTokenRepo := postgres.NewRefreshTokenRepository(writerDB)
 	consentRepo := postgres.NewConsentRepository(writerDB)
 	slog.Info("authz: persistence configured", "mode", "postgres")
-	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, closeFn, seededPassword, nil
+	// authCodeRepo and refreshTokenRepo are also returned as
+	// expiredPurger so the background purge ticker can call PurgeExpired
+	// without the domain interface needing to expose that method.
+	return clientRepo, userRepo, authCodeRepo, refreshTokenRepo, consentRepo, authCodeRepo, refreshTokenRepo, closeFn, seededPassword, nil
 }
 
 // buildDemoClient constructs this authorization server's single demo

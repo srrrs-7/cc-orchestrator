@@ -150,3 +150,22 @@ func (q *Queries) InsertAuthCode(ctx context.Context, arg InsertAuthCodeParams) 
 	)
 	return err
 }
+
+const purgeExpiredAuthCodes = `-- name: PurgeExpiredAuthCodes :execrows
+DELETE FROM authorization_codes WHERE expires_at <= now()
+`
+
+// Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
+// rows whose TTL has elapsed in a single statement. Called by the background
+// purge ticker in cmd/authz/main.go (every 15 min) so expired authorization
+// codes do not accumulate between lazy-eviction opportunities.
+// Returns the number of rows deleted (sqlc :execrows).
+// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+// rows exist, and it never touches unconsumed/unexpired codes.
+func (q *Queries) PurgeExpiredAuthCodes(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeExpiredAuthCodes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

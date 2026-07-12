@@ -41,6 +41,16 @@ WHERE code = $1 AND consumed = false AND expires_at > now();
 DELETE FROM authorization_codes
 WHERE code = $1 AND expires_at <= now();
 
+-- name: PurgeExpiredAuthCodes :execrows
+-- Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
+-- rows whose TTL has elapsed in a single statement. Called by the background
+-- purge ticker in cmd/authz/main.go (every 15 min) so expired authorization
+-- codes do not accumulate between lazy-eviction opportunities.
+-- Returns the number of rows deleted (sqlc :execrows).
+-- Safe to call at any time: the WHERE guard makes it a no-op when no expired
+-- rows exist, and it never touches unconsumed/unexpired codes.
+DELETE FROM authorization_codes WHERE expires_at <= now();
+
 -- name: ConsumeAuthCode :one
 -- Backs authcode.Repository.Consume: the sole, atomic single-use
 -- mechanism (plan §0 "authcode 単回使用/TTL"). DELETE ... RETURNING is

@@ -104,6 +104,21 @@ func (r *AuthCodeRepository) FindByCode(ctx context.Context, code authcode.Code)
 	return ac, nil
 }
 
+// PurgeExpired deletes every expired authorization_code row in a single
+// statement (ISSUE-015: bulk eviction). It returns the number of rows
+// deleted. Returning 0 (with nil error) is normal when no expired rows
+// exist -- the underlying DELETE ... WHERE expires_at <= now() is a no-op
+// in that case. This method is not part of the authcode.Repository domain
+// interface: it is an infra-layer GC concern called by the background
+// purge ticker in cmd/authz/main.go, not by the service layer.
+func (r *AuthCodeRepository) PurgeExpired(ctx context.Context) (int64, error) {
+	n, err := r.q.PurgeExpiredAuthCodes(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: purge expired authorization codes: %w", err)
+	}
+	return n, nil
+}
+
 // Consume atomically claims code for one-time use via a single
 // DELETE ... RETURNING statement (schema/queries/authcodes.sql's
 // ConsumeAuthCode): Postgres's own row-level locking guarantees that

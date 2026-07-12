@@ -10,11 +10,13 @@ import (
 )
 
 // RevokeRequest is the application-layer input for token revocation
-// (RFC 7009).
+// (RFC 7009). ClientSecret is the plaintext secret for confidential
+// clients (ISSUE-035); empty for public clients.
 type RevokeRequest struct {
 	Token         string
 	TokenTypeHint string
 	ClientID      string
+	ClientSecret  string
 }
 
 // Revoke revokes the presented token when it is a refresh token. Unknown
@@ -39,7 +41,15 @@ func (s *AuthorizationService) Revoke(ctx context.Context, req RevokeRequest) er
 		if err != nil {
 			return nil
 		}
-		if _, err := s.clients.FindByID(ctx, cid); err != nil {
+		c, err := s.clients.FindByID(ctx, cid)
+		if err != nil {
+			return nil
+		}
+		// Confidential client authentication (ISSUE-035): RFC 7009 §2.1
+		// requires the client to authenticate if it is confidential.
+		// Per RFC 7009 §2.2, the AS SHOULD treat an auth failure the same
+		// as an invalid token (return success to not leak information).
+		if c.IsConfidential() && !c.VerifySecret(req.ClientSecret) {
 			return nil
 		}
 		if err := rt.MatchesClient(refreshtoken.NewClientID(cid.String())); err != nil {

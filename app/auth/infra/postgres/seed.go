@@ -10,6 +10,17 @@ import (
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres/sqlcgen"
 )
 
+// clientSecretHashParam converts the client's optional secret hash
+// into a sql.NullString for the UpsertClient query: nil (public
+// client) maps to {Valid: false}; non-nil (confidential client) maps
+// to {String: *h, Valid: true}.
+func clientSecretHashParam(c *client.Client) sql.NullString {
+	if h := c.SecretHash(); h != nil {
+		return sql.NullString{String: *h, Valid: true}
+	}
+	return sql.NullString{}
+}
+
 // SeedClient idempotently inserts (or overwrites, keyed by ID) c into
 // the clients table via an upsert (schema/queries/clients.sql's
 // UpsertClient: INSERT ... ON CONFLICT (id) DO UPDATE), so calling it
@@ -46,11 +57,12 @@ func SeedClient(ctx context.Context, db *sql.DB, c *client.Client) error {
 
 	q := sqlcgen.New(db)
 	if err := q.UpsertClient(ctx, sqlcgen.UpsertClientParams{
-		ID:            c.ID().String(),
-		RedirectUris:  redirectURIsJSON,
-		AllowedScopes: allowedScopesJSON,
-		ResponseTypes: responseTypesJSON,
-		GrantTypes:    grantTypesJSON,
+		ID:               c.ID().String(),
+		RedirectUris:     redirectURIsJSON,
+		AllowedScopes:    allowedScopesJSON,
+		ResponseTypes:    responseTypesJSON,
+		GrantTypes:       grantTypesJSON,
+		ClientSecretHash: clientSecretHashParam(c),
 	}); err != nil {
 		return fmt.Errorf("postgres: seed client: %w", err)
 	}

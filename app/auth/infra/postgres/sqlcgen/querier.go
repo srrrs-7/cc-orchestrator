@@ -123,6 +123,24 @@ type Querier interface {
 	// through rotation; NULL means not available (maps to time.Time{} in Go --
 	// see ISSUE-038).
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
+	// Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
+	// rows whose TTL has elapsed in a single statement. Called by the background
+	// purge ticker in cmd/authz/main.go (every 15 min) so expired authorization
+	// codes do not accumulate between lazy-eviction opportunities.
+	// Returns the number of rows deleted (sqlc :execrows).
+	// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+	// rows exist, and it never touches unconsumed/unexpired codes.
+	PurgeExpiredAuthCodes(ctx context.Context) (int64, error)
+	// Bulk eviction companion to DeleteExpiredRefreshToken (ISSUE-019 item 1):
+	// deletes ALL rows whose expires_at is in the past in a single statement.
+	// This covers both consumed (already-rotated) rows that were intentionally
+	// kept for reuse detection during their TTL and unconsumed rows that were
+	// never exchanged. Called by the background purge ticker in
+	// cmd/authz/main.go (every 15 min).
+	// Returns the number of rows deleted (sqlc :execrows).
+	// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+	// rows exist, and it never touches live (unexpired) refresh tokens.
+	PurgeExpiredRefreshTokens(ctx context.Context) (int64, error)
 	// Backs refreshtoken.Repository.RevokeFamily: the reuse-detection
 	// response (RFC 9700 4.14) that invalidates every token in a rotation
 	// chain (both active and already-consumed rows) in one statement, so
@@ -135,6 +153,8 @@ type Querier interface {
 	// Inserts a new row, or overwrites every column in place when id
 	// already exists, so repeated process starts converge on the same
 	// seed data rather than erroring on the second run.
+	// client_secret_hash is NULL for public clients, non-NULL (bcrypt hash)
+	// for confidential clients (ISSUE-035).
 	UpsertClient(ctx context.Context, arg UpsertClientParams) error
 	UpsertConsent(ctx context.Context, arg UpsertConsentParams) error
 	// Backs the startup idempotent seed (infra/postgres/seed.go's
