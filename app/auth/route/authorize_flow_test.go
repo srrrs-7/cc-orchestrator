@@ -37,8 +37,8 @@ func TestAuthorize_Unauthenticated_RedirectsToLogin(t *testing.T) {
 // (token success shape + Cache-Control: no-store + Pragma: no-cache),
 // #5 (RS256 JWTs), #6 (ID Token REQUIRED claims + nonce reflection)
 // and #7 (UserInfo sub + scope-gated claims). It also asserts the
-// access token's audience design (aud = issuer, per
-// docs/plans/AUTH-001-plan.md "access token の aud 値の設計").
+// access token's audience design (aud = API resource identifier per
+// ISSUE-037, distinct from issuer).
 func TestAuthorizeTokenUserInfoFlow_Success(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -102,8 +102,8 @@ func TestAuthorizeTokenUserInfoFlow_Success(t *testing.T) {
 	}
 
 	accessClaims := decodeJWTPayload(t, tokenResp.AccessToken)
-	if accessClaims.Audience != testIssuer {
-		t.Errorf("access_token aud = %q, want %q (this authorization server's audience design: aud = issuer, its own UserInfo endpoint)", accessClaims.Audience, testIssuer)
+	if accessClaims.Audience != testAPIAudience {
+		t.Errorf("access_token aud = %q, want %q (ISSUE-037: aud = API resource identifier, not issuer)", accessClaims.Audience, testAPIAudience)
 	}
 	if accessClaims.Issuer != testIssuer {
 		t.Errorf("access_token iss = %q, want %q", accessClaims.Issuer, testIssuer)

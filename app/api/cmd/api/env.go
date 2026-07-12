@@ -41,15 +41,19 @@ type Env struct {
 	DBPassword string
 	DBSSLMode  string
 
-	// AuthIssuer and AuthJWKSURL configure Bearer JWT authentication.
-	// When both are set, the API validates incoming JWTs against the
-	// auth server's JWKS. When either is unset, auth middleware is
-	// disabled (useful for local development without an auth server).
-	// In production both must be set:
-	//   AUTH_ISSUER   — expected iss/aud value in access tokens
-	//   AUTH_JWKS_URL — URL of the auth server's JWKS endpoint
-	AuthIssuer  string
-	AuthJWKSURL string
+	// AuthIssuer, AuthJWKSURL, and AuthAudience configure Bearer JWT
+	// authentication. When all three are set, the API validates incoming
+	// JWTs against the auth server's JWKS with full iss+aud checks. When
+	// any is unset, auth middleware is disabled (useful for local
+	// development without an auth server). In production all three must
+	// be set:
+	//   AUTH_ISSUER    — expected "iss" value in access tokens
+	//   AUTH_JWKS_URL  — URL of the auth server's JWKS endpoint
+	//   AUTH_AUDIENCE  — expected value in access token "aud" claim
+	//                    (ISSUE-037: resource identifier for this API)
+	AuthIssuer   string
+	AuthJWKSURL  string
+	AuthAudience string
 
 	// DBReader holds the reader-pool connection settings SPEC-010
 	// adds (docs/plans/SPEC-010-plan.md). Each field already carries
@@ -81,15 +85,16 @@ type DBReaderEnv struct {
 // Env.validate to check the result.
 func NewEnv() Env {
 	e := Env{
-		Port:        orDefault(os.Getenv("PORT"), defaultPort),
-		DBHost:      os.Getenv("DB_HOST"),
-		DBPort:      orDefault(os.Getenv("DB_PORT"), defaultDBPort),
-		DBName:      os.Getenv("DB_NAME"),
-		DBUser:      os.Getenv("DB_USER"),
-		DBPassword:  os.Getenv("DB_PASSWORD"),
-		DBSSLMode:   orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
-		AuthIssuer:  os.Getenv("AUTH_ISSUER"),
-		AuthJWKSURL: os.Getenv("AUTH_JWKS_URL"),
+		Port:         orDefault(os.Getenv("PORT"), defaultPort),
+		DBHost:       os.Getenv("DB_HOST"),
+		DBPort:       orDefault(os.Getenv("DB_PORT"), defaultDBPort),
+		DBName:       os.Getenv("DB_NAME"),
+		DBUser:       os.Getenv("DB_USER"),
+		DBPassword:   os.Getenv("DB_PASSWORD"),
+		DBSSLMode:    orDefault(os.Getenv("DB_SSLMODE"), defaultSSLMode),
+		AuthIssuer:   os.Getenv("AUTH_ISSUER"),
+		AuthJWKSURL:  os.Getenv("AUTH_JWKS_URL"),
+		AuthAudience: os.Getenv("AUTH_AUDIENCE"),
 	}
 
 	// SPEC-010 R3/R4: each DB_READER_* item falls back individually to
@@ -156,17 +161,28 @@ func (e Env) validate() error {
 	if err := e.readerConfig().Validate(); err != nil {
 		return fmt.Errorf("api: validate env: %w", err)
 	}
-	if (e.AuthIssuer == "") != (e.AuthJWKSURL == "") {
-		return fmt.Errorf("api: validate env: AUTH_ISSUER and AUTH_JWKS_URL must both be set or both be unset")
+	// AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be set
+	// together or all be unset (partial auth config is a
+	// misconfiguration). ISSUE-037: AUTH_AUDIENCE separates API-bound
+	// access tokens from other token uses.
+	authVarsSet := map[string]bool{
+		"AUTH_ISSUER":   e.AuthIssuer != "",
+		"AUTH_JWKS_URL": e.AuthJWKSURL != "",
+		"AUTH_AUDIENCE": e.AuthAudience != "",
+	}
+	allSet := authVarsSet["AUTH_ISSUER"] && authVarsSet["AUTH_JWKS_URL"] && authVarsSet["AUTH_AUDIENCE"]
+	noneSet := !authVarsSet["AUTH_ISSUER"] && !authVarsSet["AUTH_JWKS_URL"] && !authVarsSet["AUTH_AUDIENCE"]
+	if !allSet && !noneSet {
+		return fmt.Errorf("api: validate env: AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be set or all be unset")
 	}
 	return nil
 }
 
 // authEnabled reports whether JWT auth middleware should be activated.
-// Both AUTH_ISSUER and AUTH_JWKS_URL must be non-empty (validate
-// guarantees they are set together or not at all).
+// AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE must all be non-empty
+// (validate guarantees they are all set together or all unset).
 func (e Env) authEnabled() bool {
-	return e.AuthIssuer != "" && e.AuthJWKSURL != ""
+	return e.AuthIssuer != "" && e.AuthJWKSURL != "" && e.AuthAudience != ""
 }
 
 // orDefault returns v, or def when v is empty.

@@ -99,6 +99,7 @@ services:
       DB_SSLMODE: disable
       AUTH_ISSUER: http://localhost:8080/auth
       AUTH_JWKS_URL: http://auth:8080/.well-known/jwks.json
+      AUTH_AUDIENCE: http://localhost:8081/api
     security_opt:
       - "no-new-privileges:true"
     restart: unless-stopped
@@ -114,6 +115,7 @@ services:
       - "127.0.0.1:8082:8080"
     environment:
       ISSUER: http://localhost:8080/auth
+      API_AUDIENCE: http://localhost:8081/api
       DEMO_PASSWORD: demo
       DEMO_LOG_PASSWORD: "1"
       DB_HOST: postgres

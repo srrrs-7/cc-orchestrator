@@ -50,6 +50,7 @@ import (
 
 const (
 	testIssuer       = "https://issuer.example"
+	testAPIAudience  = "https://api.example/api"
 	testClientID     = "test-client"
 	testRedirectURI  = "http://localhost:3000/callback"
 	testUsername     = "test-user"
@@ -115,11 +116,11 @@ func newDiscoveryTestHandler(t *testing.T) http.Handler {
 	sessionStore := memory.NewIdPSessionStore()
 	authnSvc := service.NewAuthenticationService(nil, sessionStore)
 	consentSvc := service.NewConsentService(nil)
-	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer)
-	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer)
+	authSvc := service.NewAuthorizationService(nil, nil, nil, nil, signer, testIssuer, testAPIAudience)
+	userInfoSvc := service.NewUserInfoService(nil, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 	_ = username
-	return route.NewRouter(authSvc, authnSvc, consentSvc, nil, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, nil, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // newTokenErrorTestHandler builds a router for /token error-injection
@@ -242,13 +243,13 @@ func newTestHandlerWithDB(t *testing.T, db *sql.DB) http.Handler {
 	consentRepo := postgres.NewConsentRepository(db)
 	sessionStore := memory.NewIdPSessionStore()
 
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer, testAPIAudience)
 	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
 	consentSvc := service.NewConsentService(consentRepo)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
+	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
-	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // ---------------------------------------------------------------------------

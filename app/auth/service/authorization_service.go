@@ -46,9 +46,13 @@ type AuthorizationService struct {
 	refreshTokens refreshtoken.Repository
 	signer        token.Signer
 	issuer        string
+	apiAudience   string
 }
 
 // NewAuthorizationService builds an AuthorizationService.
+// apiAudience is the resource identifier placed in access token "aud"
+// claims (ISSUE-037). It identifies app/api as the intended recipient
+// of the access token, distinct from the issuer's own UserInfo endpoint.
 func NewAuthorizationService(
 	clients client.Repository,
 	users user.Repository,
@@ -56,6 +60,7 @@ func NewAuthorizationService(
 	refreshTokens refreshtoken.Repository,
 	signer token.Signer,
 	issuer string,
+	apiAudience string,
 ) *AuthorizationService {
 	return &AuthorizationService{
 		clients:       clients,
@@ -64,6 +69,7 @@ func NewAuthorizationService(
 		refreshTokens: refreshTokens,
 		signer:        signer,
 		issuer:        issuer,
+		apiAudience:   apiAudience,
 	}
 }
 
@@ -270,13 +276,10 @@ func (s *AuthorizationService) authorizationCodeGrant(ctx context.Context, req T
 
 	scope := ac.Scope()
 
-	// Access token audience design: this authorization server treats
-	// its own /userinfo endpoint as the (only) resource server, so
-	// the access token's "aud" is the issuer itself; UserInfoService
-	// verifies that audience. A deployment adding real external
-	// resource servers would need to revisit this (see
-	// docs/plans/AUTH-001-plan.md "access token の aud 値の設計").
-	accessClaims := token.NewAccessTokenClaims(s.issuer, owner.ID().String(), s.issuer, scope.String())
+	// Access token audience: the resource identifier for app/api
+	// (ISSUE-037). This separates API-bound tokens from UserInfo-bound
+	// tokens, reducing blast radius on token leakage.
+	accessClaims := token.NewAccessTokenClaims(s.issuer, owner.ID().String(), s.apiAudience, scope.String())
 	accessToken, err := s.signer.Sign(accessClaims)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("service: token: sign access token: %w", err)
@@ -426,10 +429,10 @@ func (s *AuthorizationService) refreshTokenGrant(ctx context.Context, req TokenR
 		return TokenResponse{}, fmt.Errorf("service: refresh token: %w", err)
 	}
 
-	// 8. Reissue access token (aud=issuer, same audience design as
-	// authorizationCodeGrant) and ID Token (aud=client_id, fresh iat,
-	// no nonce -- OIDC Core 12.2, SPEC-006 R3). iss/sub are unchanged.
-	accessClaims := token.NewAccessTokenClaims(s.issuer, owner.ID().String(), s.issuer, effectiveScope.String())
+	// 8. Reissue access token (aud=apiAudience, same audience design as
+	// authorizationCodeGrant, ISSUE-037) and ID Token (aud=client_id,
+	// fresh iat, no nonce -- OIDC Core 12.2, SPEC-006 R3). iss/sub unchanged.
+	accessClaims := token.NewAccessTokenClaims(s.issuer, owner.ID().String(), s.apiAudience, effectiveScope.String())
 	accessToken, err := s.signer.Sign(accessClaims)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("service: refresh token: sign access token: %w", err)

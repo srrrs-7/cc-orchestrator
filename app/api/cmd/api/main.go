@@ -88,8 +88,8 @@ func run() error {
 	// requests pass through unauthenticated.
 	var apiHandler = taskHandler
 	if e.authEnabled() {
-		slog.Info("api: JWT auth enabled", "issuer", e.AuthIssuer, "jwks_url", e.AuthJWKSURL)
-		verifier := jwt.NewVerifier(e.AuthJWKSURL, e.AuthIssuer)
+		slog.Info("api: JWT auth enabled", "issuer", e.AuthIssuer, "jwks_url", e.AuthJWKSURL, "audience", e.AuthAudience)
+		verifier := jwt.NewVerifier(e.AuthJWKSURL, e.AuthIssuer, e.AuthAudience)
 		apiHandler = route.AuthMiddleware(verifier, taskHandler)
 	} else {
 		slog.Warn("api: JWT auth disabled (AUTH_ISSUER and AUTH_JWKS_URL not set)")

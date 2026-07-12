@@ -20,7 +20,7 @@ var envVars = []string{
 	"PORT",
 	"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE",
 	"DB_READER_HOST", "DB_READER_PORT", "DB_READER_NAME", "DB_READER_USER", "DB_READER_PASSWORD", "DB_READER_SSLMODE",
-	"AUTH_ISSUER", "AUTH_JWKS_URL",
+	"AUTH_ISSUER", "AUTH_JWKS_URL", "AUTH_AUDIENCE",
 }
 
 // readerFallbackVars lists just the DB_READER_* variables SPEC-010
@@ -383,11 +383,13 @@ func TestNewEnv_ReaderFallback_PerField(t *testing.T) {
 
 // --- Auth env vars -------------------------------------------------------
 
-// TestNewEnv_ReadsAuthVars confirms that AUTH_ISSUER and AUTH_JWKS_URL
-// are threaded through to the corresponding Env fields unchanged.
+// TestNewEnv_ReadsAuthVars confirms that AUTH_ISSUER, AUTH_JWKS_URL,
+// and AUTH_AUDIENCE are threaded through to the corresponding Env
+// fields unchanged (ISSUE-037).
 func TestNewEnv_ReadsAuthVars(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", "https://auth.example.com")
 	t.Setenv("AUTH_JWKS_URL", "https://auth.example.com/.well-known/jwks.json")
+	t.Setenv("AUTH_AUDIENCE", "https://api.example.com/api")
 
 	e := NewEnv()
 
@@ -397,13 +399,18 @@ func TestNewEnv_ReadsAuthVars(t *testing.T) {
 	if e.AuthJWKSURL != "https://auth.example.com/.well-known/jwks.json" {
 		t.Errorf("Env.AuthJWKSURL = %q, want %q", e.AuthJWKSURL, "https://auth.example.com/.well-known/jwks.json")
 	}
+	if e.AuthAudience != "https://api.example.com/api" {
+		t.Errorf("Env.AuthAudience = %q, want %q", e.AuthAudience, "https://api.example.com/api")
+	}
 }
 
-// TestNewEnv_AuthVars_DefaultToEmpty confirms that AUTH_ISSUER and
-// AUTH_JWKS_URL default to empty when unset (auth middleware disabled).
+// TestNewEnv_AuthVars_DefaultToEmpty confirms that AUTH_ISSUER,
+// AUTH_JWKS_URL, and AUTH_AUDIENCE all default to empty when unset
+// (auth middleware disabled).
 func TestNewEnv_AuthVars_DefaultToEmpty(t *testing.T) {
 	t.Setenv("AUTH_ISSUER", "")
 	t.Setenv("AUTH_JWKS_URL", "")
+	t.Setenv("AUTH_AUDIENCE", "")
 
 	e := NewEnv()
 
@@ -413,25 +420,31 @@ func TestNewEnv_AuthVars_DefaultToEmpty(t *testing.T) {
 	if e.AuthJWKSURL != "" {
 		t.Errorf("Env.AuthJWKSURL = %q, want empty", e.AuthJWKSURL)
 	}
+	if e.AuthAudience != "" {
+		t.Errorf("Env.AuthAudience = %q, want empty", e.AuthAudience)
+	}
 }
 
 // TestAuthEnabled confirms (Env).authEnabled only returns true when
-// both AUTH_ISSUER and AUTH_JWKS_URL are set.
+// AUTH_ISSUER, AUTH_JWKS_URL, and AUTH_AUDIENCE are all set
+// (ISSUE-037).
 func TestAuthEnabled(t *testing.T) {
 	tests := []struct {
-		name    string
-		issuer  string
-		jwksURL string
-		want    bool
+		name     string
+		issuer   string
+		jwksURL  string
+		audience string
+		want     bool
 	}{
-		{name: "both set", issuer: "https://auth.example.com", jwksURL: "https://auth.example.com/jwks", want: true},
-		{name: "neither set", issuer: "", jwksURL: "", want: false},
+		{name: "all set", issuer: "https://auth.example.com", jwksURL: "https://auth.example.com/jwks", audience: "https://api.example.com/api", want: true},
+		{name: "none set", issuer: "", jwksURL: "", audience: "", want: false},
+		{name: "audience missing", issuer: "https://auth.example.com", jwksURL: "https://auth.example.com/jwks", audience: "", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := Env{
 				DBHost: "db", DBName: "db", DBUser: "u", DBPassword: "p",
-				AuthIssuer: tt.issuer, AuthJWKSURL: tt.jwksURL,
+				AuthIssuer: tt.issuer, AuthJWKSURL: tt.jwksURL, AuthAudience: tt.audience,
 			}
 			e.DBReader.Host = e.DBHost
 			e.DBReader.Name = e.DBName
@@ -445,8 +458,9 @@ func TestAuthEnabled(t *testing.T) {
 	}
 }
 
-// TestValidate_PartialAuthConfig confirms that setting only one of
-// AUTH_ISSUER / AUTH_JWKS_URL is rejected by validate().
+// TestValidate_PartialAuthConfig confirms that setting only a subset of
+// AUTH_ISSUER / AUTH_JWKS_URL / AUTH_AUDIENCE is rejected by validate()
+// (ISSUE-037: all three must be set together or all unset).
 func TestValidate_PartialAuthConfig(t *testing.T) {
 	base := Env{DBHost: "db", DBName: "db", DBUser: "u", DBPassword: "p"}
 	base.DBReader.Host = base.DBHost
@@ -455,18 +469,22 @@ func TestValidate_PartialAuthConfig(t *testing.T) {
 	base.DBReader.Password = base.DBPassword
 
 	tests := []struct {
-		name    string
-		issuer  string
-		jwksURL string
+		name     string
+		issuer   string
+		jwksURL  string
+		audience string
 	}{
-		{name: "issuer only", issuer: "https://auth.example.com", jwksURL: ""},
-		{name: "jwks_url only", issuer: "", jwksURL: "https://auth.example.com/jwks"},
+		{name: "issuer only", issuer: "https://auth.example.com", jwksURL: "", audience: ""},
+		{name: "jwks_url only", issuer: "", jwksURL: "https://auth.example.com/jwks", audience: ""},
+		{name: "audience only", issuer: "", jwksURL: "", audience: "https://api.example.com/api"},
+		{name: "issuer+jwks no audience", issuer: "https://auth.example.com", jwksURL: "https://auth.example.com/jwks", audience: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			e := base
 			e.AuthIssuer = tt.issuer
 			e.AuthJWKSURL = tt.jwksURL
+			e.AuthAudience = tt.audience
 			if err := e.validate(); err == nil {
 				t.Fatal("validate() = nil, want error for partial auth config")
 			}
@@ -475,15 +493,17 @@ func TestValidate_PartialAuthConfig(t *testing.T) {
 }
 
 // TestValidate_FullAuthConfig_Passes confirms that a fully-configured
-// auth env (both AUTH_ISSUER and AUTH_JWKS_URL set) passes validate().
+// auth env (all three of AUTH_ISSUER, AUTH_JWKS_URL, AUTH_AUDIENCE)
+// passes validate() (ISSUE-037).
 func TestValidate_FullAuthConfig_Passes(t *testing.T) {
 	e := Env{
-		DBHost:      "db",
-		DBName:      "db",
-		DBUser:      "u",
-		DBPassword:  "p",
-		AuthIssuer:  "https://auth.example.com",
-		AuthJWKSURL: "https://auth.example.com/jwks",
+		DBHost:       "db",
+		DBName:       "db",
+		DBUser:       "u",
+		DBPassword:   "p",
+		AuthIssuer:   "https://auth.example.com",
+		AuthJWKSURL:  "https://auth.example.com/jwks",
+		AuthAudience: "https://api.example.com/api",
 	}
 	e.DBReader.Host = e.DBHost
 	e.DBReader.Name = e.DBName

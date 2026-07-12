@@ -96,6 +96,7 @@ const cacheTTL = 5 * time.Minute
 type Verifier struct {
 	jwksURL    string
 	issuer     string
+	audience   string
 	httpClient *http.Client
 
 	mu        sync.RWMutex
@@ -104,11 +105,14 @@ type Verifier struct {
 }
 
 // NewVerifier creates a Verifier that fetches JWKS from jwksURL and
-// validates tokens against issuer (used for both iss and aud checks).
-func NewVerifier(jwksURL, issuer string) *Verifier {
+// validates tokens against issuer (iss check) and audience (aud check).
+// audience is the resource identifier this API was registered as
+// (ISSUE-037); it is checked via "aud contains audience".
+func NewVerifier(jwksURL, issuer, audience string) *Verifier {
 	return &Verifier{
 		jwksURL:    jwksURL,
 		issuer:     issuer,
+		audience:   audience,
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		keys:       make(map[string]*rsa.PublicKey),
 	}
@@ -116,8 +120,8 @@ func NewVerifier(jwksURL, issuer string) *Verifier {
 
 // Verify parses tokenString as a compact RS256 JWT, fetches the signing
 // key from the remote JWKS, and validates: alg=RS256, signature, exp,
-// iss==issuer, aud contains issuer, non-empty sub. It implements the
-// route.TokenVerifier interface.
+// iss==issuer, aud contains audience (ISSUE-037), non-empty sub. It
+// implements the route.TokenVerifier interface.
 func (v *Verifier) Verify(ctx context.Context, tokenString string) error {
 	parts := strings.Split(tokenString, ".")
 	if len(parts) != 3 {
@@ -167,8 +171,8 @@ func (v *Verifier) Verify(ctx context.Context, tokenString string) error {
 	if claims.Issuer != v.issuer {
 		return fmt.Errorf("%w: iss mismatch (got %q)", ErrInvalidClaims, claims.Issuer)
 	}
-	if !claims.Audience.contains(v.issuer) {
-		return fmt.Errorf("%w: aud does not contain issuer", ErrInvalidClaims)
+	if !claims.Audience.contains(v.audience) {
+		return fmt.Errorf("%w: aud does not contain expected audience", ErrInvalidClaims)
 	}
 	if claims.Subject == "" {
 		return fmt.Errorf("%w: empty sub", ErrInvalidClaims)

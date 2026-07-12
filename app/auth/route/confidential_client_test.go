@@ -106,13 +106,13 @@ func newConfidentialTestHandler(t *testing.T) http.Handler {
 	consentRepo := postgres.NewConsentRepository(db)
 	sessionStore := memory.NewIdPSessionStore()
 
-	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer)
+	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, testIssuer, testAPIAudience)
 	authnSvc := service.NewAuthenticationService(userRepo, sessionStore)
 	consentSvc := service.NewConsentService(consentRepo)
-	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer)
+	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 
-	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, route.RouterConfig{Issuer: testIssuer})
+	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, nil, route.RouterConfig{Issuer: testIssuer})
 }
 
 // issueConfAuthCode runs a successful /authorize for the confidential

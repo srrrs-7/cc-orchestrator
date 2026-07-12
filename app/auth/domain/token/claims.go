@@ -39,11 +39,10 @@ type Claims struct {
 }
 
 // NewAccessTokenClaims builds the Claims for an OAuth 2.0 JWT access
-// token. Per this authorization server's audience design, audience
-// identifies the resource server the token is valid for (here: the
-// authorization server's own UserInfo endpoint, i.e. issuer); see
-// infra/jwt and service/authorization_service for where issuer is
-// passed as audience.
+// token. audience is the API resource identifier (ISSUE-037): it
+// identifies the resource server (app/api) the token is valid for,
+// distinct from the issuer's own UserInfo endpoint. Callers pass the
+// configured apiAudience value (env: API_AUDIENCE), not the issuer.
 func NewAccessTokenClaims(issuer, subject, audience, scope string) Claims {
 	now := time.Now()
 	return Claims{
