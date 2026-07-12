@@ -58,3 +58,9 @@ tags: [doc-drift, missing-command, stale-summary]
 ### 2026-07-12(addressed へ遷移)
 
 - 是正がコミットされたため addressed に遷移: CLAUDE.md / `.claude/rules/auth.md` / `.claude/rules/api.md`(+ 本 entry の経緯)は `5b88480`、`.github/copilot-instructions.md`(同種ドリフトの隣接修正。impl-ci 実施)は `2fba5d3` に含まれてコミット済み。提案 1・2 は解消。**恒久策(提案 3: orchestration.md の検収チェックへのドキュメント追随確認の追加)は未適用のまま**であり、retro-synthesizer の統括対象として残る(RETRO-002 と同根のため統括での一括提案が適切)。なお `5b88480` / `2fba5d3` は新スタック `app/auth-web` を導入しており、更新直後の CLAUDE.md / orchestration.md 割り振り表が同スタックに未追随 = 本 entry と同種の摩擦が直ちに再発している(別 entry 化は同種のため行わず、ここに記録)。
+
+### 2026-07-12(auth-web 追随の適用 + 同種摩擦の追加発見)
+
+- ユーザー指示「auth-web も CLAUDE.md と割り振り表に追随させて」により admin が適用: CLAUDE.md(リポジトリ概要に `app/auth-web` bullet、コマンド早見表の web 行を web / auth-web に拡張、ローカル実行を 5 サービス + `:8083` + `auth-web-%` エイリアスに更新、CI job 列挙に auth-web 追加)、orchestration.md 割り振り表(impl-web の担当を app/web / app/auth-web に拡張)、rules/web.md(frontmatter `paths` に `app/auth-web/**` 追加 + 両 stack 適用の冒頭注記)、agents/impl-web.md(担当範囲の拡張)。
+- 適用中に **agents/impl-web.md の手順に `pnpm run typecheck` 等の陳腐化**を発見(実契約は toolchain コンテナ経由の `make typecheck` / `build` / `test`。SPEC-009 のホスト直接実行禁止とも矛盾)。同時に修正。agent 定義内の具体的コマンド記述も本 entry と同じドリフト源であり、恒久策の検収チェックは agents/ 配下も対象に含めるべき。
+- 別途、pre-commit hook(`.githooks/lib/detect-stacks.sh` + `run-checks.sh`)が auth-web stack 非対応であることも確認(CI の `cicd.yml` はカバー済み)。これは `.claude` ではなく `.githooks` の実装ギャップのため impl-ci への委譲対象としてユーザーに報告。

@@ -9,6 +9,19 @@ import (
 	"context"
 )
 
+const deleteUser = `-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1
+`
+
+// Removes a user row. Returns 0 rows when id is absent.
+func (q *Queries) DeleteUser(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getUserByID = `-- name: GetUserByID :one
 
 SELECT id, username, password_hash, profile_name, profile_email

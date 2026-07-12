@@ -12,3 +12,9 @@ INSERT INTO consents (user_id, client_id, scope)
 VALUES ($1, $2, $3)
 ON CONFLICT (user_id, client_id, scope) DO UPDATE SET
     granted_at = EXCLUDED.granted_at;
+
+-- name: DeleteConsentsByUserID :exec
+DELETE FROM consents WHERE user_id = $1;
+
+-- name: DeleteConsentsByClientID :exec
+DELETE FROM consents WHERE client_id = $1;

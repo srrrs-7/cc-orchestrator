@@ -87,3 +87,9 @@ RETURNING token_hash;
 -- matching Repository.RevokeFamily's doc comment.
 DELETE FROM refresh_tokens
 WHERE family_id = $1;
+
+-- name: DeleteRefreshTokensByUserID :exec
+DELETE FROM refresh_tokens WHERE user_id = $1;
+
+-- name: DeleteRefreshTokensByClientID :exec
+DELETE FROM refresh_tokens WHERE client_id = $1;

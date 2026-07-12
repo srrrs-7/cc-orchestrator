@@ -1,13 +1,14 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createRootRoute, createRoute } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { AdminKeyForm, AdminKeyGate } from "../features/admin/components/AdminKeyForm";
-import { CreateClientForm } from "../features/admin/components/CreateClientForm";
-import { CreateUserForm } from "../features/admin/components/CreateUserForm";
-import { AdminAuthProvider, useAdminAuth } from "../features/admin/hooks/AdminAuthProvider";
-import { queryClient } from "../lib/queryClient";
-import { Alert } from "../shared/ui/Alert";
+import { AdminKeyGate } from "../features/admin/components/AdminKeyForm";
+import { ClientForm } from "../features/admin/components/ClientForm";
+import { ClientList } from "../features/admin/components/ClientList";
+import { UserForm } from "../features/admin/components/UserForm";
+import { UserList } from "../features/admin/components/UserList";
+import { AdminAuthProvider } from "../features/admin/hooks/AdminAuthProvider";
 import { Card, CardHeader } from "../shared/ui/Card";
+import { queryClient } from "../lib/queryClient";
 import { App } from "./App";
 
 function TestProviders({ children }: { readonly children: ReactNode }) {
@@ -21,26 +22,25 @@ function TestProviders({ children }: { readonly children: ReactNode }) {
 function OverviewPage() {
   return (
     <AdminKeyGate>
-      <Card className="p-4">
-        <CardHeader title="Authorization server provisioning" />
-      </Card>
-      <CreateUserForm />
-      <CreateClientForm />
+      <div className="flex flex-col gap-6">
+        <Card className="p-4 sm:p-5">
+          <CardHeader
+            title="Authorization server provisioning"
+            description="Use this console to register resource owners and OAuth clients before applications connect to the auth server."
+          />
+        </Card>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="flex flex-col gap-6">
+            <UserList />
+            <UserForm mode="create" />
+          </div>
+          <div className="flex flex-col gap-6">
+            <ClientList />
+            <ClientForm mode="create" />
+          </div>
+        </div>
+      </div>
     </AdminKeyGate>
-  );
-}
-
-function SettingsPage() {
-  const { isConfigured } = useAdminAuth();
-  return (
-    <div>
-      {isConfigured ? (
-        <Alert variant="info">Configured</Alert>
-      ) : (
-        <Alert variant="info">Missing</Alert>
-      )}
-      <AdminKeyForm />
-    </div>
   );
 }
 
@@ -58,10 +58,4 @@ const indexRoute = createRoute({
   component: OverviewPage,
 });
 
-const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/settings",
-  component: SettingsPage,
-});
-
-export const routeTree = rootRoute.addChildren([indexRoute, settingsRoute]);
+export const routeTree = rootRoute.addChildren([indexRoute]);

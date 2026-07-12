@@ -35,4 +35,7 @@ type Repository interface {
 // idempotently on the latest state.
 type Writer interface {
 	CreateUser(ctx context.Context, u *User) error
+	// DeleteUser removes u and any dependent consent, refresh-token, and
+	// authorization-code rows. Returns ErrNotFound when id is absent.
+	DeleteUser(ctx context.Context, id UserID) error
 }

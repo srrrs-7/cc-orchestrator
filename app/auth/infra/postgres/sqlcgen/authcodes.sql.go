@@ -38,6 +38,24 @@ func (q *Queries) ConsumeAuthCode(ctx context.Context, code string) (time.Time, 
 	return expires_at, err
 }
 
+const deleteAuthCodesByClientID = `-- name: DeleteAuthCodesByClientID :exec
+DELETE FROM authorization_codes WHERE client_id = $1
+`
+
+func (q *Queries) DeleteAuthCodesByClientID(ctx context.Context, clientID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAuthCodesByClientID, clientID)
+	return err
+}
+
+const deleteAuthCodesByUserID = `-- name: DeleteAuthCodesByUserID :exec
+DELETE FROM authorization_codes WHERE user_id = $1
+`
+
+func (q *Queries) DeleteAuthCodesByUserID(ctx context.Context, userID string) error {
+	_, err := q.db.ExecContext(ctx, deleteAuthCodesByUserID, userID)
+	return err
+}
+
 const deleteExpiredAuthCode = `-- name: DeleteExpiredAuthCode :exec
 DELETE FROM authorization_codes
 WHERE code = $1 AND expires_at <= now()

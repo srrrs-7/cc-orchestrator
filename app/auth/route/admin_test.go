@@ -547,3 +547,126 @@ func TestAdmin_ListUsers_MissingKey(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
+
+func doAdminGetUser(t *testing.T, h http.Handler, key, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/users/"+userID, nil)
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doAdminUpdateUser(t *testing.T, h http.Handler, key, userID string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/admin/users/"+userID, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doAdminDeleteUser(t *testing.T, h http.Handler, key, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/admin/users/"+userID, nil)
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAdmin_UserCRUD(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	createBody := map[string]any{
+		"user_id":  "crud-user-001",
+		"username": "crud-user",
+		"password": "correct-horse-battery-staple",
+		"name":     "CRUD User",
+		"email":    "crud@example.com",
+	}
+	if rec := doAdminCreateUser(t, h, testAdminKey, createBody); rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+
+	getRec := doAdminGetUser(t, h, testAdminKey, "crud-user-001")
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d (body=%q)", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+
+	updateRec := doAdminUpdateUser(t, h, testAdminKey, "crud-user-001", map[string]any{
+		"username": "crud-user-updated",
+		"name":     "CRUD User Updated",
+		"email":    "crud-updated@example.com",
+	})
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update status = %d, want %d (body=%q)", updateRec.Code, http.StatusOK, updateRec.Body.String())
+	}
+
+	deleteRec := doAdminDeleteUser(t, h, testAdminKey, "crud-user-001")
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d (body=%q)", deleteRec.Code, http.StatusNoContent, deleteRec.Body.String())
+	}
+
+	missingRec := doAdminGetUser(t, h, testAdminKey, "crud-user-001")
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("get after delete status = %d, want %d", missingRec.Code, http.StatusNotFound)
+	}
+}
+
+func doAdminDeleteClient(t *testing.T, h http.Handler, key, clientID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/admin/clients/"+clientID, nil)
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAdmin_DeleteClient(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	body := map[string]any{
+		"client_id":      "delete-client-001",
+		"redirect_uris":  []string{"https://example.com/callback"},
+		"allowed_scopes": []string{"openid"},
+		"response_types": []string{"code"},
+		"grant_types":    []string{"authorization_code"},
+	}
+	if rec := doAdminCreateClient(t, h, testAdminKey, body); rec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+
+	deleteRec := doAdminDeleteClient(t, h, testAdminKey, "delete-client-001")
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want %d", deleteRec.Code, http.StatusNoContent)
+	}
+
+	listRec := doAdminListClients(t, h, testAdminKey)
+	var resp struct {
+		Clients []struct {
+			ClientID string `json:"client_id"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	for _, c := range resp.Clients {
+		if c.ClientID == "delete-client-001" {
+			t.Fatalf("deleted client still listed")
+		}
+	}
+}

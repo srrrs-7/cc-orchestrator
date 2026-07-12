@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/client"
@@ -77,4 +78,43 @@ func (s *AdminService) ListUsers(ctx context.Context) ([]*user.User, error) {
 		return nil, fmt.Errorf("admin: list users: %w", err)
 	}
 	return users, nil
+}
+
+// GetUser returns a single user by id.
+func (s *AdminService) GetUser(ctx context.Context, id user.UserID) (*user.User, error) {
+	u, err := s.userReader.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("admin: get user: %w", err)
+	}
+	return u, nil
+}
+
+// DeleteUser removes a user and dependent authorization artifacts.
+func (s *AdminService) DeleteUser(ctx context.Context, id user.UserID) error {
+	if err := s.users.DeleteUser(ctx, id); err != nil {
+		return fmt.Errorf("admin: delete user: %w", err)
+	}
+	return nil
+}
+
+// GetClient returns a single OAuth client by id.
+func (s *AdminService) GetClient(ctx context.Context, id client.ClientID) (*client.Client, error) {
+	c, err := s.clientReader.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("admin: get client: %w", err)
+	}
+	return c, nil
+}
+
+// DeleteClient removes a client and dependent authorization artifacts.
+func (s *AdminService) DeleteClient(ctx context.Context, id client.ClientID) error {
+	if err := s.clients.DeleteClient(ctx, id); err != nil {
+		return fmt.Errorf("admin: delete client: %w", err)
+	}
+	return nil
+}
+
+// IsNotFound reports whether err wraps a domain not-found sentinel.
+func IsNotFound(err error) bool {
+	return errors.Is(err, user.ErrNotFound) || errors.Is(err, client.ErrNotFound)
 }

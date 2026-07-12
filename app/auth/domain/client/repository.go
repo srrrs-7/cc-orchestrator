@@ -34,4 +34,7 @@ type Repository interface {
 // latest state rather than erroring on the second call.
 type Writer interface {
 	Save(ctx context.Context, c *Client) error
+	// DeleteClient removes c and any dependent consent, refresh-token, and
+	// authorization-code rows. Returns ErrNotFound when id is absent.
+	DeleteClient(ctx context.Context, id ClientID) error
 }

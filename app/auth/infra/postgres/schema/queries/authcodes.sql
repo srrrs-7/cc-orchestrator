@@ -69,3 +69,9 @@ DELETE FROM authorization_codes WHERE expires_at <= now();
 DELETE FROM authorization_codes
 WHERE code = $1
 RETURNING expires_at;
+
+-- name: DeleteAuthCodesByUserID :exec
+DELETE FROM authorization_codes WHERE user_id = $1;
+
+-- name: DeleteAuthCodesByClientID :exec
+DELETE FROM authorization_codes WHERE client_id = $1;

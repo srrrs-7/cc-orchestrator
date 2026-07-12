@@ -106,3 +106,50 @@ export const adminApiKeySchema = z.object({
 });
 
 export type AdminApiKeyFormValues = z.infer<typeof adminApiKeySchema>;
+
+export const updateUserRequestSchema = z.object({
+  username: z.string().trim().min(1, "Username is required"),
+  password: z
+    .string()
+    .optional()
+    .refine((value) => value === undefined || value === "" || value.length >= 8, {
+      message: "Password must be at least 8 characters when provided",
+    }),
+  name: z.string().trim().min(1, "Display name is required"),
+  email: z.email("Enter a valid email address"),
+});
+
+export type UpdateUserRequest = z.infer<typeof updateUserRequestSchema>;
+
+export const updateClientRequestSchema = z
+  .object({
+    redirect_uris_text: z.string().trim().min(1, "At least one redirect URI is required"),
+    allowed_scopes: z.array(z.string()).min(1, "Select at least one scope"),
+    response_types: z.array(z.string()).min(1, "Select at least one response type"),
+    grant_types: z.array(z.string()).min(1, "Select at least one grant type"),
+    client_secret: z.string().optional(),
+  })
+  .refine((values) => parseRedirectUris(values.redirect_uris_text).length > 0, {
+    message: "At least one redirect URI is required",
+    path: ["redirect_uris_text"],
+  });
+
+export type UpdateClientFormValues = z.infer<typeof updateClientRequestSchema>;
+
+export type UpdateClientRequest = {
+  redirect_uris: string[];
+  allowed_scopes: string[];
+  response_types: string[];
+  grant_types: string[];
+  client_secret: string;
+};
+
+export function toUpdateClientRequest(values: UpdateClientFormValues): UpdateClientRequest {
+  return {
+    redirect_uris: parseRedirectUris(values.redirect_uris_text),
+    allowed_scopes: normalizeSelectedScopes(values.allowed_scopes),
+    response_types: [...new Set(values.response_types)],
+    grant_types: [...new Set(values.grant_types)],
+    client_secret: values.client_secret?.trim() ?? "",
+  };
+}

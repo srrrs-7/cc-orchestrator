@@ -11,6 +11,19 @@ import (
 	"encoding/json"
 )
 
+const deleteClient = `-- name: DeleteClient :execrows
+DELETE FROM clients WHERE id = $1
+`
+
+// Removes a client row. Returns 0 rows when id is absent.
+func (q *Queries) DeleteClient(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteClient, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientByID = `-- name: GetClientByID :one
 
 SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash

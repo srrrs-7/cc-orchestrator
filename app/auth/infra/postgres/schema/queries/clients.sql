@@ -17,6 +17,10 @@ SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_se
 FROM clients
 ORDER BY id;
 
+-- name: DeleteClient :execrows
+-- Removes a client row. Returns 0 rows when id is absent.
+DELETE FROM clients WHERE id = $1;
+
 -- name: UpsertClient :exec
 -- Backs the startup idempotent seed (infra/postgres/seed.go's
 -- SeedClient), not client.Repository itself (which is read-only).

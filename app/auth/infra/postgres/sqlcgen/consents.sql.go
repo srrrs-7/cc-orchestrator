@@ -9,6 +9,24 @@ import (
 	"context"
 )
 
+const deleteConsentsByClientID = `-- name: DeleteConsentsByClientID :exec
+DELETE FROM consents WHERE client_id = $1
+`
+
+func (q *Queries) DeleteConsentsByClientID(ctx context.Context, clientID string) error {
+	_, err := q.db.ExecContext(ctx, deleteConsentsByClientID, clientID)
+	return err
+}
+
+const deleteConsentsByUserID = `-- name: DeleteConsentsByUserID :exec
+DELETE FROM consents WHERE user_id = $1
+`
+
+func (q *Queries) DeleteConsentsByUserID(ctx context.Context, userID string) error {
+	_, err := q.db.ExecContext(ctx, deleteConsentsByUserID, userID)
+	return err
+}
+
 const hasConsent = `-- name: HasConsent :one
 
 SELECT EXISTS(

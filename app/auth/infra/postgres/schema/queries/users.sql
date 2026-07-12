@@ -25,6 +25,10 @@ SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 ORDER BY id;
 
+-- name: DeleteUser :execrows
+-- Removes a user row. Returns 0 rows when id is absent.
+DELETE FROM users WHERE id = $1;
+
 -- name: UpsertUser :exec
 -- Backs the startup idempotent seed (infra/postgres/seed.go's
 -- SeedUser), not user.Repository itself (which is read-only). Inserts

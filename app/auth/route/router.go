@@ -81,8 +81,14 @@ func NewRouter(
 		}
 		mux.Handle("POST /admin/clients", withAuth(admin.handleCreateClient))
 		mux.Handle("GET /admin/clients", withAuth(admin.handleListClients))
+		mux.Handle("GET /admin/clients/{id}", withAuth(admin.handleGetClient))
+		mux.Handle("PUT /admin/clients/{id}", withAuth(admin.handleUpdateClient))
+		mux.Handle("DELETE /admin/clients/{id}", withAuth(admin.handleDeleteClient))
 		mux.Handle("POST /admin/users", withAuth(admin.handleCreateUser))
 		mux.Handle("GET /admin/users", withAuth(admin.handleListUsers))
+		mux.Handle("GET /admin/users/{id}", withAuth(admin.handleGetUser))
+		mux.Handle("PUT /admin/users/{id}", withAuth(admin.handleUpdateUser))
+		mux.Handle("DELETE /admin/users/{id}", withAuth(admin.handleDeleteUser))
 	}
 
 	// securityHeaders wraps every route (including /admin/*, which is

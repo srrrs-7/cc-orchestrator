@@ -1,13 +1,16 @@
 ---
 paths:
   - "app/web/**"
+  - "app/auth-web/**"
 ---
 
-# app/web — TypeScript / React 規約
+# app/web / app/auth-web — TypeScript / React 規約
+
+本規約は `app/web`(タスク UI)と `app/auth-web`(IdP 管理 UI。auth の admin API を操作)の両 TypeScript / React stack に適用する。コマンド・レイアウト・コーディング規約は共通で、本文の `app/web` は原則 `app/auth-web` にも読み替える。差分は 2 点のみ: `generate`(OpenAPI 型生成)は app/web だけが持ち、auth-web は admin API の型を zod スキーマで直接定義する。実行は各 stack 自身のディレクトリ / `Makefile` で行う。
 
 ## コマンド(app/web/Makefile 契約)
 
-`app/web/Makefile` は必ず以下のターゲットを提供する。checker / tester はこれを実行する。**ホストで bun / go を直接実行しない**(SPEC-009: toolchain コンテナ内のみ。`make` が `docker compose run` へ委譲する)。
+`app/web/Makefile`(auth-web は `app/auth-web/Makefile`)は必ず以下のターゲットを提供する。checker / tester はこれを実行する。**ホストで bun / go を直接実行しない**(SPEC-009: toolchain コンテナ内のみ。`make` が `docker compose run` へ委譲する)。
 
 | 目的 | コマンド (`app/web` で実行) |
 |---|---|
@@ -21,7 +24,7 @@ paths:
 | 全チェック | `make check` (= format-check + lint + typecheck + test + build) |
 | OpenAPI 契約消費・生成 | `make generate` (`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
 
-ルートからは `make web-<target>` でも同じターゲットを呼べる(例: `make web-check`)。
+ルートからは `make web-<target>` / `make auth-web-<target>` でも同じターゲットを呼べる(例: `make web-check` / `make auth-web-check`)。
 
 `app/web/package.json` の scripts はコンテナ内で `bun run <script>` として実行される実体。scripts 名・内容は変更しない。
 

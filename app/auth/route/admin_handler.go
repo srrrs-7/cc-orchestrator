@@ -84,6 +84,21 @@ type listClientsResponse struct {
 	Clients []listClientItem `json:"clients"`
 }
 
+type updateUserRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password,omitempty"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+}
+
+type updateClientRequest struct {
+	RedirectURIs  []string `json:"redirect_uris"`
+	AllowedScopes []string `json:"allowed_scopes"`
+	ResponseTypes []string `json:"response_types"`
+	GrantTypes    []string `json:"grant_types"`
+	ClientSecret  string   `json:"client_secret,omitempty"`
+}
+
 // requireAdminAuth is middleware that enforces admin authentication.
 // It accepts the API key as either:
 //   - Authorization: Bearer <key>  (RFC 6750 §2.1)
@@ -250,12 +265,7 @@ func (h *adminHandler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]listUserItem, 0, len(users))
 	for _, u := range users {
-		items = append(items, listUserItem{
-			UserID:   u.ID().String(),
-			Username: u.Username().String(),
-			Name:     u.Profile().Name(),
-			Email:    u.Profile().Email(),
-		})
+		items = append(items, userToListItem(u))
 	}
 
 	writeJSON(w, http.StatusOK, listUsersResponse{Users: items})
@@ -272,19 +282,267 @@ func (h *adminHandler) handleListClients(w http.ResponseWriter, r *http.Request)
 
 	items := make([]listClientItem, 0, len(clients))
 	for _, c := range clients {
-		redirectURIs := make([]string, 0, len(c.RedirectURIs()))
-		for _, uri := range c.RedirectURIs() {
-			redirectURIs = append(redirectURIs, uri.String())
-		}
-		items = append(items, listClientItem{
-			ClientID:       c.ID().String(),
-			RedirectURIs:   redirectURIs,
-			AllowedScopes:  c.AllowedScopes(),
-			ResponseTypes:  c.ResponseTypes(),
-			GrantTypes:     c.GrantTypes(),
-			IsConfidential: c.IsConfidential(),
-		})
+		items = append(items, clientToListItem(c))
 	}
 
 	writeJSON(w, http.StatusOK, listClientsResponse{Clients: items})
+}
+
+func userToListItem(u *user.User) listUserItem {
+	return listUserItem{
+		UserID:   u.ID().String(),
+		Username: u.Username().String(),
+		Name:     u.Profile().Name(),
+		Email:    u.Profile().Email(),
+	}
+}
+
+func clientToListItem(c *client.Client) listClientItem {
+	redirectURIs := make([]string, 0, len(c.RedirectURIs()))
+	for _, uri := range c.RedirectURIs() {
+		redirectURIs = append(redirectURIs, uri.String())
+	}
+	return listClientItem{
+		ClientID:       c.ID().String(),
+		RedirectURIs:   redirectURIs,
+		AllowedScopes:  c.AllowedScopes(),
+		ResponseTypes:  c.ResponseTypes(),
+		GrantTypes:     c.GrantTypes(),
+		IsConfidential: c.IsConfidential(),
+	}
+}
+
+func writeAdminNotFound(w http.ResponseWriter, resource string) {
+	writeJSON(w, http.StatusNotFound, adminError{
+		Error:            "not_found",
+		ErrorDescription: resource + " not found",
+	})
+}
+
+// handleGetUser handles GET /admin/users/{id}.
+func (h *adminHandler) handleGetUser(w http.ResponseWriter, r *http.Request) {
+	uid, err := user.ParseUserID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "user id is missing or invalid",
+		})
+		return
+	}
+
+	u, err := h.svc.GetUser(r.Context(), uid)
+	if err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "user")
+			return
+		}
+		slog.Error("route: admin: get user", "user_id", uid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, userToListItem(u))
+}
+
+// handleUpdateUser handles PUT /admin/users/{id}.
+func (h *adminHandler) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
+	uid, err := user.ParseUserID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "user id is missing or invalid",
+		})
+		return
+	}
+
+	var req updateUserRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	existing, err := h.svc.GetUser(r.Context(), uid)
+	if err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "user")
+			return
+		}
+		slog.Error("route: admin: update user load", "user_id", uid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	username, err := user.NewUsername(req.Username)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "username is missing or invalid",
+		})
+		return
+	}
+
+	profile, err := user.NewProfile(req.Name, req.Email)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "name and email are required",
+		})
+		return
+	}
+
+	var updated *user.User
+	if req.Password != "" {
+		updated, err = user.New(uid, username, req.Password, profile)
+	} else {
+		updated = user.Reconstruct(uid, username, existing.PasswordHash(), profile)
+	}
+	if err != nil {
+		slog.Error("route: admin: update user build", "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	if err := h.svc.CreateUser(r.Context(), updated); err != nil {
+		slog.Error("route: admin: update user", "user_id", uid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, userToListItem(updated))
+}
+
+// handleDeleteUser handles DELETE /admin/users/{id}.
+func (h *adminHandler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	uid, err := user.ParseUserID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "user id is missing or invalid",
+		})
+		return
+	}
+
+	if err := h.svc.DeleteUser(r.Context(), uid); err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "user")
+			return
+		}
+		slog.Error("route: admin: delete user", "user_id", uid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetClient handles GET /admin/clients/{id}.
+func (h *adminHandler) handleGetClient(w http.ResponseWriter, r *http.Request) {
+	cid, err := client.ParseClientID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "client id is missing or invalid",
+		})
+		return
+	}
+
+	c, err := h.svc.GetClient(r.Context(), cid)
+	if err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "client")
+			return
+		}
+		slog.Error("route: admin: get client", "client_id", cid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, clientToListItem(c))
+}
+
+// handleUpdateClient handles PUT /admin/clients/{id}.
+func (h *adminHandler) handleUpdateClient(w http.ResponseWriter, r *http.Request) {
+	cid, err := client.ParseClientID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "client id is missing or invalid",
+		})
+		return
+	}
+
+	var req updateClientRequest
+	if !decodeJSONBody(w, r, &req) {
+		return
+	}
+
+	existing, err := h.svc.GetClient(r.Context(), cid)
+	if err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "client")
+			return
+		}
+		slog.Error("route: admin: update client load", "client_id", cid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	redirectURIs := make([]client.RedirectURI, 0, len(req.RedirectURIs))
+	for _, raw := range req.RedirectURIs {
+		uri, err := client.NewRedirectURI(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, adminError{
+				Error:            "invalid_request",
+				ErrorDescription: "redirect_uri " + raw + " is not a valid absolute URI",
+			})
+			return
+		}
+		redirectURIs = append(redirectURIs, uri)
+	}
+
+	var updated *client.Client
+	switch {
+	case req.ClientSecret != "":
+		updated, err = client.NewConfidential(cid, redirectURIs, req.AllowedScopes, req.ResponseTypes, req.GrantTypes, req.ClientSecret)
+	case existing.IsConfidential():
+		updated = client.Reconstruct(cid, redirectURIs, req.AllowedScopes, req.ResponseTypes, req.GrantTypes, existing.SecretHash())
+	default:
+		updated = client.New(cid, redirectURIs, req.AllowedScopes, req.ResponseTypes, req.GrantTypes)
+	}
+	if err != nil {
+		slog.Error("route: admin: update client build", "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	if err := h.svc.CreateClient(r.Context(), updated); err != nil {
+		slog.Error("route: admin: update client", "client_id", cid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, clientToListItem(updated))
+}
+
+// handleDeleteClient handles DELETE /admin/clients/{id}.
+func (h *adminHandler) handleDeleteClient(w http.ResponseWriter, r *http.Request) {
+	cid, err := client.ParseClientID(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, adminError{
+			Error:            "invalid_request",
+			ErrorDescription: "client id is missing or invalid",
+		})
+		return
+	}
+
+	if err := h.svc.DeleteClient(r.Context(), cid); err != nil {
+		if service.IsNotFound(err) {
+			writeAdminNotFound(w, "client")
+			return
+		}
+		slog.Error("route: admin: delete client", "client_id", cid, "error", err)
+		writeJSON(w, http.StatusInternalServerError, adminError{Error: "server_error"})
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

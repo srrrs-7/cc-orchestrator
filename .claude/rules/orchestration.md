@@ -27,7 +27,7 @@
 | 機能仕様(Spec)の作成・更新 | admin + `spec` skill | ユーザーとの対話が必要なため、唯一 admin が直接行う実務 |
 | Issue の起票・更新 | issue-creator | `issue` skill の規約に従う |
 | 実装計画の作成 | planner | |
-| 実装・修正(app/web) | impl-web | |
+| 実装・修正(app/web / app/auth-web) | impl-web | TypeScript / React の 2 SPA(タスク UI / IdP 管理 UI)を担当。規約は `.claude/rules/web.md` で共通 |
 | 実装・修正(app/api) | impl-api | |
 | 実装・修正(app/auth) | impl-auth | domain / service / route。永続化(infra/postgres)は impl-db |
 | 実装・修正(app/iac) | impl-iac | |

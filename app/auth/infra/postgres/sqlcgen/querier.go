@@ -41,6 +41,12 @@ type Querier interface {
 	// a follow-up GetRefreshToken call in the same transaction, per 付録
 	// A's precedence rule.
 	ConsumeRefreshToken(ctx context.Context, tokenHash string) (string, error)
+	DeleteAuthCodesByClientID(ctx context.Context, clientID string) error
+	DeleteAuthCodesByUserID(ctx context.Context, userID string) error
+	// Removes a client row. Returns 0 rows when id is absent.
+	DeleteClient(ctx context.Context, id string) (int64, error)
+	DeleteConsentsByClientID(ctx context.Context, clientID string) error
+	DeleteConsentsByUserID(ctx context.Context, userID string) error
 	// Lazy eviction companion to GetActiveAuthCode: called by
 	// infra/postgres/authcode_repository.go after GetActiveAuthCode finds
 	// no active row, to opportunistically remove a code that exists but
@@ -55,6 +61,10 @@ type Querier interface {
 	// expires_at <= now() guard makes this a no-op (not an error) if
 	// token_hash does not exist or has not actually expired.
 	DeleteExpiredRefreshToken(ctx context.Context, tokenHash string) error
+	DeleteRefreshTokensByClientID(ctx context.Context, clientID string) error
+	DeleteRefreshTokensByUserID(ctx context.Context, userID string) error
+	// Removes a user row. Returns 0 rows when id is absent.
+	DeleteUser(ctx context.Context, id string) (int64, error)
 	// Backs authcode.Repository.FindByCode. Only a row that is both
 	// unconsumed and not yet past its TTL is "active"; an expired row is
 	// invisible here even though it still physically exists until
