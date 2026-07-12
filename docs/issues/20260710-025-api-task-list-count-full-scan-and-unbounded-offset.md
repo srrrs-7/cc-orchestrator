@@ -1,10 +1,10 @@
 ---
 id: ISSUE-025
 title: app/api Task 一覧の COUNT(*) 全件カウント・LIST/COUNT の逐次 2 クエリ・offset 無上限(SPEC-008 実装のスケーリング/DoS フォローアップ)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-12
 specs: [SPEC-008]  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -95,3 +95,9 @@ specs: [SPEC-008]  # 関連Spec ID (例: [SPEC-002])
 - severity は **low** と判定。判定根拠: 現状サンプル規模で応答性能は損なわれておらず主要機能も正常(critical/high ではない)。(3) の DoS 余地はテーブルに実際に skip 対象の行が多量に存在して初めてコストになるため、本番データ規模・公開環境という条件が付く予防的課題(現時点で medium の「回避策ありの実害」には至らない)。**本番データ規模の導入や公開エンドポイント化が具体化した時点で、特に (3) の offset 無上限 DoS 余地を medium 以上へ再評価すること。**
 - 関連: 本 3 点は SPEC-008 の実装が直接の出所のため frontmatter `specs` に SPEC-008 を相互リンクした。また ISSUE-008(Task 一覧のページネーション / 単一取得契約の構造的課題)の本体対応(= SPEC-008)から派生した残課題であり、ISSUE-008 の resolved 化に伴い本 Issue で追跡を引き継ぐ(ISSUE-008 の 2026-07-10 経緯参照)。
 - 次にやること: 本番データ規模でのスケールが具体化した時点で planner に計画化を依頼し、対応候補 (A)〜(D) の適否を要件で確定して impl-db / impl-api / tester / checker / review-performance で実施する。
+
+### 2026-07-12
+
+- **(D) offset 上限を実装し、resolved とした。** `app/api/domain/task/page.go` に `MaxOffset = 10000` 定数を追加し、`NewPage` でこれを超える offset を `*ValidationError{ErrInvalidOffset}` として拒否するよう修正。HTTP 400 が返る。`page_test.go` に `TestNewPage_MaxOffset`(境界テーブル: MaxOffset+1・999999999 は拒否、MaxOffset・MaxOffset-1 は受理)、`route/task_handler_test.go` の `TestListTasks_InvalidQueryParams` に `?offset=10001` ケースを追加。`make -C app/api check` グリーン確認済み。
+- **(A)(B)(C) COUNT(*) 最適化は対応を見送った。** サンプル規模ではコストは無視できる水準であり、COUNT 統合・キャッシュ・近似カウントの複雑さに対してトレードオフが合わない。本番データ規模でスケールが具体化した時点で改めて計画化する。
+- resolved とした理由: DoS 余地として指摘した実行可能なベクタ(深い offset の連打)はドメイン層で封鎖された。COUNT 最適化はサンプルスケールで実害ゼロかつ本 Issue のスコープ外と位置づけ、将来課題として許容する。

@@ -124,12 +124,14 @@ push するイメージは `runtime_platform = ARM64` に合わせて **必ず l
 master secret と自分の scoped secret の 2 つが渡る。
 
 **apply 前の前提条件**: `var.migration_image`(両サービスとも `aws_ecr_repository.migrator` の
-`:latest` タグ)は Terraform が作るのはリポジトリのみで、イメージ自体はまだ push されていない
-(push 経路は本 Spec の範囲外として後続に委ねられている、SPEC-005 plan RF.6.1 RF-b)。**共有
-migrator イメージを push してから `apply` すること**(api/auth それぞれに別イメージを push する
-必要はない。1 つの push で両サービスの migrate コンテナに反映される)。push せずに `apply` すると、
-新しいデプロイのタスクが migrate コンテナのイメージ pull に失敗して起動できず、ロールアウトが
-詰まる(既存の running タスクはそのまま残るため、既存の可用性への直接影響は無い)。
+`:latest` タグ)は Terraform が作るのはリポジトリのみで、イメージを push するのは別途行う必要がある。
+**共有 migrator イメージを push してから `apply` すること**(api/auth それぞれに別イメージを push する
+必要はない。1 つの push で両サービスの migrate コンテナに反映される)。push は root `Makefile` の
+`push-migrator-image` ターゲット(`make push-migrator-image`)で行う — リポジトリルートをビルド
+コンテキストに `-f app/migrator/Dockerfile` で linux/arm64 イメージを build し、
+`migrator_ecr_repository_url` output の `:latest` タグに push する(ISSUE-017)。push せずに
+`apply` すると、新しいデプロイのタスクが migrate コンテナのイメージ pull に失敗して起動できず、
+ロールアウトが詰まる(既存の running タスクはそのまま残るため、既存の可用性への直接影響は無い)。
 
 ## web(SPA)のデプロイについて
 

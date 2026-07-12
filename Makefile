@@ -319,6 +319,20 @@ push-images: ## api/auth イメージを ARM64 で ECR に build & push する(a
 	docker buildx build --platform linux/arm64 --push -t "$$api_repo:$(IMAGE_TAG)" app/api && \
 	docker buildx build --platform linux/arm64 --push -t "$$auth_repo:$(IMAGE_TAG)" app/auth
 
+# ISSUE-017: 共有 app/migrator イメージを ARM64 で migrator 専用 ECR に build & push する。
+# ビルドコンテキストはリポジトリルート(.) — app/migrator/Dockerfile が
+# app/api/infra/postgres/schema/migrations と app/auth/infra/postgres/schema/migrations の
+# 両方を COPY するためコンテキストが app/migrator ではなくルートである必要がある。
+# タグは :latest — iac が参照する migration_image の既定値(app/iac/envs/dev/main.tf)に合わせる。
+# 1 イメージで api/auth 双方の migrate init コンテナをカバーするため、push は 1 回のみ。
+# apply 前にこのターゲットを実行すること(app/iac/envs/dev/README.md「apply 前の前提条件」)。
+.PHONY: push-migrator-image
+push-migrator-image: ## app/migrator イメージを ARM64 で ECR に build & push する(apply 済み + AWS 認証情報が前提。agent は実行しない・手動実行前提。ISSUE-017)
+	@migrator_repo="$$(terraform -chdir=$(TF_ENV_DIR) output -raw migrator_ecr_repository_url)" && \
+	registry="$$(echo "$$migrator_repo" | cut -d/ -f1)" && \
+	aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin "$$registry" && \
+	docker buildx build --platform linux/arm64 --push -f app/migrator/Dockerfile -t "$$migrator_repo:latest" .
+
 .PHONY: deploy-web
 deploy-web: ## web を build(app/web/Makefile 経由・toolchain コンテナ内)して S3 sync + CloudFront invalidation する(apply 済み + AWS 認証情報が前提。agent は実行しない・手動実行前提)
 	$(MAKE) -C app/web build
