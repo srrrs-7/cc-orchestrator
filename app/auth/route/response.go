@@ -102,6 +102,8 @@ func authorizeErrorCode(err error) (code, description string) {
 		return "invalid_request", "redirect_uri is missing or malformed"
 	case errors.Is(err, client.ErrRedirectURIMismatch):
 		return "invalid_request", "redirect_uri does not match a registered redirect uri"
+	case errors.Is(err, client.ErrMissingResponseType):
+		return "invalid_request", "response_type is required"
 	case errors.Is(err, client.ErrUnsupportedResponseType):
 		return "unsupported_response_type", "only response_type=code is supported"
 	case errors.Is(err, authcode.ErrMissingOpenIDScope):

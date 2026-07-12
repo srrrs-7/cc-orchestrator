@@ -166,6 +166,9 @@ func (s *AuthorizationService) validateAuthorize(ctx context.Context, req Author
 	// gosec G710 rationale, ISSUE-004).
 	verified := AuthorizeResult{RedirectURI: redirectURI.String()}
 
+	if req.ResponseType == "" {
+		return verified, fmt.Errorf("service: authorize: %w", client.ErrMissingResponseType)
+	}
 	if req.ResponseType != responseTypeCode || !c.SupportsResponseType(responseTypeCode) {
 		return verified, fmt.Errorf("service: authorize: %w", client.ErrUnsupportedResponseType)
 	}
