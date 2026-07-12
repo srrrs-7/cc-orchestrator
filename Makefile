@@ -375,3 +375,6 @@ migrator-%:
 
 web-%:
 	$(MAKE) -C app/web $*
+
+auth-web-%:
+	$(MAKE) -C app/auth-web $*

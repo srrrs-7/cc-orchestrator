@@ -20,10 +20,10 @@ cc-orchestrator は、Claude Code の subagent 群でソフトウェア開発ワ
 
 実装状況(スナップショット。正確な現状は各ディレクトリを参照):
 
-- `app/api` — Go の DDD サンプル(タスク管理)。`domain/task` + `service` + `infra/postgres` + `route` を実装済みで、実体のあるコードの中心。標準ライブラリ主体だが、永続化層 `infra/postgres` のみ Postgres ドライバ `pgx` に依存する(SPEC-005 / SPEC-011)
-- `app/auth` — OAuth 2.0 + OIDC 認可サーバー(Go)。`app/api` と同じ DDD レイヤ構成で authorize / token / userinfo / discovery を実装済み(AUTH-001)。グラントは Authorization Code(PKCE S256)+ refresh_token(RFC 6749 §6、rotation + family 単位の reuse 検出。SPEC-006)、トークンは JWT(RS256 / JWKS)。ドメインは client / user / authcode / refreshtoken の 4 集約 +(署名ポートのみで永続化しない)token。標準ライブラリ主体で、永続化層 `infra/postgres`(client / user / authcode / refreshtoken)のみ `pgx` に依存する(SPEC-005)
-- `app/web` — TypeScript / React。feature-sliced な SPA(`features/tasks` に domain / api / hooks / components、`shared/`、MSW モック、Vitest)を実装済み。スタイルは **Tailwind CSS v4**(`@tailwindcss/vite` + `src/index.css` の `@import "tailwindcss"`)、UI は **任意のディスプレイ幅で崩れないレスポンシブが必須要件**(SPEC-012。固定幅禁止・受け入れ幅などの正は `.claude/rules/web.md`)
-- `app/iac` — Terraform。`modules/{network,db,platform,service,cdn}` と `envs/dev`(ルートモジュール)を実装済み(SPEC-001 / SPEC-004)。`platform` は共有基盤(ECS クラスタ / ALB 等)、`service` は 1 サービス分の定義で api・auth の 2 回インスタンス化する
+- `app/api` — Go の DDD サンプル(タスク管理)。`domain/task` + `service` + `infra/postgres` + `route` を実装済みで、実体のあるコードの中心。標準ライブラリ主体だが、永続化層 `infra/postgres` のみ Postgres ドライバ `pgx` に依存する(SPEC-005 / SPEC-011)。SPEC-015 で OIDC リソースサーバー化: `route/auth_middleware.go` が Bearer JWT(RS256)を auth の JWKS で検証する(`AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE` env。未設定なら検証無効 = auth なしの単体開発可)
+- `app/auth` — OAuth 2.0 + OIDC 認可サーバー(Go)。`app/api` と同じ DDD レイヤ構成(エントリポイントは `cmd/authz`)。エンドポイントは authorize / token / userinfo / discovery(openid-configuration / jwks.json)に加え、IdP の login / consent UI(cookie セッション + 永続化する scope 同意)・RP-Initiated Logout(`/logout`)・revoke(RFC 7009)・introspect(RFC 7662)・admin API(client / user 作成。API key 未設定なら経路ごと未登録 = fail-closed)を実装済み(基盤の経緯は `docs/plans/AUTH-001-plan.md`、機能拡張の傘は SPEC-015)。グラントは Authorization Code(PKCE S256)+ refresh_token(rotation + family 単位の reuse 検出。SPEC-006)。confidential client(client secret 認証)・API リソースサーバー向け audience 分離・`prompt`(none / login)/ `max_age` に対応。トークンは JWT(RS256 / JWKS)で、署名鍵は multi-key リングを `.secrets/auth-signing-keys.json` に永続化・ローテーションできる(`cmd/keygen`。ルート `make auth-signing-keys` / `rotate-auth-signing-keys`。未設定時は ephemeral 鍵)。ドメインは client / user / authcode / refreshtoken / consent / idpsession の 6 集約 +(署名ポートのみで永続化しない)token。標準ライブラリ主体で、永続化層 `infra/postgres` のみ `pgx` に依存し(SPEC-005)、idpsession のみ意図的に in-memory(`infra/memory`)
+- `app/web` — TypeScript / React。feature-sliced な SPA(`features/{tasks,auth}` に domain / api / hooks / components、`app/`(シェル + TanStack Router)、`shared/`、MSW モック、Vitest)を実装済み。`features/auth` は OIDC RP(SPEC-015): Authorization Code + PKCE S256、トークンは sessionStorage(zod 検証)、期限前に単一飛行で silent refresh、Bearer は tasks の api client が注入し、ルート `/` / `/tasks/$taskId` は `beforeLoad` で認証ガード(`/login` / `/callback` あり)。スタイルは **Tailwind CSS v4**(`@tailwindcss/vite` + `src/index.css` の `@import "tailwindcss"`)、UI は **任意のディスプレイ幅で崩れないレスポンシブが必須要件**(SPEC-012。固定幅禁止・受け入れ幅などの正は `.claude/rules/web.md`)。CSP は HTTP ヘッダーで配信する(ローカルは nginx、AWS は CloudFront response headers policy。SPEC-014)
+- `app/iac` — Terraform。`modules/{network,db,platform,service,cdn}` と `envs/dev`(ルートモジュール)を実装済み(SPEC-001 / SPEC-004)。`platform` は共有基盤(ECS クラスタ / ALB 等)、`service` は 1 サービス分の定義で api・auth の 2 回インスタンス化する。auth は署名鍵がプロセス毎のため desired_count=1 固定(`envs/dev/variables.tf`)
 - `app/migrator` — Go(独立モジュール)。DB マイグレーション実行ツール。`-target api|auth` で対象 DB を作成(冪等)+ 各スタックの `infra/postgres/schema/migrations` を goose 適用する。goose を api/auth から隔離するためのモジュール(SPEC-005)
 
 - パイプラインの全フェーズと agent の役割分担: `.claude/rules/workflow.md`(常時ロード)
@@ -54,7 +54,7 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 - 規約・コマンド・レイアウト・接続 env 契約の正は `.claude/rules/db.md`。担当は impl-db agent
 - 新規 runtime 依存は `pgx` のみ。sqlc は `go run <pkg>@<ver>` の CLI(go.mod 非搭載)。**goose は専用モジュール `app/migrator` に閉じ、api/auth の `go.mod` には載せない**
-- **api ⇄ auth は同一 RDS インスタンス上の別データベース(`api` / `auth`)で分離**(`search_path` は使わず `DB_NAME` を per-service で指定)。Postgres 必須(接続情報なしは起動失敗 = fail-closed。in-memory フォールバックは廃止、SPEC-011)
+- **api ⇄ auth は同一 RDS インスタンス上の別データベース(`api` / `auth`)で分離**(`search_path` は使わず `DB_NAME` を per-service で指定)。Postgres 必須(接続情報なしは起動失敗 = fail-closed。in-memory フォールバックは廃止、SPEC-011)。`DB_SSLMODE` の既定は `require`(fail-closed。ローカル非 TLS は明示的に `disable`)
 - **マイグレーションは `app/migrator`(単一 Go バイナリ / 単一イメージ)が `-target api|auth` で対象 DB を作成 + goose 適用**する。ローカルはルート `make migrate`、本番は ECS init コンテナ
 - **CQRS read/write 分離(SPEC-010)**: `infra/postgres` は writer / reader の 2 プール(`OpenPair`)を持ち、ドメインは `Reader`(query)/ `Writer`(command)/ 合成 `Repository` にポート分割する。接続 env は writer 用 `DB_*` に加え reader 用 `DB_READER_*` を項目ごとに読み、**未設定項目は writer 値へフォールバック**(全項目未設定なら単一プールを共有し二重に開かない)。設計・env 契約・実装 seam の正は `.claude/rules/db.md`。担当はポートが impl-api/auth、2 プール実装が impl-db
 - `infra/repotest` の**共有ふるまい契約テスト**(`Run<集約>RepositoryContract`)を Postgres 実装(実 test DB。`integration` build tag は SPEC-013 で廃止し default `make test` に統合)に対して回し、store 差し替え時も同じ contract で振る舞い等価を確認する(テストロジックを実装ごとに二重化しない)
@@ -76,13 +76,16 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 **`terraform apply` は実行しない。** plan の結果を報告し、apply の判断は必ずユーザーに委ねる。
 
-永続化(DB)系の生成・スキーマ操作ターゲット(各 Go スタックの `make sqlc` / `migrate-create`、およびルートの `make migrate` / `make migrate-test`= `app/migrator` 実行)は、生成 / DB 作成・マイグレーションのため `make check` には含めない(正は `.claude/rules/db.md`)。**一方、DB 依存テストは `make test` = `make check` の一部**(SPEC-013。実 test DB `api_test` / `auth_test` を要し、正規経路は `make migrate-test` で用意してから `REQUIRE_DB=1` で実行する)。**マイグレーション実行は `app/migrator`(`-target api|auth`)に集約**されている(per-stack の `migrate-up/down/status` は廃止)。
+永続化(DB)系の生成・スキーマ操作ターゲット(各 Go スタックの `make sqlc` / `migrate-create`、およびルートの `make migrate` / `make migrate-test`= `app/migrator` 実行)は、生成 / DB 作成・マイグレーションのため `make check` には含めない(正は `.claude/rules/db.md`)。**一方、DB 依存テストは `make test` = `make check` の一部**(SPEC-013。実 test DB `api_test` / `auth_test` を要し、正規経路は `make migrate-test` で用意してから `REQUIRE_DB=1` で実行する。ルート `make test-db` はこの一連=migrate-test + api / auth の test を一括実行する)。テスト規約(TDD・`REQUIRE_DB=1` = fail / 未設定 = skip の意味論・doubles の可否)の正は `.claude/rules/testing.md`。**マイグレーション実行は `app/migrator`(`-target api|auth`)に集約**されている(per-stack の `migrate-up/down/status` は廃止)。
 
 ## ローカル実行(全スタック)
 
-リポジトリルートの `Makefile` + `compose.yml` で 4 サービス(web / api / auth と `postgres`。各 app は `app/*/Dockerfile` をビルド)をまとめて起動する: `make up`(フォアグラウンド)/ `make up-d`(バックグラウンド)/ `make down` / `make logs` / `make ps`。api・auth は compose 上では Postgres 経路(fail-closed)のため、`make up` / `up-d` は先に `make migrate`(`app/migrator` 経由で api/auth の DB 作成 + マイグレーション。**SPEC-009 により toolchain コンテナ内で実行**され、ホストに Go は不要=前提は Docker のみ)を実行してからサービスを起動する。`make db-up`(postgres のみ)/ `make migrate` も個別に使える。起動後は web `http://localhost:8080` / api `http://localhost:8081` / auth `http://localhost:8082` / postgres `127.0.0.1:5432`(ホストは `127.0.0.1` のみバインド)。全ターゲットは `make help`。
+リポジトリルートの `Makefile` + `compose.yml` で 4 サービス(web / api / auth と `postgres`。各 app は `app/*/Dockerfile` をビルド)をまとめて起動する: `make up`(フォアグラウンド)/ `make up-d`(バックグラウンド)/ `make down` / `make logs` / `make ps`。api・auth は compose 上では Postgres 経路(fail-closed)のため、`make up` / `up-d` は先に `make migrate`(`app/migrator` 経由で api/auth の DB 作成 + マイグレーション。**SPEC-009 により toolchain コンテナ内で実行**され、ホストに Go は不要=前提は Docker のみ)を実行してからサービスを起動する。`make db-up`(postgres のみ)/ `make migrate` も個別に使える。起動後は web `http://localhost:8080` / api `http://localhost:8081` / auth `http://localhost:8082` / postgres `127.0.0.1:5432`(ホストは `127.0.0.1` のみバインド)。web の nginx は `/api` / `/auth` を api / auth へ同一オリジンで proxy する(SPEC-015。OIDC issuer は `http://localhost:8080/auth`)。全ターゲットは `make help`。
 
-ルート `Makefile` には AWS デプロイ用の `push-images`(api/auth を ARM64 で ECR に build & push)/ `deploy-web`(web を build して S3 sync + CloudFront invalidation)もある(SPEC-004)。**これらは `terraform apply` 済み + AWS 認証情報を前提とする手動実行ターゲットで、agent は実行しない。**
+- 各 stack のコマンドはルートから `make <stack>-<target>`(接頭辞 `api-` / `auth-` / `web-` / `iac-` / `migrator-`。例: `make api-check`、`make web-test TEST=<path>`、`make iac-plan ENV=dev`)でも呼べる(パターンルールのため `make help` の一覧には出ない)
+- auth の署名鍵は compose 既定では ephemeral(再起動で失効)。永続化するには `make auth-signing-keys` で `.secrets/auth-signing-keys.json` を生成し、`compose.yml` のコメントアウトされた `SIGNING_KEYS_FILE` + mount を有効化する(ISSUE-036。ローテーションは `make rotate-auth-signing-keys`。`.secrets/` は絶対にコミットしない)
+
+ルート `Makefile` には AWS デプロイ用の `push-images`(api/auth を ARM64 で ECR に build & push)/ `push-migrator-image`(migrator イメージ。apply 前に必要、ISSUE-017)/ `deploy-web`(web を build して S3 sync + CloudFront invalidation)もある(SPEC-004)。**これらは `terraform apply` 済み + AWS 認証情報を前提とする手動実行ターゲットで、agent は実行しない。**
 
 ## Git hooks (pre-commit)
 
@@ -96,7 +99,7 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 **実行環境(SPEC-009 準拠)**:
 
-- **ホスト**: hook 本体が `docker compose run tools` で toolchain コンテナ内に再実行される(Docker 必須)
+- **ホスト**: hook 本体が toolchain コンテナ内に再実行される(Docker 必須。warm = `tools` / offline 検査 = `tools-offline` / DB 依存テスト = `tools-db` の 3 フェーズ分割、SPEC-013 R6 / ISSUE-029)
 - **devcontainer / `IN_TOOLBOX=1`**: そのセッション内で直接 `make check` 等を実行(Docker-in-Docker 不要)
 
 docs-only や `.claude/` のみの変更など CI 対象外のステージはスキップする。

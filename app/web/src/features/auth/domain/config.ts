@@ -6,7 +6,7 @@
  *   VITE_AUTH_CLIENT_ID    default: demo-client
  *   VITE_AUTH_ISSUER       default: <origin>/auth
  *   VITE_AUTH_REDIRECT_URI default: <origin>/callback
- *   VITE_AUTH_SCOPES       default: openid profile email  (space-separated)
+ *   VITE_AUTH_SCOPES       default: openid profile email offline_access (space-separated)
  */
 
 export type AuthConfig = {

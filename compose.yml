@@ -118,6 +118,7 @@ services:
       API_AUDIENCE: http://localhost:8081/api
       DEMO_PASSWORD: demo
       DEMO_LOG_PASSWORD: "1"
+      ADMIN_API_KEY: local-dev-admin-key
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: auth
@@ -155,6 +156,19 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      auth:
+        condition: service_healthy
+
+  auth-web:
+    build:
+      context: ./app/auth-web
+    image: cc-orchestrator/auth-web:local
+    ports:
+      - "127.0.0.1:8083:80"
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+    depends_on:
       auth:
         condition: service_healthy
 

@@ -83,7 +83,11 @@ func NewRouter(
 		mux.Handle("POST /admin/users", withAuth(admin.handleCreateUser))
 	}
 
-	return mux
+	// securityHeaders wraps every route (including /admin/*, which is
+	// itself wrapped by requireAdminAuth above) so clickjacking / MIME-
+	// sniffing protection applies uniformly and does not depend on
+	// nginx/CloudFront being in front of this server (ISSUE-042).
+	return securityHeaders(mux)
 }
 
 // SecureCookiesFromIssuer returns true when cookies should carry Secure.

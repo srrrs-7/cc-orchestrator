@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useAuth } from "../features/auth/hooks/AuthProvider";
 import { LoginButton } from "../features/auth/components/LoginButton";
+import { ensureAuthenticatedSession } from "../features/auth/domain/refresh";
 import {
   isAuthenticated,
   setReturnTo,
@@ -229,8 +230,9 @@ const indexRoute = createRoute({
   path: "/",
   validateSearch: (search: Record<string, unknown>): TaskListSearch =>
     taskListSearchSchema.parse(search),
-  beforeLoad: ({ location }) => {
-    if (!isAuthenticated()) {
+  beforeLoad: async ({ location }) => {
+    const authed = await ensureAuthenticatedSession();
+    if (!authed) {
       setReturnTo(location.href);
       throw redirect({ to: "/login" });
     }
@@ -244,8 +246,9 @@ const taskDetailRoute = createRoute({
   params: {
     parse: (rawParams) => taskDetailParamsSchema.parse(rawParams),
   },
-  beforeLoad: ({ location }) => {
-    if (!isAuthenticated()) {
+  beforeLoad: async ({ location }) => {
+    const authed = await ensureAuthenticatedSession();
+    if (!authed) {
       setReturnTo(location.href);
       throw redirect({ to: "/login" });
     }

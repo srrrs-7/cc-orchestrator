@@ -4,7 +4,7 @@ title: app/web Content-Security-Policy ヘッダー導入
 status: done
 created: 2026-07-11
 updated: 2026-07-11
-issues: []
+issues: [ISSUE-042]
 supersedes: null
 ---
 

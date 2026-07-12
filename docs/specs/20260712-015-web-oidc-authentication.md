@@ -4,7 +4,7 @@ title: app/web OIDC 認証連携(app/auth + app/api Bearer 保護)
 status: done
 created: 2026-07-12
 updated: 2026-07-12
-issues: [ISSUE-005, ISSUE-031, ISSUE-032, ISSUE-033, ISSUE-034, ISSUE-035, ISSUE-036, ISSUE-037, ISSUE-038, ISSUE-039, ISSUE-040]
+issues: [ISSUE-005, ISSUE-031, ISSUE-032, ISSUE-033, ISSUE-034, ISSUE-035, ISSUE-036, ISSUE-037, ISSUE-038, ISSUE-039, ISSUE-040, ISSUE-041, ISSUE-042, ISSUE-043, ISSUE-044, ISSUE-046, ISSUE-047, ISSUE-048, ISSUE-049, ISSUE-050, ISSUE-052, ISSUE-053]
 supersedes: null
 ---
 
@@ -58,13 +58,21 @@ supersedes: null
 #### ログアウト
 
 1. ユーザーが **Sign out** を押す
-2. web が `sessionStorage` の auth 関連キーをすべて削除する
-3. `/login` へ hard redirect する(app/auth に RP-initiated logout エンドポイントはない)
+2. web が discovery から `revocation_endpoint` を取得し、refresh token があれば `POST /revoke` で失効させる(best-effort)
+3. web が `sessionStorage` の auth 関連キーをすべて削除する
+4. discovery の `end_session_endpoint`(`GET /logout`)へ redirect し IdP セッションを終了する(`id_token_hint` / `post_logout_redirect_uri` 付き)。エンドポイント未設定時は `/login` へ hard redirect する
+
+#### セッション更新(refresh token)
+
+1. `offline_access` 付きでログインした場合、token 交換で refresh token を sessionStorage に保存する
+2. access token の有効期限の **60 秒前**から、`AuthProvider` の定期チェック(30 秒間隔)または API リクエスト直前に `POST /token`(`grant_type=refresh_token`)で silent refresh する
+3. 保護ルートの `beforeLoad` でも期限切れ access token + 有効 refresh token なら refresh を試み、成功すれば再ログイン不要
+4. refresh 失敗時は `/login` へ誘導する
 
 #### セッション失効(401)
 
-1. access token 期限切れまたは API 側で 401 が返る
-2. API client の error interceptor が session をクリアし `/login` へ redirect する
+1. access token 期限切れで refresh も失敗した場合、または API 側で 401 が返る
+2. API client の error interceptor が refresh を 1 回試行し、失敗時は session をクリアして `/login` へ redirect する
 
 ## 3. 要件(何を満たすべきか)
 
@@ -76,13 +84,15 @@ supersedes: null
   - `VITE_AUTH_CLIENT_ID` → `demo-client`
   - `VITE_AUTH_ISSUER` → `{origin}/auth`
   - `VITE_AUTH_REDIRECT_URI` → `{origin}/callback`
-  - `VITE_AUTH_SCOPES` → `openid profile email`(スペース区切り)
+  - `VITE_AUTH_SCOPES` → `openid profile email offline_access`(スペース区切り)
 - [x] R4: ルート `/login`(未認証向け)・`/callback`(code 交換)を追加する
 - [x] R5: `/` と `/tasks/$taskId` は `beforeLoad` で認証必須。未認証時は return-to を保存して `/login` へ redirect する
 - [x] R6: セッションは **sessionStorage** に保存する(タブを閉じると消える)。保存項目: access token / id token / refresh token(任意) / expiresAt / sub / displayName
 - [x] R7: App シェルヘッダーに、未認証時 `LoginButton`、認証時 `UserMenu`(表示名 + Sign out)を表示する
-- [x] R8: task API クライアントは有効 session があるとき Bearer を付与し、401 時は session クリア + `/login` redirect する
+- [x] R8: task API クライアントは有効 session があるとき Bearer を付与し、401 時は refresh を 1 回試行したうえで失敗時 session クリア + `/login` redirect する
 - [x] R9: `app/web/nginx.conf` に `/auth/` リバースプロキシを追加し、同一オリジン `/auth/*` で auth に到達できるようにする(SPEC-014 の `connect-src 'self'` を維持)
+- [x] R16: refresh token による **silent refresh** を実装する。`features/auth/domain/refresh.ts` が token 更新を担当し、`AuthProvider`(定期)・API request interceptor(リクエスト直前)・保護ルート `beforeLoad`(期限切れ復帰)から利用する
+- [x] R17: ログアウト時に refresh token の revoke(RFC 7009)と RP-initiated logout(`end_session_endpoint`)を best-effort で実行する
 
 ### 機能要件 — app/auth
 
@@ -92,8 +102,8 @@ supersedes: null
 ### 機能要件 — app/api
 
 - [x] R12: 全 task エンドポイントを Bearer JWT 必須にする
-- [x] R13: `AUTH_ISSUER` と `AUTH_JWKS_URL` が**両方**設定されているときのみ認証ミドルウェアを有効化する。どちらか一方のみは起動失敗(fail-closed on misconfiguration)
-- [x] R14: JWT 検証内容: RS256 署名(JWKS `kid` 解決・5 分キャッシュ)、`exp`、`iss == AUTH_ISSUER`、`aud` に `AUTH_ISSUER` を含む、非空 `sub`
+- [x] R13: `AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE` が**すべて**設定されているときのみ認証ミドルウェアを有効化する。一部のみ設定は起動失敗(fail-closed on misconfiguration)。※ `AUTH_AUDIENCE` は初版の 2 変数契約に ISSUE-037 で追加された 3 変数目(§6 経緯 2026-07-12 追記参照)
+- [x] R14: JWT 検証内容: RS256 署名(JWKS `kid` 解決・5 分キャッシュ)、`exp`、`iss == AUTH_ISSUER`、`aud` に **`AUTH_AUDIENCE`** を含む(ISSUE-037。初版は `AUTH_ISSUER` を aud として検証していたが、リソースサーバー audience 分離により API 向け access token の aud を専用値へ移した)、非空 `sub`
 - [x] R15: OpenAPI(`docs/openapi.yaml`)に `BearerAuth` security scheme を追加し、全 task operation に `security` を付与する(SPEC-003)。web は `make generate` で再生成する
 
 ### 非機能要件
@@ -107,9 +117,8 @@ supersedes: null
 
 後続実装は [AUTH-002 ロードマップ](../plans/AUTH-002-oauth-oidc-gap-roadmap-plan.md) と Issue に分解済み。
 
-- app/auth の **ログイン / 同意 UI** → [ISSUE-031](../issues/20260712-031-auth-login-ui-idp-session.md)(依存: [ISSUE-005](../issues/20260708-005-demo-user-password-plaintext-hashing.md)) / [ISSUE-032](../issues/20260712-032-auth-consent-ui.md)
-- **RP-initiated logout / end_session** → [ISSUE-033](../issues/20260712-033-auth-rp-initiated-logout-end-session.md)([ISSUE-034](../issues/20260712-034-auth-token-revocation-endpoint.md) と連動)
-- web 側の **refresh token 自動更新**(token 交換 API は実装済みだが、期限切れ前の silent refresh は未配線。期限切れ時は再ログイン)
+- app/auth の **ログイン / 同意 UI** → [ISSUE-031](../issues/20260712-031-auth-login-ui-idp-session.md)(auth 側実装済み。web は authorize redirect 経由で利用)
+- **RP-initiated logout / end_session** → [ISSUE-033](../issues/20260712-033-auth-rp-initiated-logout-end-session.md)(web 側も実装済み)
 - **ユーザー単位のタスク所有権**(API は token の有効性のみ検証。`sub` による row-level 認可は未実装)
 - **ID token のブラウザ内署名検証** → [ISSUE-038](../issues/20260712-038-auth-oidc-claims-offline-access.md) 等
 - **RSA 鍵永続化 / JWKS ローテーション** → [ISSUE-036](../issues/20260712-036-auth-rsa-key-persistence-jwks-rotation.md)
@@ -146,15 +155,15 @@ flowchart TB
 | レイヤ | 主要ファイル | 責務 |
 |---|---|---|
 | web nginx | `app/web/nginx.conf` | `/auth/` → `http://auth:8080`、`/api/` → `http://api:8080` |
-| web auth domain | `src/features/auth/domain/*` | PKCE、env 解決、sessionStorage、JWT payload decode |
-| web auth api | `src/features/auth/api/oidc.ts` | discovery / authorize URL / token / userinfo |
-| web auth hooks | `src/features/auth/hooks/AuthProvider.tsx` | login / logout / handleCallback / getAccessToken |
-| web router | `src/app/router.tsx` | `/login` `/callback`、保護ルート `beforeLoad` |
-| web API client | `src/features/tasks/api/client.ts` | Bearer 注入、401 → logout |
+| web auth domain | `src/features/auth/domain/*` | PKCE、env 解決、sessionStorage、JWT payload decode、silent refresh |
+| web auth api | `src/features/auth/api/oidc.ts` | discovery / authorize URL / token / refresh / revoke / end-session URL |
+| web auth hooks | `src/features/auth/hooks/AuthProvider.tsx` | login / logout / handleCallback / getAccessToken / proactive refresh |
+| web router | `src/app/router.tsx` | `/login` `/callback`、保護ルート async `beforeLoad`(refresh 対応) |
+| web API client | `src/features/tasks/api/client.ts` | Bearer 注入(silent refresh 付き)、401 → refresh 試行 |
 | auth seed | `app/auth/cmd/authz/main.go` | `demo-client` redirect URIs、compose issuer |
 | api middleware | `app/api/route/auth_middleware.go` | Bearer 抽出・401 JSON |
 | api JWT | `app/api/infra/jwt/verifier.go` | JWKS fetch + RS256 検証 |
-| api env | `app/api/cmd/api/env.go` | `AUTH_ISSUER` / `AUTH_JWKS_URL` |
+| api env | `app/api/cmd/api/env.go` | `AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE`(ISSUE-037) |
 | compose | `compose.yml` | issuer / jwks / web→auth depends_on |
 
 ### 環境変数契約(ローカル compose)
@@ -164,7 +173,10 @@ flowchart TB
 | auth | `ISSUER` | `http://localhost:8080/auth` |
 | api | `AUTH_ISSUER` | `http://localhost:8080/auth` |
 | api | `AUTH_JWKS_URL` | `http://auth:8080/.well-known/jwks.json`(Docker 内部) |
+| api | `AUTH_AUDIENCE` | `http://localhost:8081/api`(auth の `API_AUDIENCE` と一致。ISSUE-037) |
 | web(build) | `VITE_AUTH_*` | 未設定時は実行時 `{origin}` から導出 |
+
+> **fail-closed on misconfiguration**: api は上記 `AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE` の 3 変数を all-or-nothing で検証する(`cmd/api/env.go` `validate()`)。3 変数すべて設定で認証有効、すべて未設定で「認証なし(dev opt-out)」、一部のみ設定は起動失敗。AWS デプロイ経路(app/iac)でこの 3 変数を確実に配線することは ISSUE-041 で別途担保する。
 
 ### OpenAPI / 型契約(SPEC-003)
 
@@ -196,3 +208,6 @@ flowchart TB
 - 初版作成。app/web に OIDC RP 連携、app/api に Bearer JWT 保護、ローカル compose の同一オリジン `/auth` proxy を実装済みの状態を Spec 化。SPEC-004 でスコープ外だった「web を auth OIDC client として接続」はローカル E2E について本 Spec で充足。refresh token 自動更新・ユーザー別タスク認可・auth ログアウト API はスコープ外として明記
 - 実装・検証完了。`make -C app/auth check` / `make -C app/api check` / `make -C app/web check`(138 tests) green。status を `done` に更新
 - スコープ外の app/auth OAuth/OIDC ギャップを [AUTH-002 ロードマップ](../plans/AUTH-002-oauth-oidc-gap-roadmap-plan.md) と ISSUE-031〜040 に分解。frontmatter `issues` を更新
+- web 改善: silent refresh 配線(`features/auth/domain/refresh.ts`)、MSW OIDC mock に revoke/logout/refresh 追加、ログアウトフロー記述を auth 実装(end_session + revoke)に同期。R16/R17 追加
+
+- **リポジトリ全体レビューでの仕様陳腐化の是正(ISSUE-046)**。初版の R13/R14・環境変数契約は 2 変数(`AUTH_ISSUER` / `AUTH_JWKS_URL`)を前提にしていたが、その後 ISSUE-037(リソースサーバー audience 分離)で api に 3 変数目 `AUTH_AUDIENCE` が追加され、実装は (a) `cmd/api/env.go` `validate()` が 3 変数の all-or-nothing 検証(`app/api/cmd/api/env.go:164-186`)、(b) `infra/jwt` の aud 検証対象が `AUTH_ISSUER` → `AUTH_AUDIENCE` へ変更(`NewVerifier(jwksURL, issuer, audience)`・`claims.Audience.contains(v.audience)`、`app/api/infra/jwt/verifier.go:111,174` / 配線 `cmd/api/main.go:92`)に変わっていた。Spec 側(R13/R14/§4 環境変数契約表・ファイル対応表)がこの契約変更を反映しておらず陳腐化していたため、実装を正として本 Spec を現状に合わせて更新した(実装は正常。ドキュメントレベルの是正)。ローカル compose の値は `AUTH_AUDIENCE=API_AUDIENCE=http://localhost:8081/api`。あわせて、AWS デプロイ経路でこの 3 変数が配線されず apply 後の Task API が無認証公開になる Blocker は ISSUE-041 として別途起票済み。status は `done` を維持(実装は要件を満たしており、変更は仕様文書の現実同期のみ)。

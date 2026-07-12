@@ -32,11 +32,12 @@ import (
 )
 
 // expiredPurger is a local interface for the background purge goroutine.
-// Implemented by *postgres.AuthCodeRepository and
-// *postgres.RefreshTokenRepository. PurgeExpired is an infra-layer GC
-// concern, not a domain invariant, so it is intentionally absent from the
-// authcode/refreshtoken domain Repository interfaces (ISSUE-015,
-// ISSUE-019).
+// Implemented by *postgres.AuthCodeRepository, *postgres.
+// RefreshTokenRepository, and *memory.IdPSessionStore. PurgeExpired is
+// an infra-layer GC concern, not a domain invariant, so it is
+// intentionally absent from the authcode/refreshtoken domain Repository
+// interfaces and from idpsession.Store (ISSUE-015, ISSUE-019,
+// ISSUE-044).
 type expiredPurger interface {
 	PurgeExpired(ctx context.Context) (int64, error)
 }
@@ -45,10 +46,12 @@ const (
 	shutdownTimeout = 10 * time.Second
 
 	// purgeInterval is how often the background goroutine calls
-	// PurgeExpired on the authcode and refresh-token repositories
-	// (ISSUE-015, ISSUE-019). 15 minutes is a conservative default:
-	// authorization codes have a 10-minute TTL and refresh tokens a
-	// 24-hour TTL, so the table sizes stay bounded even under load.
+	// PurgeExpired on the authcode and refresh-token repositories, and
+	// on the IdP session store (ISSUE-015, ISSUE-019, ISSUE-044). 15
+	// minutes is a conservative default: authorization codes have a
+	// 10-minute TTL, refresh tokens a 24-hour TTL, and IdP sessions/
+	// pending-authorize entries a 24-hour/10-minute TTL, so all of these
+	// stay bounded in size even under load.
 	purgeInterval = 15 * time.Minute
 
 	// HTTP server timeouts. In particular, ReadHeaderTimeout bounds how
@@ -137,18 +140,24 @@ func run() error {
 		}
 	}()
 
-	// Background purge ticker (ISSUE-015 / ISSUE-019): sweep expired
-	// authorization_codes and refresh_tokens every purgeInterval so the
-	// tables do not grow without bound between lazy-eviction
-	// opportunities. The goroutine exits when ctx is cancelled (SIGINT /
+	// sessionStore is created here (before the purge ticker below) so
+	// its PurgeExpired can be swept by the same background goroutine as
+	// authCodePurger/refreshTokenPurger (ISSUE-044).
+	sessionStore := memory.NewIdPSessionStore()
+
+	// Background purge ticker (ISSUE-015 / ISSUE-019 / ISSUE-044): sweep
+	// expired authorization_codes, refresh_tokens, and IdP sessions/
+	// pending-authorize entries every purgeInterval so none of these
+	// grow without bound between lazy-eviction opportunities (in
+	// particular, a pending authorize abandoned before login completes
+	// has no other deletion path -- see IdPSessionStore.PurgeExpired's
+	// doc comment). The goroutine exits when ctx is cancelled (SIGINT /
 	// SIGTERM) via the select's ctx.Done() arm; it does not block the
 	// server's graceful shutdown path.
-	go runPurgeTicker(ctx, purgeInterval, authCodePurger, refreshTokenPurger)
+	go runPurgeTicker(ctx, purgeInterval, authCodePurger, refreshTokenPurger, sessionStore)
 	if e.DemoPassword != "" || os.Getenv("DEMO_LOG_PASSWORD") == "1" {
 		slog.Info("authz: demo user password", "username", demoUsername, "password", demoPassword)
 	}
-
-	sessionStore := memory.NewIdPSessionStore()
 
 	// Wiring: infra -> application service -> presentation.
 	authSvc := service.NewAuthorizationService(clientRepo, userRepo, authCodeRepo, refreshTokenRepo, signer, e.Issuer, e.APIAudience)
@@ -216,16 +225,23 @@ func run() error {
 }
 
 // runPurgeTicker runs a background loop that calls PurgeExpired on
-// authCodePurger and refreshTokenPurger every interval. It is designed
-// to be launched as a goroutine from run(); it exits cleanly when ctx
-// is cancelled (i.e. when the process receives SIGINT/SIGTERM and run's
-// signal.NotifyContext fires).
+// authCodePurger, refreshTokenPurger, and idpSessionPurger every
+// interval. It is designed to be launched as a goroutine from run(); it
+// exits cleanly when ctx is cancelled (i.e. when the process receives
+// SIGINT/SIGTERM and run's signal.NotifyContext fires).
+//
+// idpSessionPurger is *memory.IdPSessionStore, sharing this ticker
+// rather than running its own (ISSUE-044): its sessions/pending TTLs
+// (24h / 10min) are both comfortably longer than purgeInterval, so
+// piggybacking on the same 15-minute cadence used for authcode/
+// refreshtoken keeps the in-memory store's size bounded without adding
+// a second goroutine.
 //
 // Errors from individual purge calls are logged but do not stop the
-// ticker: a transient DB failure during GC should not escalate to a
+// ticker: a transient failure during GC should not escalate to a
 // process crash. The first purge fires after the first tick, not at
 // startup, so it does not delay the server's readiness.
-func runPurgeTicker(ctx context.Context, interval time.Duration, authCodePurger, refreshTokenPurger expiredPurger) {
+func runPurgeTicker(ctx context.Context, interval time.Duration, authCodePurger, refreshTokenPurger, idpSessionPurger expiredPurger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -237,24 +253,25 @@ func runPurgeTicker(ctx context.Context, interval time.Duration, authCodePurger,
 			purgeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			acN, acErr := authCodePurger.PurgeExpired(purgeCtx)
 			rtN, rtErr := refreshTokenPurger.PurgeExpired(purgeCtx)
+			// IdPSessionStore.PurgeExpired is an in-memory map sweep
+			// under a mutex, not a network call, but it still honors ctx
+			// cancellation (see its doc comment) so it is driven through
+			// the same purgeCtx/deadline as the other two for
+			// consistency.
+			sessN, sessErr := idpSessionPurger.PurgeExpired(purgeCtx)
 			cancel()
 
-			switch {
-			case acErr != nil && rtErr != nil:
-				slog.Error("authz: purge expired tokens: both failed",
-					"authcode_error", acErr, "refresh_token_error", rtErr)
-			case acErr != nil:
-				slog.Error("authz: purge expired authorization codes", "error", acErr,
-					"refresh_tokens_purged", rtN)
-			case rtErr != nil:
-				slog.Error("authz: purge expired refresh tokens", "error", rtErr,
-					"authorization_codes_purged", acN)
-			default:
-				if acN > 0 || rtN > 0 {
-					slog.Info("authz: purge expired tokens",
-						"authorization_codes_purged", acN,
-						"refresh_tokens_purged", rtN)
-				}
+			if acErr != nil || rtErr != nil || sessErr != nil {
+				slog.Error("authz: purge expired tokens/sessions",
+					"authcode_error", acErr, "refresh_token_error", rtErr, "idp_session_error", sessErr,
+					"authorization_codes_purged", acN, "refresh_tokens_purged", rtN, "idp_sessions_purged", sessN)
+				continue
+			}
+			if acN > 0 || rtN > 0 || sessN > 0 {
+				slog.Info("authz: purge expired tokens/sessions",
+					"authorization_codes_purged", acN,
+					"refresh_tokens_purged", rtN,
+					"idp_sessions_purged", sessN)
 			}
 		}
 	}

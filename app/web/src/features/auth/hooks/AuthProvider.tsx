@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   buildAuthorizeUrl,
@@ -9,6 +9,7 @@ import {
 } from "../api/oidc";
 import { resolveAuthConfig } from "../domain/config";
 import { deriveCodeChallenge, generateCodeVerifier } from "../domain/pkce";
+import { refreshStoredSession, shouldRefreshSession, isAccessTokenValid } from "../domain/refresh";
 import {
   clearAllAuthStorage,
   clearStoredPkce,
@@ -161,6 +162,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const session = getStoredSession();
     if (!session || !isSessionValid(session)) return null;
     return session.accessToken;
+  }, []);
+
+  // Proactively refresh when the access token is near expiry so API calls
+  // and route guards rarely hit an expired token.
+  useEffect(() => {
+    const tick = (): void => {
+      const session = getStoredSession();
+      if (!session?.refreshToken) return;
+      if (isAccessTokenValid(session) && !shouldRefreshSession(session)) return;
+      void refreshStoredSession().then((refreshed) => {
+        if (refreshed) {
+          setUser({ sub: refreshed.sub, displayName: refreshed.displayName });
+        }
+      });
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const value: AuthContextValue = {

@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import type { z } from "zod";
-import { clearAllAuthStorage, getCurrentAccessToken } from "../../auth/domain/session";
+import { ensureValidAccessToken, refreshStoredSession } from "../../auth/domain/refresh";
+import { clearAllAuthStorage } from "../../auth/domain/session";
 import { ApiError } from "../../../shared/api/errors";
 import type { Task } from "../domain/task";
 import {
@@ -38,8 +39,9 @@ function resolveBaseUrl(): string {
 client.setConfig({ baseUrl: resolveBaseUrl() });
 
 // Inject the Bearer token on every outgoing request when a valid session exists.
-client.interceptors.request.use((request: Request) => {
-  const token = getCurrentAccessToken();
+// Attempts silent refresh when the access token is expired or near expiry.
+client.interceptors.request.use(async (request: Request) => {
+  const token = await ensureValidAccessToken();
   if (token === null) return request;
   const headers = new Headers(request.headers);
   headers.set("Authorization", `Bearer ${token}`);
@@ -67,12 +69,14 @@ function messageFrom(error: unknown): string | undefined {
  * once mirrored has since been removed as dead code; see `parseResponse`
  * below for the equivalent boundary around successful-response parsing).
  */
-client.interceptors.error.use((error, response) => {
-  // On 401, the session is no longer valid. Clear auth storage and send the
-  // user to the login page so they can re-authenticate.
+client.interceptors.error.use(async (error, response) => {
+  // On 401, attempt one silent refresh before forcing re-login.
   if (response?.status === 401) {
-    clearAllAuthStorage();
-    window.location.href = "/login";
+    const refreshed = await refreshStoredSession();
+    if (refreshed === null) {
+      clearAllAuthStorage();
+      window.location.href = "/login";
+    }
   }
   return new ApiError(messageFrom(error) ?? `Request failed with status ${response?.status ?? 0}`, {
     status: response?.status ?? 0,

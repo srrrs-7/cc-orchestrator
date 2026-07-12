@@ -154,24 +154,55 @@ let tasks: TaskDto[] = [
 
 let nextId = tasks.length + 1;
 
+const MOCK_REFRESH_TOKEN = "mock-refresh-token";
+
+function makeTokenResponse(overrides?: Record<string, unknown>) {
+  return {
+    access_token: "mock-access-token",
+    id_token: makeDemoIdToken(),
+    refresh_token: MOCK_REFRESH_TOKEN,
+    token_type: "Bearer",
+    expires_in: 3600,
+    ...overrides,
+  };
+}
+
 export const oidcHandlers = [
   http.get("/auth/.well-known/openid-configuration", () => {
     return HttpResponse.json({
       issuer: "http://localhost:8080/auth",
       authorization_endpoint: "http://localhost:8080/auth/authorize",
       token_endpoint: "http://localhost:8080/auth/token",
+      revocation_endpoint: "http://localhost:8080/auth/revoke",
       userinfo_endpoint: "http://localhost:8080/auth/userinfo",
+      end_session_endpoint: "http://localhost:8080/auth/logout",
       jwks_uri: "http://localhost:8080/auth/.well-known/jwks.json",
     });
   }),
 
-  http.post("/auth/token", () => {
-    return HttpResponse.json({
-      access_token: "mock-access-token",
-      id_token: makeDemoIdToken(),
-      token_type: "Bearer",
-      expires_in: 3600,
-    });
+  http.post("/auth/token", async ({ request }) => {
+    const body = await request.text();
+    const params = new URLSearchParams(body);
+    if (params.get("grant_type") === "refresh_token") {
+      return HttpResponse.json(
+        makeTokenResponse({
+          access_token: "mock-refreshed-access-token",
+          refresh_token: "mock-rotated-refresh-token",
+        }),
+      );
+    }
+    return HttpResponse.json(makeTokenResponse());
+  }),
+
+  http.post("/auth/revoke", () => HttpResponse.text("", { status: 200 })),
+
+  http.get("/auth/logout", ({ request }) => {
+    const url = new URL(request.url);
+    const redirectUri = url.searchParams.get("post_logout_redirect_uri");
+    if (redirectUri) {
+      return HttpResponse.redirect(redirectUri, 302);
+    }
+    return HttpResponse.text("logged out", { status: 200 });
   }),
 
   http.get("/auth/userinfo", () => {

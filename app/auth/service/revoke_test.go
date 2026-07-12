@@ -61,6 +61,14 @@ func (f *fakeClientRepo) FindByID(_ context.Context, id client.ClientID) (*clien
 	return c, nil
 }
 
+func (f *fakeClientRepo) ListAll(_ context.Context) ([]*client.Client, error) {
+	out := make([]*client.Client, 0, len(f.clients))
+	for _, c := range f.clients {
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 func newRevokeTestService(t *testing.T, rtRepo refreshtoken.Repository, clientRepo client.Repository) *service.AuthorizationService {
 	t.Helper()
 	return service.NewAuthorizationService(clientRepo, nil, nil, rtRepo, nil, testIssuer, testAPIAudience)

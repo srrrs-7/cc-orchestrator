@@ -102,6 +102,7 @@ jobs:
       pull-requests: read
     outputs:
       web: ${{ steps.filter.outputs.web }}
+      auth-web: ${{ steps.filter.outputs.auth-web }}
       api: ${{ steps.filter.outputs.api }}
       auth: ${{ steps.filter.outputs.auth }}
       iac: ${{ steps.filter.outputs.iac }}
@@ -125,6 +126,13 @@ jobs:
             # full under every category instead of aliased.
             web:
               - 'app/web/**'
+              - '.github/workflows/cicd.yml'
+              - '.devcontainer/versions.env'
+              - '.devcontainer/toolchain/**'
+              - '.devcontainer/compose.tools.yml'
+              - '.github/actions/build-toolchain-image/**'
+            auth-web:
+              - 'app/auth-web/**'
               - '.github/workflows/cicd.yml'
               - '.devcontainer/versions.env'
               - '.devcontainer/toolchain/**'
@@ -182,6 +190,25 @@ jobs:
     defaults:
       run:
         working-directory: app/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-toolchain-image
+
+      - name: Install dependencies
+        run: make install INSTALL_FLAGS=--frozen-lockfile
+
+      - name: Check (format-check + lint + typecheck + test + build)
+        run: make check
+
+  auth-web:
+    name: auth-web (TypeScript / React)
+    needs: changes
+    if: ${{ needs.changes.outputs.auth-web == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app/auth-web
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/build-toolchain-image
