@@ -1,13 +1,13 @@
 ---
 id: RETRO-004
 title: SPEC-009 下で go mod tidy を実行する正規経路がなく 3 agent が同じ回避策を重複考案した
-status: open
+status: addressed
 severity: medium
 source: impl-db  # impl-api / impl-auth も同一摩擦に遭遇(検収: admin)
 phase: impl
 target: rules/api.md  # 同型の欠落: rules/auth.md / rules/db.md(と各 Go スタックの Makefile)
 created: 2026-07-12
-updated: 2026-07-12
+updated: 2026-07-13
 synthesis: RETROSUM-001
 tags: [missing-command, spec-009, makefile-gap, duplicated-workaround]
 ---
@@ -47,3 +47,7 @@ tags: [missing-command, spec-009, makefile-gap, duplicated-workaround]
 ### 2026-07-12
 
 - 記録。origin/main マージの go.mod 競合解消(impl-api / impl-auth / impl-db に 3 並列委譲)の検収中に、3 報告が同一の回避策を独立に記述していたことから摩擦として吸い上げた
+
+### 2026-07-13(addressed へ遷移)
+
+- RETROSUM-001 提案 3 として統括・適用(コミット `9a9de7e`): impl-api / impl-auth / impl-db が `app/{api,auth,migrator}/Makefile` に `tidy` / `tidy-native`(network 有効 `tools` サービス経由。`check` 非包含)を同型で追加し、`rules/{api,auth,db}.md` のコマンド表に「依存解決 = `make tidy`」を記載。3 スタックとも `make tidy` の実行(exit 0・差分ゼロ)と `make check` 緑を検証済み。改善提案 2(汎用実行手順の文書化)は SPEC-009 の統制を緩めるため不採用(entry の見解どおり)。

@@ -1,7 +1,7 @@
 ---
 id: RETRO-005
 title: git 維持作業(main 取り込みマージ・競合解消)の役割とフローが orchestration に未定義
-status: open
+status: addressed
 severity: medium
 source: admin
 phase: orchestration
@@ -46,3 +46,7 @@ tags: [missing-role, whitelist-gap, git-ops, ambiguous-rule]
 ### 2026-07-13
 
 - 記録。`git pull origin main` 失敗の支援タスク(2026-07-12〜13)完了後の振り返りで、実行中に即興解釈した判断ポイント 4 件を摩擦として吸い上げた
+
+### 2026-07-13(addressed へ遷移)
+
+- RETROSUM-001 提案 2 として統括・適用(コミット `9a9de7e`): `rules/orchestration.md` のホワイトリストに「ユーザーが明示的に指示・実行した git 操作の完了 + 付随する git 設定の修正。`app/` 配下の競合解消はファイル所有 stack の impl に委譲」を追記、`rules/workflow.md` に「維持作業(依存 bump / main 取り込みマージ)」の軽量フロー(admin merge → impl 委譲 → checker → merge commit。Go スタックは tester 省略可)を新設。改善提案 3 の「git-ops agent 新設」仮説は頻度に対し過剰として不採用。

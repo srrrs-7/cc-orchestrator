@@ -1,13 +1,13 @@
 ---
 id: RETRO-002
 title: 新機能(AUTH-002 ロードマップ)が Spec を起こさず Issue パイプラインだけで実装され workflow.md の「機能開発は Spec 起点」原則を回避した
-status: open  # open | addressed | wontfix
+status: addressed  # open | addressed | wontfix
 severity: high  # high(頻発・手戻り大 / タスクをブロック) | medium(回避したが非効率) | low(軽微)
 source: review-spec
 phase: orchestration  # spec | plan | test | impl | check | review | orchestration | other
 target: rules/workflow.md
 created: 2026-07-12
-updated: 2026-07-12
+updated: 2026-07-13
 synthesis: RETROSUM-001
 tags: [ambiguous-rule, spec-vs-issue, process-bypass, doc-drift]
 ---
@@ -43,3 +43,7 @@ tags: [ambiguous-rule, spec-vs-issue, process-bypass, doc-drift]
 ### 2026-07-12
 
 - 記録。リポジトリ全体レビュー(security / performance / spec)の検収中、review-spec の Major #1 として surface。AUTH-002 ロードマップが Spec を経ずに 10 機能を実装し、確定済み Spec(SPEC-010 / SPEC-015)を陳腐化させていた。関連する陳腐化そのものの是正は docs/issues に起票して impl / spec skill で対応する。
+
+### 2026-07-13(addressed へ遷移)
+
+- RETROSUM-001 提案 1 として統括・適用(コミット `9a9de7e`): `rules/workflow.md` のパイプライン節に Spec 起点 / Issue 起点の判定基準(新エンドポイント・新集約・確定済み公開契約の変更は Spec 必須。ロードマップ plan が Issue 分割だけで着手指示していても Spec 化を先行)を追記、`rules/orchestration.md` の行動規範に機能完了ゲート(手順 6)を新設、`skills/issue/SKILL.md` の新規作成手順に「新機能なら Spec に回す」分岐注記を追加。

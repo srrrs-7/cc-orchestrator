@@ -7,7 +7,7 @@ source: review-spec
 phase: orchestration  # spec | plan | test | impl | check | review | orchestration | other
 target: CLAUDE.md
 created: 2026-07-12
-updated: 2026-07-12
+updated: 2026-07-13
 synthesis: RETROSUM-001
 tags: [doc-drift, missing-command, stale-summary]
 ---
@@ -64,3 +64,7 @@ tags: [doc-drift, missing-command, stale-summary]
 - ユーザー指示「auth-web も CLAUDE.md と割り振り表に追随させて」により admin が適用: CLAUDE.md(リポジトリ概要に `app/auth-web` bullet、コマンド早見表の web 行を web / auth-web に拡張、ローカル実行を 5 サービス + `:8083` + `auth-web-%` エイリアスに更新、CI job 列挙に auth-web 追加)、orchestration.md 割り振り表(impl-web の担当を app/web / app/auth-web に拡張)、rules/web.md(frontmatter `paths` に `app/auth-web/**` 追加 + 両 stack 適用の冒頭注記)、agents/impl-web.md(担当範囲の拡張)。
 - 適用中に **agents/impl-web.md の手順に `pnpm run typecheck` 等の陳腐化**を発見(実契約は toolchain コンテナ経由の `make typecheck` / `build` / `test`。SPEC-009 のホスト直接実行禁止とも矛盾)。同時に修正。agent 定義内の具体的コマンド記述も本 entry と同じドリフト源であり、恒久策の検収チェックは agents/ 配下も対象に含めるべき。
 - 別途、pre-commit hook(`.githooks/lib/detect-stacks.sh` + `run-checks.sh`)が auth-web stack 非対応であることも確認(CI の `cicd.yml` はカバー済み)。これは `.claude` ではなく `.githooks` の実装ギャップのため impl-ci への委譲対象としてユーザーに報告。
+
+### 2026-07-13(恒久策の適用)
+
+- 残っていた恒久策(提案 3: 検収時のドキュメント追随確認)が RETROSUM-001 提案 1 として適用された(コミット `9a9de7e`): `rules/orchestration.md` の行動規範に完了ゲート(手順 6。CLAUDE.md / 該当 rules / 該当 agents 定義との一致確認、`agents/` 配下も追随対象と明記)を新設。あわせて本 entry の経緯が挙げた同種 drift の現存例 `agents/checker.md` の rules 参照先(`{web,api,iac}` → 実在一覧)も同コミットで修正。ゲートの初適用(同日の RETROSUM-001 検収)で `rules/db.md` の版記述の陳腐化(pgx / goose)を実際に検出・修正しており、仕組みが機能することを確認済み。

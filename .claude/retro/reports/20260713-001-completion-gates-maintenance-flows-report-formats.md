@@ -2,7 +2,7 @@
 id: RETROSUM-001
 title: 機能完了ゲート・維持系タスクの定義・報告形式が orchestration 定義の主要な穴
 date: 2026-07-13
-status: proposed  # proposed(提案済み)| applied(admin が .claude/ に適用済み)
+status: applied  # proposed(提案済み)| applied(admin が .claude/ に適用済み)
 entries: [RETRO-001, RETRO-002, RETRO-003, RETRO-004, RETRO-005, RETRO-006]
 ---
 
@@ -125,6 +125,7 @@ entries: [RETRO-001, RETRO-002, RETRO-003, RETRO-004, RETRO-005, RETRO-006]
 
 ## 適用結果(admin が適用後に記入)
 
-- 適用したコミット:
-- 見送った提案とその理由:
-- addressed にした entry:
+- 適用したコミット: `9a9de7e`(提案 1〜5 すべて + 副次アクションの `agents/checker.md` 参照先修正。提案 3 の Makefile 変更は impl-api / impl-auth / impl-db が実施し checker で 3 スタック `make check` 緑を検証)
+- 見送った提案とその理由: なし(5 提案すべて採用)。entry 内の代替案では、RETRO-005 の「git-ops agent 新設」と RETRO-004 の「汎用ワンオフ実行手順の文書化」を本レポートの判断ポイントどおり不採用
+- addressed にした entry: RETRO-001 / 002 / 004 / 005 / 006(RETRO-003 は既に addressed。残っていた恒久策=完了ゲートの適用を経緯に追記)
+- 付随して発見・対処した drift: 完了ゲートの初適用により `rules/db.md` の版記述の陳腐化(pgx v5.7.2→v5.10.0 / goose v3.24.1→v3.27.2)を検出し同コミットで修正。product 側の `GOOSE_VERSION`(versions.env)⇄ `app/migrator/go.mod` の同期破れは ISSUE-054 として起票

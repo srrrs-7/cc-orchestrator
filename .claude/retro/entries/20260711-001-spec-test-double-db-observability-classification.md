@@ -1,13 +1,13 @@
 ---
 id: RETRO-001
 title: テスト戦略変更の Spec で、テストダブルを「DB 観測可能性」で先に分類しないと要件・例外条項が狭くなり手戻りする
-status: open  # open | addressed | wontfix
+status: addressed  # open | addressed | wontfix
 severity: medium  # high(頻発・手戻り大 / タスクをブロック) | medium(回避したが非効率) | low(軽微)
 source: admin
 phase: spec
 target: skills/spec
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-13
 synthesis: RETROSUM-001
 tags: [spec-authoring, test-strategy, narrow-requirement, rework]
 ---
@@ -41,3 +41,7 @@ tags: [spec-authoring, test-strategy, narrow-requirement, rework]
 ### 2026-07-11
 
 - 記録。SPEC-013(テスト実 DB 一本化)の planner 計画レビューの検収中に発見。ユーザー指摘 → admin 裁定(readerSpy/writerSpy を実 postgres Reader/Writer をラップする計数デコレータ化 + R2 例外条項を 2 類型へ拡張)で是正済みだが、Spec 起票時に分類観点があれば手戻りを避けられた摩擦として記録する。
+
+### 2026-07-13(addressed へ遷移)
+
+- RETROSUM-001 提案 4 として統括・適用: `skills/spec/SKILL.md` の「新規作成の手順」4 に、テスト戦略・テスト基盤を変更する Spec 向けの「ダブルを実基盤での観測可能性で分類し、観測不能な seam は最初から例外カテゴリに置く」チェック(`.claude/rules/testing.md` 相互参照)が追加された(コミット `9a9de7e`)。

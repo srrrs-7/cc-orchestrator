@@ -1,7 +1,7 @@
 ---
 id: RETRO-006
 title: checker の報告に DB 依存テストの実行環境(REQUIRE_DB / skip 有無)がなく検収で主張を検証できない
-status: open
+status: addressed
 severity: low
 source: checker
 phase: check
@@ -41,3 +41,7 @@ tags: [report-format, missing-field, db-tests, require-db]
 ### 2026-07-13
 
 - 記録。origin/main マージタスクの振り返り(/retro)で、checker 報告の主張と委譲指示(REQUIRE_DB 未設定)の不整合に気づき吸い上げた
+
+### 2026-07-13(addressed へ遷移)
+
+- RETROSUM-001 提案 5 として統括・適用(コミット `9a9de7e`): `agents/checker.md` の報告形式に「テスト実行環境(`REQUIRE_DB` の値 / DB 依存テストの実行・skip の別)」を必須化し、`rules/orchestration.md` 割り振り表の checker 行に「Go スタックの `make check` は build + test を含むため test 報告要件も checker に適用」の境界注記を追加。適用直後の checker 実行(tidy ターゲット追加の検証)で新形式が機能し、「REQUIRE_DB 未設定だが DB 到達により実行された」ことが報告から検収可能になったのを確認済み。
