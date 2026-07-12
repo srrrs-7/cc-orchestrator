@@ -103,6 +103,7 @@ type ProviderMetadata struct {
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
 	RevocationEndpoint                string   `json:"revocation_endpoint"`
+	IntrospectionEndpoint             string   `json:"introspection_endpoint,omitempty"`
 	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
 	EndSessionEndpoint                string   `json:"end_session_endpoint"`
 	JWKSURI                           string   `json:"jwks_uri"`
@@ -114,6 +115,16 @@ type ProviderMetadata struct {
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+}
+
+// IntrospectionResponse is the JSON body returned from POST /introspect
+// (RFC 7662 §2.2). Active is always present; Subject/Exp/Scope are
+// populated only when active is true.
+type IntrospectionResponse struct {
+	Active  bool   `json:"active"`
+	Subject string `json:"sub,omitempty"`
+	Exp     int64  `json:"exp,omitempty"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 // JWKSet is the JSON body returned from /.well-known/jwks.json,

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-037
 title: OAuth リソースサーバー向け access token audience 設計(app/api 連携)
-status: open
+status: resolved
 severity: medium
 created: 2026-07-12
 updated: 2026-07-12
@@ -63,3 +63,8 @@ AUTH-001 サンプル設計。SPEC-015 で横断 E2E を最短化するため au
 ### 2026-07-12
 
 - 起票。AUTH-002 ロードマップ Phase 3.2。
+
+### 2026-07-12 (resolved)
+
+- access token `aud` を `API_AUDIENCE`(`http://localhost:8081/api`)に分離。app/api は `AUTH_AUDIENCE` で検証。
+- 検証: `REQUIRE_DB=1 make -C app/auth check`、`make -C app/api check` 緑。
