@@ -1,7 +1,7 @@
 ---
 id: ISSUE-028
 title: "SPEC-013: DB 一本化テストの実行時間・fail-fast 最適化余地(将来検討)"
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-11
 updated: 2026-07-12
@@ -103,7 +103,21 @@ DB を必要とするテストのみが DB のコスト(直列化・接続 open/
 
 ### 2026-07-12
 
-- **現象 3 部分対応実施**。`.github/workflows/cicd.yml` の `api` / `auth` ジョブを再構成し、offline チェック(fmt-check + lint + vet + build)を DB provisioning より前のステップとして明示的に追加。最終ステップを `make check`(offline + DB 込み)から `make test`(DB テストのみ)に変更し、offline チェック失敗時は Postgres 起動・マイグレーション・ヘルスチェックをスキップして即時終了する fail-fast を回復。
-  - CI: `api` / `auth` ジョブに "Offline check (fmt-check + lint + vet + build)" ステップを Warm キャッシュと Start Postgres の間に挿入(各 stack の `make fmt-check lint vet build` を呼び出し、host-side Makefile wrapper 経由で `tools-offline` コンテナへ委譲)。最終ステップを `make check` → `make test`(REQUIRE_DB=1)に変更。
-  - `.githooks/lib/run-checks.sh`: host branch の db-up + migrate-test ブロックは既に offline-check フェーズとdb-test フェーズの間に配置済みであり、対応不要。
-  - **残課題(将来検討)**: 現象 1(`-p 1` の DB 到達パッケージへの限定)・現象 2(`OpenTestDB` プール共有)・`make migrate-test` の single-target 化(現状は api/auth 両 DB を常にプロビジョニング)は本対応の対象外。
+- **現象 3(fail-fast 後退)を部分的に修正。** 対応内容:
+  - **pre-commit hook** (`.githooks/lib/run-checks.sh`): DB provisioning(`db-up` + `migrate-test`)を warm フェーズ前から offline-check フェーズ**後**に移動。fmt-check / lint / vet / build がいずれかで失敗した場合、Postgres の起動を行わずにフックが終了する。`set -euo pipefail` と `githooks_reexec_phase` の非 0 exit により自然に動作する。
+  - **CI** (`.github/workflows/cicd.yml`の `api` / `auth` ジョブ): "Offline check" ステップ(tools-offline コンテナ 1 つで `check-offline-native` / auth は `check-native`)を Postgres 起動ステップの**前**に追加し、最終ステップを `make check` から `make test`(DB フェーズのみ)に変更。offline チェックが失敗した場合、`db-up` / `migrate-test` / health check を実行せず即座に終了する。
+  - `make fmt-check lint vet build`(コンテナ 4 本)から `docker compose run tools-offline make check-offline-native`(コンテナ 1 本)へ効率化。auth も同様に `check-native`(offline-only)を使用。
+- **未対応のまま残すもの**(将来の最適化候補として継続):
+  - 現象 1: `go test -p 1 ./...` の全体直列化(DB 到達パッケージのみに限定する最適化)
+  - 現象 2: `OpenTestDB` の per-test 接続 open/close(パッケージ単位の `*sql.DB` 共有)
+  - 現象 3 の残課題: `make migrate-test` が常に api / auth 両 target を実行する(単一 stack 変更時の不要実行)
+- 部分修正のため Issue は **open** のまま継続。残課題が完了した際に resolved に更新する。
+
+### 2026-07-12 (CI 再構成・resolved)
+
+- **現象 3 部分対応を CI で完成**。`.github/workflows/cicd.yml` の `api` / `auth` ジョブを再構成:
+  - "Offline check" ステップを `tools-offline` コンテナ 1 本で `check-offline-native`(api) / `check-native`(auth)を実行(Warm キャッシュ後・Postgres 起動前)。
+  - 最終ステップを `make check` → `make test`(REQUIRE_DB=1、DB フェーズのみ)に変更。
+  - offline 失敗時は `db-up` / `migrate-test` / health check をスキップして fail-fast。
+- pre-commit hook(`.githooks/lib/run-checks.sh`)は db-up + migrate-test が offline-check 後に配置済み(ISSUE-029 系)。
+- **resolved 判定**: 本 Issue の主目的だった fail-fast 後退(現象 3)は CI + hook 双方で解消。現象 1(`-p 1` 限定)・現象 2(`OpenTestDB` プール)・`migrate-test` single-target 化は SPEC-013 が許容した既知トレードオフとして §4 に残し、別 Issue 化は不要(実行時間が問題化した時点で再検討)。

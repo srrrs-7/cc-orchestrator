@@ -360,19 +360,27 @@ jobs:
   # a developer is working on), then a migration health check (down -> up)
   # scoped to `api_test` specifically (mirroring api-integration's own
   # up->down->up check, just against the test database instead of the dev
-  # one), then `make check` itself with `REQUIRE_DB=1` (SPEC-013 plan §1.5
+  # one), then `make test` itself with `REQUIRE_DB=1` (SPEC-013 plan §1.5
   # admin ruling: the regular CI/hook path for DB-backed tests must fail
   # loudly — `t.Fatal`, not a silent `t.Skip` — if the test DB connection
   # is ever unavailable through this path).
+  #
+  # ISSUE-028 partial fix (fail-fast ordering, 2026-07-12): the "Offline
+  # check" step below runs fmt-check + lint + vet + build (tools-offline,
+  # --network none) BEFORE Postgres is ever started.  If offline checks fail
+  # the job exits without paying the db-up + migrate-test cost.  The final
+  # "DB tests" step calls `make test` (DB phase only) so offline checks are
+  # not redundantly re-run.  This mirrors the split app/api/Makefile's own
+  # `check` target already enforces internally (check-offline-native first,
+  # test-native second); exposing it as explicit steps gives GitHub Actions
+  # a clean fail-fast boundary at the step level.
   #
   # The health-check step below invokes `docker compose run` directly
   # (bypassing app/migrator/Makefile's own `run` target, which has no
   # DB_NAME override) for the same reason the root Makefile's own
   # `migrate`/`migrate-test` targets do — see those targets' own comments.
   #
-  # SPEC-009 Phase C: the toolchain-image wiring (warm pass + `make check`)
-  # is unchanged from before SPEC-013; only the DB-provisioning steps below
-  # are new.
+  # SPEC-009 Phase C: toolchain-image wiring unchanged from before SPEC-013.
   # ---------------------------------------------------------------------------
   api:
     name: api (Go)
@@ -393,14 +401,19 @@ jobs:
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/api tools go mod download
 
-      # ISSUE-028 §4 現象3 fix: run offline checks (fmt-check + lint + vet +
-      # build) BEFORE Postgres is provisioned. A format / lint / vet / build
-      # failure exits immediately without paying the db-up + migrate-test cost
-      # — restoring the fail-fast that was lost when SPEC-013 folded DB
-      # provisioning into this job. Each host-side target delegates into
-      # tools-offline (network_mode:none) via the app/api/Makefile wrapper.
+      # ISSUE-028 partial fix: offline checks (fmt-check + lint + vet + build)
+      # run BEFORE Postgres is provisioned so a static-analysis failure exits
+      # immediately without paying the db-up + migrate-test cost — restoring
+      # the fail-fast that was lost when SPEC-013 folded DB provisioning into
+      # this job.  Single container via tools-offline (--network none /
+      # GOPROXY=off), calling check-offline-native directly (same path as
+      # `make check`'s own first line: $(OFFLINE) make check-offline-native).
+      # Module cache was already warmed by the "Warm Go module cache" step.
       - name: Offline check (fmt-check + lint + vet + build)
-        run: make fmt-check lint vet build
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
+            run --rm -w /workspace/app/api tools-offline make check-offline-native
 
       # `make -C "$GITHUB_WORKSPACE" ...` (rather than relying on this
       # job's own `defaults.run.working-directory: app/api`) because
@@ -460,12 +473,16 @@ jobs:
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
             run --rm -w /workspace/app/auth tools go mod download
 
-      # ISSUE-028 §4 現象3 fix: same offline-first ordering as the api job
-      # above — fmt-check + lint + vet + build run before any Postgres
-      # provisioning so a static-analysis failure exits without paying the
-      # db-up + migrate-test cost.
+      # ISSUE-028 partial fix: same offline-first ordering as the api job.
+      # app/auth/Makefile's `check-native` is the offline-only target
+      # (fmt-check-native + lint-native + vet-native + build-native; test
+      # is a separate DB-phase target in auth's Makefile, unlike api where
+      # `check-offline-native` is the named offline subset).
       - name: Offline check (fmt-check + lint + vet + build)
-        run: make fmt-check lint vet build
+        run: |
+          TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
+          docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
+            run --rm -w /workspace/app/auth tools-offline make check-native
 
       - name: Start Postgres (root make db-up)
         run: make -C "$GITHUB_WORKSPACE" db-up
