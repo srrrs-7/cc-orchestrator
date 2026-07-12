@@ -11,9 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	gooselib "github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"github.com/srrrs-7/cc-orchestrator/app/migrator/domain/migration"
 	"github.com/srrrs-7/cc-orchestrator/app/migrator/infra/postgres"
@@ -41,9 +43,11 @@ func NewRunner(cfg postgres.Config, dbName migration.DatabaseName, timeout time.
 	return &Runner{cfg: cfg, dbName: dbName, timeout: timeout}
 }
 
-// Run implements migration.Runner: it connects to r.dbName, sets
-// goose's dialect, and runs cmd (up/down/status) against
-// migrationsDir, bounded by r.timeout so a hung migration (e.g.
+// Run implements migration.Runner: it connects to r.dbName, acquires a
+// Postgres session-level advisory lock (pg_try_advisory_lock) via
+// goose's Provider API to serialise concurrent "goose up" runs across
+// multiple init containers (ISSUE-022), then runs cmd (up/down/status)
+// against migrationsDir, bounded by r.timeout so a hung migration (e.g.
 // blocked waiting on a lock another session holds on the target
 // database) fails fast instead of running forever -- this matters
 // because an ECS init container's dependsOn: SUCCESS gate (or a CI
@@ -62,17 +66,77 @@ func (r *Runner) Run(ctx context.Context, cmd migration.Command, migrationsDir s
 		}
 	}()
 
-	if err := gooselib.SetDialect("postgres"); err != nil {
-		return fmt.Errorf("set goose dialect: %w", err)
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("create postgres session locker: %w", err)
 	}
+
+	provider, err := gooselib.NewProvider(
+		gooselib.DialectPostgres,
+		db,
+		os.DirFS(migrationsDir),
+		gooselib.WithSessionLocker(locker),
+	)
+	if err != nil {
+		return fmt.Errorf("create goose provider (dir=%s): %w", migrationsDir, err)
+	}
+	defer func() {
+		if closeErr := provider.Close(); closeErr != nil {
+			slog.Error("migrator: close goose provider", "error", closeErr)
+		}
+	}()
 
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	if err := gooselib.RunContext(runCtx, cmd.String(), db, migrationsDir); err != nil {
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("run goose %s (dir=%s) exceeded timeout %s: %w", cmd, migrationsDir, r.timeout, err)
+
+	switch cmd.String() {
+	case "up":
+		results, err := provider.Up(runCtx)
+		if err != nil {
+			return wrapTimeoutErr(runCtx, err, cmd, migrationsDir, r.timeout)
 		}
-		return fmt.Errorf("run goose %s (dir=%s): %w", cmd, migrationsDir, err)
+		for _, res := range results {
+			slog.Info("migrator: applied migration",
+				"version", res.Source.Version,
+				"type", res.Source.Type,
+				"duration", res.Duration,
+			)
+		}
+	case "down":
+		result, err := provider.Down(runCtx)
+		if err != nil {
+			return wrapTimeoutErr(runCtx, err, cmd, migrationsDir, r.timeout)
+		}
+		if result != nil {
+			slog.Info("migrator: rolled back migration",
+				"version", result.Source.Version,
+				"type", result.Source.Type,
+				"duration", result.Duration,
+			)
+		}
+	case "status":
+		statuses, err := provider.Status(runCtx)
+		if err != nil {
+			return wrapTimeoutErr(runCtx, err, cmd, migrationsDir, r.timeout)
+		}
+		for _, s := range statuses {
+			slog.Info("migrator: migration status",
+				"version", s.Source.Version,
+				"state", s.State,
+				"applied_at", s.AppliedAt,
+			)
+		}
+	default:
+		return fmt.Errorf("migrator: unknown goose command %q", cmd)
 	}
 	return nil
+}
+
+// wrapTimeoutErr wraps err with timeout context when the run context
+// deadline was exceeded, producing an actionable error message.
+func wrapTimeoutErr(ctx context.Context, err error, cmd migration.Command, dir string, timeout time.Duration) error {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("run goose %s (dir=%s) exceeded timeout %s: %w", cmd, dir, timeout, err)
+	}
+	return fmt.Errorf("run goose %s (dir=%s): %w", cmd, dir, err)
 }
