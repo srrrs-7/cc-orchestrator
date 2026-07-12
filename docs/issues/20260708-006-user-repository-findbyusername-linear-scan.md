@@ -1,10 +1,10 @@
 ---
 id: ISSUE-006
 title: UserRepository.FindByUsername が map の線形走査(O(n))で、ユーザーストアが多数ユーザーに拡張されると劣化する
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
-updated: 2026-07-08
+updated: 2026-07-12
 specs: []  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -81,3 +81,8 @@ specs: []  # 関連Spec ID (例: [SPEC-002])
 - 事実確認: `app/auth/infra/memory/user_repository.go:61-77` が `byID` を線形走査(O(n))、`:42-57` の `FindByID` は直引き(O(1))であることを確認。username 索引は未保持(`:13-16`)。現状 seed 1 件のため実害ゼロ。
 - severity は **low** と判定。判定根拠: seed 1 件の現状では O(n)=O(1) 相当で性能影響がなく、多数ユーザー設計へ拡張した場合にのみ顕在化する予防的性能改善。回避策(二次インデックス追加)ありのため low(critical/high/medium ではないのは現に応答性能が損なわれていないため)。
 - 次にやること: ユーザーストアの多数ユーザー化を決めた時点で planner に計画化を依頼し、`byUsername` 二次インデックスを impl-api/tester/checker/review-performance で実施する。
+
+### 2026-07-12
+
+- 解消確認。SPEC-011 により `app/auth/infra/memory/user_repository.go` は削除済み(残存は `idp_session_store.go` のみ)。永続化は Postgres 一本化。
+- 事実: `users.username` に `UNIQUE` 制約(`app/auth/infra/postgres/schema/migrations/000001_create_auth.sql`)、`FindByUsername` は sqlc の `GetUserByUsername`(`WHERE username = $1`)で O(1) インデックスルックアップ(`app/auth/infra/postgres/user_repository.go`)。インメモリ O(n) 走査の問題は Postgres 移行により該当なし。
