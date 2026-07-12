@@ -46,7 +46,7 @@ export type GetTasksData = {
      */
     limit?: number;
     /**
-     * Number of tasks to skip (default 0)
+     * Number of tasks to skip (default 0, max 10000)
      */
     offset?: number;
   };
@@ -55,7 +55,7 @@ export type GetTasksData = {
 
 export type GetTasksErrors = {
   /**
-   * limit or offset is not an integer, limit is less than 1, or offset is negative
+   * limit or offset is not an integer, limit is less than 1, offset is negative, or offset exceeds 10000
    */
   400: RouteErrorResponse;
   /**
