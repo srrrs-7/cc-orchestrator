@@ -1,7 +1,7 @@
 ---
 id: ISSUE-045
 title: SPEC-010 R1 の「user/client は Reader-only、空 Writer は作らない」記述が、ISSUE-039 で追加された Writer 実装と矛盾している(仕様の陳腐化)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-12
 updated: 2026-07-12
@@ -80,3 +80,8 @@ ISSUE-039 の実装で SPEC-010 R1 の前提が覆ったが、SPEC-010 側の記
 
 - 起票。仕様準拠レビューで検出。SPEC-010 R1 の Reader-only 記述と、ISSUE-039 で追加された `app/auth/infra/postgres/client_writer.go` / `user_writer.go` の矛盾を確認した。SPEC-010 の経緯に上書きの記録が無い。
 - 関連: ISSUE-039(client/user 管理 API、resolved)、SPEC-010。修正は admin の spec skill による SPEC-010 更新で行う。
+
+### 2026-07-12 (resolved)
+
+- 修正(admin + spec skill): `docs/specs/20260710-010-db-cqrs-read-write-separation.md` の R1 該当 bullet に ⚠️ 注記を追加し、ISSUE-039 で user/client に Writer(`client_writer.go` / `user_writer.go`)が追加された事実を明記。§6 経緯 2026-07-12 に是正理由(実装を正としてドキュメントを現実に同期・コア設計は不変)を追記した。SPEC-010 の status は done 維持。
+- 検証: 仕様側の陳腐化のみで実装は正常(ドキュメントレベルの是正)。実装と一次情報の矛盾が解消したため Major(仕様準拠)解消につき resolved。

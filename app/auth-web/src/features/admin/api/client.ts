@@ -11,6 +11,10 @@ import {
   type CreateUserRequest,
   type CreateUserResponse,
   createUserResponseSchema,
+  listClientsResponseSchema,
+  listUsersResponseSchema,
+  type ListClientsResponse,
+  type ListUsersResponse,
 } from "./schema";
 
 const rawBaseUrl = import.meta.env.VITE_AUTH_BASE_URL;
@@ -58,7 +62,7 @@ async function adminFetch<T>(path: string, init: RequestInit, schema: z.ZodType<
 
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${apiKey}`);
-  if (!headers.has("Content-Type")) {
+  if (init.body !== undefined && init.body !== null && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -114,4 +118,12 @@ export async function createClient(input: CreateClientRequest): Promise<CreateCl
     },
     createClientResponseSchema,
   );
+}
+
+export async function fetchUsers(): Promise<ListUsersResponse> {
+  return adminFetch("/admin/users", { method: "GET" }, listUsersResponseSchema);
+}
+
+export async function fetchClients(): Promise<ListClientsResponse> {
+  return adminFetch("/admin/clients", { method: "GET" }, listClientsResponseSchema);
 }

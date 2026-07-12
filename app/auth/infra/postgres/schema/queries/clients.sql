@@ -11,6 +11,12 @@ SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_se
 FROM clients
 WHERE id = $1;
 
+-- name: ListClients :many
+-- Backs client.Repository.ListAll for the admin management API.
+SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash
+FROM clients
+ORDER BY id;
+
 -- name: UpsertClient :exec
 -- Backs the startup idempotent seed (infra/postgres/seed.go's
 -- SeedClient), not client.Repository itself (which is read-only).

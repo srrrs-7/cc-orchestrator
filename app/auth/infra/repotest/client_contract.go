@@ -115,6 +115,45 @@ func RunClientRepositoryContract(t *testing.T, newRepo NewClientRepository) {
 			t.Errorf("RedirectURIs() = %v, want empty", got.RedirectURIs())
 		}
 	})
+
+	t.Run("ListAll returns every seeded client ordered by id", func(t *testing.T) {
+		c1 := newTestClient(t, "client-a",
+			[]string{"http://localhost:3000/a"},
+			[]string{"openid"},
+			[]string{"code"},
+			[]string{"authorization_code"},
+		)
+		c2 := newTestClient(t, "client-b",
+			[]string{"http://localhost:3000/b"},
+			[]string{"openid", "profile"},
+			[]string{"code"},
+			[]string{"authorization_code"},
+		)
+		repo := newRepo(t, c2, c1)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("ListAll() len = %d, want 2", len(got))
+		}
+		if got[0].ID().String() != "client-a" || got[1].ID().String() != "client-b" {
+			t.Errorf("ListAll() order = [%q, %q], want [client-a, client-b]", got[0].ID(), got[1].ID())
+		}
+	})
+
+	t.Run("ListAll on an empty store returns an empty slice", func(t *testing.T) {
+		repo := newRepo(t)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("ListAll() len = %d, want 0", len(got))
+		}
+	})
 }
 
 func newTestClient(t *testing.T, id string, redirectURIs, scopes, responseTypes, grantTypes []string) *client.Client {

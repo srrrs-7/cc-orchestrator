@@ -1,7 +1,7 @@
 ---
 id: ISSUE-043
 title: app/iac の ISSUER が http スキームのため、IdP セッション Cookie に Secure 属性が付かず SSL ストリッピングでハイジャック可能
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: high  # critical | high | medium | low
 created: 2026-07-12
 updated: 2026-07-12
@@ -80,3 +80,8 @@ impl-iac が ISSUER を https スキームに変更する。あわせて app/aut
 
 - 起票。セキュリティレビューで検出。`app/iac/envs/dev/main.tf:248` の http ISSUER と `app/auth/route/router.go:89-92` の `SecureCookiesFromIssuer`(https prefix 判定)を実地確認した。CloudFront は redirect-to-https で実アクセスは HTTPS のため、Cookie が不要に Secure:false になる。
 - 関連: ISSUE-014(iac デプロイ経路、resolved)、SPEC-015。
+
+### 2026-07-12 (resolved)
+
+- 修正(impl-iac): `main.tf` の `ISSUER` を `local.auth_issuer`(`https://${cloudfront_domain_name}/auth`)経由にして https 化した(ISSUE-041 で導入した local を共用し、`AUTH_ISSUER` と自動一致)。
+- 検証: review-security が `SecureCookiesFromIssuer(issuer)` が https issuer で true を返し `idp_session` / `idp_pending` に Secure 属性が付くこと、CloudFront が全 behavior で redirect-to-https を強制し scheme 整合が取れることを確認した。Major 解消につき resolved。

@@ -19,6 +19,21 @@ export const createUserResponseSchema = z.object({
 
 export type CreateUserResponse = z.infer<typeof createUserResponseSchema>;
 
+export const adminUserSchema = z.object({
+  user_id: z.string(),
+  username: z.string(),
+  name: z.string(),
+  email: z.string(),
+});
+
+export type AdminUser = z.infer<typeof adminUserSchema>;
+
+export const listUsersResponseSchema = z.object({
+  users: z.array(adminUserSchema),
+});
+
+export type ListUsersResponse = z.infer<typeof listUsersResponseSchema>;
+
 export const createClientFormSchema = z
   .object({
     client_id: z.string().trim().min(1, "Client ID is required"),
@@ -61,6 +76,23 @@ export const createClientResponseSchema = z.object({
 });
 
 export type CreateClientResponse = z.infer<typeof createClientResponseSchema>;
+
+export const adminClientSchema = z.object({
+  client_id: z.string(),
+  redirect_uris: z.array(z.string()),
+  allowed_scopes: z.array(z.string()),
+  response_types: z.array(z.string()),
+  grant_types: z.array(z.string()),
+  is_confidential: z.boolean(),
+});
+
+export type AdminClient = z.infer<typeof adminClientSchema>;
+
+export const listClientsResponseSchema = z.object({
+  clients: z.array(adminClientSchema),
+});
+
+export type ListClientsResponse = z.infer<typeof listClientsResponseSchema>;
 
 export const adminErrorResponseSchema = z.object({
   error: z.string(),

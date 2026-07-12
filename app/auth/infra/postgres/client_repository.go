@@ -49,6 +49,24 @@ func (r *ClientRepository) FindByID(ctx context.Context, id client.ClientID) (*c
 	return c, nil
 }
 
+// ListAll returns every Client ordered by id. An empty table yields a
+// nil slice, not an error.
+func (r *ClientRepository) ListAll(ctx context.Context) ([]*client.Client, error) {
+	rows, err := r.q.ListClients(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list clients: %w", err)
+	}
+	clients := make([]*client.Client, 0, len(rows))
+	for _, row := range rows {
+		c, err := rowToClient(row)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: list clients: %w", err)
+		}
+		clients = append(clients, c)
+	}
+	return clients, nil
+}
+
 // rowToClient reconstructs a *client.Client from a persisted row,
 // decoding the four jsonb-encoded multi-valued attributes
 // (redirect_uris / allowed_scopes / response_types / grant_types) back

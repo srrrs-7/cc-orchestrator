@@ -19,6 +19,9 @@ import "context"
 type Repository interface {
 	FindByID(ctx context.Context, id UserID) (*User, error)
 	FindByUsername(ctx context.Context, username Username) (*User, error)
+	// ListAll returns every registered user ordered by id. An empty
+	// store yields a nil slice, not an error.
+	ListAll(ctx context.Context) ([]*User, error)
 }
 
 // Writer is the write-side persistence boundary for the User

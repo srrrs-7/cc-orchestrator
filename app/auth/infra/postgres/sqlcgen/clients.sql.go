@@ -39,6 +39,43 @@ func (q *Queries) GetClientByID(ctx context.Context, id string) (Client, error) 
 	return i, err
 }
 
+const listClients = `-- name: ListClients :many
+SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash
+FROM clients
+ORDER BY id
+`
+
+// Backs client.Repository.ListAll for the admin management API.
+func (q *Queries) ListClients(ctx context.Context) ([]Client, error) {
+	rows, err := q.db.QueryContext(ctx, listClients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Client
+	for rows.Next() {
+		var i Client
+		if err := rows.Scan(
+			&i.ID,
+			&i.RedirectUris,
+			&i.AllowedScopes,
+			&i.ResponseTypes,
+			&i.GrantTypes,
+			&i.ClientSecretHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertClient = `-- name: UpsertClient :exec
 INSERT INTO clients (id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash)
 VALUES ($1, $2, $3, $4, $5, $6)

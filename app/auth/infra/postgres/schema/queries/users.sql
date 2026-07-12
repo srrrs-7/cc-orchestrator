@@ -19,6 +19,12 @@ SELECT id, username, password_hash, profile_name, profile_email
 FROM users
 WHERE username = $1;
 
+-- name: ListUsers :many
+-- Backs user.Repository.ListAll for the admin management API.
+SELECT id, username, password_hash, profile_name, profile_email
+FROM users
+ORDER BY id;
+
 -- name: UpsertUser :exec
 -- Backs the startup idempotent seed (infra/postgres/seed.go's
 -- SeedUser), not user.Repository itself (which is read-only). Inserts

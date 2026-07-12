@@ -11,20 +11,33 @@ import (
 // AdminService handles administrative operations for client and user
 // management (ISSUE-039). It is a thin application-layer coordinator
 // between the admin HTTP handler (route/admin_handler.go) and the
-// write-side persistence ports (client.Writer / user.Writer).
+// write-side persistence ports (client.Writer / user.Writer) plus the
+// read-side ports used for listing (client.Repository / user.Repository).
 //
 // AdminService is intentionally separate from AuthorizationService so
-// the composition root can wire write-pool connections only here,
-// leaving the read-only authorization path on the reader pool.
+// the composition root can wire write-pool connections only for
+// mutations, leaving the read-only authorization path on the reader pool.
 type AdminService struct {
-	clients client.Writer
-	users   user.Writer
+	clients      client.Writer
+	users        user.Writer
+	clientReader client.Repository
+	userReader   user.Repository
 }
 
 // NewAdminService constructs an AdminService backed by the given
-// write-side persistence ports.
-func NewAdminService(clients client.Writer, users user.Writer) *AdminService {
-	return &AdminService{clients: clients, users: users}
+// persistence ports.
+func NewAdminService(
+	clients client.Writer,
+	users user.Writer,
+	clientReader client.Repository,
+	userReader user.Repository,
+) *AdminService {
+	return &AdminService{
+		clients:      clients,
+		users:        users,
+		clientReader: clientReader,
+		userReader:   userReader,
+	}
 }
 
 // CreateClient persists c via the client.Writer port. The caller is
@@ -46,4 +59,22 @@ func (s *AdminService) CreateUser(ctx context.Context, u *user.User) error {
 		return fmt.Errorf("admin: create user: %w", err)
 	}
 	return nil
+}
+
+// ListClients returns every registered OAuth client ordered by id.
+func (s *AdminService) ListClients(ctx context.Context) ([]*client.Client, error) {
+	clients, err := s.clientReader.ListAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("admin: list clients: %w", err)
+	}
+	return clients, nil
+}
+
+// ListUsers returns every registered resource owner ordered by id.
+func (s *AdminService) ListUsers(ctx context.Context) ([]*user.User, error) {
+	users, err := s.userReader.ListAll(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("admin: list users: %w", err)
+	}
+	return users, nil
 }

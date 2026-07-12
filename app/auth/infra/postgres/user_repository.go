@@ -68,6 +68,24 @@ func (r *UserRepository) FindByUsername(ctx context.Context, username user.Usern
 	return u, nil
 }
 
+// ListAll returns every User ordered by id. An empty table yields a
+// nil slice, not an error.
+func (r *UserRepository) ListAll(ctx context.Context) ([]*user.User, error) {
+	rows, err := r.q.ListUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list users: %w", err)
+	}
+	users := make([]*user.User, 0, len(rows))
+	for _, row := range rows {
+		u, err := rowToUser(row)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: list users: %w", err)
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
 // rowToUser reconstructs a *user.User from a persisted row.
 func rowToUser(row sqlcgen.User) (*user.User, error) {
 	id, err := user.ParseUserID(row.ID)

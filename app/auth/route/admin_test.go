@@ -65,7 +65,7 @@ func newAdminTestHandler(t *testing.T) http.Handler {
 	userInfoSvc := service.NewUserInfoService(userRepo, verifier, testIssuer, testAPIAudience)
 	discoverySvc := service.NewDiscoveryService(testIssuer, keyProvider)
 	introspectSvc := service.NewIntrospectionService(verifier, testIssuer, testAPIAudience)
-	adminSvc := service.NewAdminService(clientWriter, userWriter)
+	adminSvc := service.NewAdminService(clientWriter, userWriter, clientRepo, userRepo)
 
 	return route.NewRouter(authSvc, authnSvc, consentSvc, clientRepo, userInfoSvc, discoverySvc, introspectSvc, adminSvc, route.RouterConfig{
 		Issuer:      testIssuer,
@@ -400,5 +400,150 @@ func TestAdmin_CreateUser_WrongKey(t *testing.T) {
 	rec := doAdminCreateUser(t, h, "bad-key", body)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// List endpoints
+// ---------------------------------------------------------------------------
+
+func doAdminListUsers(t *testing.T, h http.Handler, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func doAdminListClients(t *testing.T, h http.Handler, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/admin/clients", nil)
+	if key != "" {
+		req.Header.Set("X-Admin-Key", key)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAdmin_ListUsers_Empty(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	rec := doAdminListUsers(t, h, testAdminKey)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Users []struct {
+			UserID   string `json:"user_id"`
+			Username string `json:"username"`
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (body=%q)", err, rec.Body.String())
+	}
+	if len(resp.Users) != 0 {
+		t.Fatalf("users len = %d, want 0", len(resp.Users))
+	}
+}
+
+func TestAdmin_ListUsers_AfterCreate(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	body := map[string]any{
+		"user_id":  "list-user-001",
+		"username": "lister",
+		"password": "correct-horse-battery-staple",
+		"name":     "Lister",
+		"email":    "lister@example.com",
+	}
+	createRec := doAdminCreateUser(t, h, testAdminKey, body)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", createRec.Code, http.StatusCreated)
+	}
+
+	rec := doAdminListUsers(t, h, testAdminKey)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Users []struct {
+			UserID   string `json:"user_id"`
+			Username string `json:"username"`
+			Name     string `json:"name"`
+			Email    string `json:"email"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (body=%q)", err, rec.Body.String())
+	}
+	if len(resp.Users) != 1 {
+		t.Fatalf("users len = %d, want 1", len(resp.Users))
+	}
+	if resp.Users[0].UserID != "list-user-001" {
+		t.Errorf("user_id = %q, want %q", resp.Users[0].UserID, "list-user-001")
+	}
+	if resp.Users[0].Email != "lister@example.com" {
+		t.Errorf("email = %q, want %q", resp.Users[0].Email, "lister@example.com")
+	}
+}
+
+func TestAdmin_ListClients_AfterCreate(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	body := map[string]any{
+		"client_id":      "list-client-001",
+		"redirect_uris":  []string{"https://example.com/callback"},
+		"allowed_scopes": []string{"openid", "profile"},
+		"response_types": []string{"code"},
+		"grant_types":    []string{"authorization_code"},
+	}
+	createRec := doAdminCreateClient(t, h, testAdminKey, body)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", createRec.Code, http.StatusCreated)
+	}
+
+	rec := doAdminListClients(t, h, testAdminKey)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Clients []struct {
+			ClientID       string   `json:"client_id"`
+			RedirectURIs   []string `json:"redirect_uris"`
+			AllowedScopes  []string `json:"allowed_scopes"`
+			ResponseTypes  []string `json:"response_types"`
+			GrantTypes     []string `json:"grant_types"`
+			IsConfidential bool     `json:"is_confidential"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (body=%q)", err, rec.Body.String())
+	}
+	if len(resp.Clients) != 1 {
+		t.Fatalf("clients len = %d, want 1", len(resp.Clients))
+	}
+	if resp.Clients[0].ClientID != "list-client-001" {
+		t.Errorf("client_id = %q, want %q", resp.Clients[0].ClientID, "list-client-001")
+	}
+	if len(resp.Clients[0].AllowedScopes) != 2 {
+		t.Errorf("allowed_scopes = %v, want len 2", resp.Clients[0].AllowedScopes)
+	}
+}
+
+func TestAdmin_ListUsers_MissingKey(t *testing.T) {
+	h := newAdminTestHandler(t)
+
+	rec := doAdminListUsers(t, h, "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

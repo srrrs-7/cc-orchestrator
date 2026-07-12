@@ -58,6 +58,42 @@ func (q *Queries) GetUserByUsername(ctx context.Context, username string) (User,
 	return i, err
 }
 
+const listUsers = `-- name: ListUsers :many
+SELECT id, username, password_hash, profile_name, profile_email
+FROM users
+ORDER BY id
+`
+
+// Backs user.Repository.ListAll for the admin management API.
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Username,
+			&i.PasswordHash,
+			&i.ProfileName,
+			&i.ProfileEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertUser = `-- name: UpsertUser :exec
 INSERT INTO users (id, username, password_hash, profile_name, profile_email)
 VALUES ($1, $2, $3, $4, $5)

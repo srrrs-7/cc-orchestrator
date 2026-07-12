@@ -123,6 +123,10 @@ type Querier interface {
 	// through rotation; NULL means not available (maps to time.Time{} in Go --
 	// see ISSUE-038).
 	InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error
+	// Backs client.Repository.ListAll for the admin management API.
+	ListClients(ctx context.Context) ([]Client, error)
+	// Backs user.Repository.ListAll for the admin management API.
+	ListUsers(ctx context.Context) ([]User, error)
 	// Bulk eviction companion to DeleteExpiredAuthCode (ISSUE-015): deletes ALL
 	// rows whose TTL has elapsed in a single statement. Called by the background
 	// purge ticker in cmd/authz/main.go (every 15 min) so expired authorization

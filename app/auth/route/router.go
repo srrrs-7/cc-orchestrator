@@ -80,7 +80,9 @@ func NewRouter(
 			return requireAdminAuth(cfg.AdminAPIKey, http.HandlerFunc(h))
 		}
 		mux.Handle("POST /admin/clients", withAuth(admin.handleCreateClient))
+		mux.Handle("GET /admin/clients", withAuth(admin.handleListClients))
 		mux.Handle("POST /admin/users", withAuth(admin.handleCreateUser))
+		mux.Handle("GET /admin/users", withAuth(admin.handleListUsers))
 	}
 
 	// securityHeaders wraps every route (including /admin/*, which is

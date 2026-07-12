@@ -3,6 +3,8 @@ import { App } from "./App";
 import { AdminKeyGate } from "../features/admin/components/AdminKeyForm";
 import { CreateClientForm } from "../features/admin/components/CreateClientForm";
 import { CreateUserForm } from "../features/admin/components/CreateUserForm";
+import { ClientList } from "../features/admin/components/ClientList";
+import { UserList } from "../features/admin/components/UserList";
 import { AdminKeyForm } from "../features/admin/components/AdminKeyForm";
 import { Card, CardHeader } from "../shared/ui/Card";
 import { Alert } from "../shared/ui/Alert";
@@ -31,8 +33,14 @@ function OverviewPage() {
           </ul>
         </Card>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <CreateUserForm />
-          <CreateClientForm />
+          <div className="flex flex-col gap-6">
+            <UserList />
+            <CreateUserForm />
+          </div>
+          <div className="flex flex-col gap-6">
+            <ClientList />
+            <CreateClientForm />
+          </div>
         </div>
       </div>
     </AdminKeyGate>
@@ -42,7 +50,10 @@ function OverviewPage() {
 function UsersPage() {
   return (
     <AdminKeyGate>
-      <CreateUserForm />
+      <div className="flex flex-col gap-6">
+        <UserList />
+        <CreateUserForm />
+      </div>
     </AdminKeyGate>
   );
 }
@@ -50,7 +61,10 @@ function UsersPage() {
 function ClientsPage() {
   return (
     <AdminKeyGate>
-      <CreateClientForm />
+      <div className="flex flex-col gap-6">
+        <ClientList />
+        <CreateClientForm />
+      </div>
     </AdminKeyGate>
   );
 }

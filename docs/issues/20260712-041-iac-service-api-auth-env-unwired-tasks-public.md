@@ -1,7 +1,7 @@
 ---
 id: ISSUE-041
 title: app/iac の service_api に認証 env 3 変数(AUTH_ISSUER/AUTH_JWKS_URL/AUTH_AUDIENCE)が未配線で、terraform apply された Task API が無認証で公開される
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: critical  # critical | high | medium | low
 created: 2026-07-12
 updated: 2026-07-12
@@ -86,3 +86,9 @@ impl-iac が `module.service_api` の environment に認証 3 変数を追加す
 
 - 起票。リポジトリ全体のセキュリティ / spec 準拠レビューで検出。`app/iac/envs/dev/main.tf:135-141` の service_api environment に `AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE` が無いこと、`app/api/cmd/api/env.go:157-186` が全未設定を正常系として許容すること(authEnabled() が false になる)を実地確認した。
 - 関連: ISSUE-014(app/iac の auth/web デプロイ経路整備、resolved)。SPEC-015 R12/R13(Bearer JWT 必須設計)。
+
+### 2026-07-12 (resolved)
+
+- 修正(impl-iac): `app/iac/envs/dev/main.tf` に `locals`(`auth_issuer` / `auth_audience` / `auth_jwks_url`)を新設し、`module.cdn.cloudfront_domain_name` 出力から機械的に導出。`module.service_api` の environment に `AUTH_ISSUER` / `AUTH_JWKS_URL` / `AUTH_AUDIENCE` を配線。あわせて aud 不一致で全トークンが reject されるのを防ぐため `module.service_auth` に `API_AUDIENCE` を同値(`local.auth_audience`)で配線した。必須変数化ではなく「常に導出される local」にすることで「未配線 = 無認証公開」の状態が構造的に発生し得ない fail-closed 設計とした(app/api の env 契約 SPEC-015 R13 は不変)。
+- 検証: checker が `app/iac` `make check`(fmt-check / validate / lint / security)green(security の trivy 指摘は既存 ISSUE-002 系のみ)。review-security が「発行 aud = 検証 aud が完全一致」「JWKS URL / issuer が発行↔検証で一致」「3 変数が常に非空で構造的に fail-closed」を断定確認した。Blocker 解消につき resolved。
+- 補足(今回対応外): app/api 側 env の「3 変数全未設定 = dev opt-out」を本番相当で fail-closed にするかは設計判断として別途検討可(今回は iac 配線で Blocker を閉じた)。

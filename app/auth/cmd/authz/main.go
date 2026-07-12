@@ -171,7 +171,7 @@ func run() error {
 	// no key → no admin routes registered, ISSUE-039).
 	var adminSvc *service.AdminService
 	if e.AdminAPIKey != "" {
-		adminSvc = service.NewAdminService(clientWriter, userWriter)
+		adminSvc = service.NewAdminService(clientWriter, userWriter, clientRepo, userRepo)
 		slog.Info("authz: admin API enabled")
 	} else {
 		slog.Warn("authz: ADMIN_API_KEY not set; admin routes disabled")
