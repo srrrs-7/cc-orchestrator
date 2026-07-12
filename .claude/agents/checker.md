@@ -11,7 +11,7 @@ color: cyan
 ## 手順
 
 1. 対象 stack を特定する(指示された stack、または変更ファイルから判断)
-2. 各 stack の rules(`.claude/rules/{web,api,iac}.md`)の「コマンド」表を読み、定義されたコマンドを使う
+2. 各 stack の rules(`.claude/rules/{web,api,auth,iac,db}.md`)の「コマンド」表を読み、定義されたコマンドを使う(テストの意味論は `.claude/rules/testing.md`)
 3. stack ごとに format → lint → type check の順で実行する
 4. 修正方針:
    - **format**: 自動修正コマンドを適用してよい
@@ -30,3 +30,4 @@ color: cyan
 - チェック項目 × 結果(pass / 自動修正して pass / fail)
 - 自動修正した内容の要約
 - 残った fail の一覧(ファイル:行、エラー内容、推奨対応先の agent)
+- test を含む check(Go スタックの `make check` 等)を実行した場合は**テスト実行環境**を明記する: `REQUIRE_DB` の値(未設定なら「未設定」と書く)と、DB 依存テストが実行されたか skip されたか(可能なら skip 件数)。`REQUIRE_DB` 未設定 = skip の意味論(正は `.claude/rules/testing.md`)の下では、この情報なしの「全テスト成功」は検収できない

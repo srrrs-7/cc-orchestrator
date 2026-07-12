@@ -83,7 +83,21 @@ WORKDIR    := --workdir /workspace/app/auth
 
 # tools-offline (network_mode:none): the execution service for the
 # offline phase -- fmt/fmt-check/lint/vet/build/sqlc/migrate-create.
+# `go mod tidy` (below) is the one exception that needs network; see
+# ONLINE for that lane.
 OFFLINE  := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools-offline
+# tools (network enabled; compose.tools.yml file header's "deps" lane,
+# the same one app/web/Makefile's `install` and app/api/Makefile's
+# `tidy` use): reserved for phases that must reach the module proxy.
+# `go mod tidy` needs to resolve/verify module metadata (and fetch
+# anything not already in the shared gomodcache volume, e.g. after a
+# manual go.mod edit or a merge conflict), which `tools-offline`'s
+# GOPROXY=off would make fail -- unlike sqlc/goose/goimports (installed
+# CLIs invoked by binary name, per compose.tools.yml's own header
+# comment), `go mod tidy` is the `go` toolchain itself doing real
+# proxy/module-graph work, so it stays on this lane rather than
+# tools-offline.
+ONLINE   := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools
 # tools-db (postgres-reachable, no internet egress; see DB_COMPOSE
 # above) + compose.yml layered in, for the test/check DB phase.
 # Deliberately stops short of the service name/command: `docker compose
@@ -205,6 +219,10 @@ signing-keys-native: ## RSA 署名鍵リングを生成する (.secrets/auth-sig
 rotate-signing-keys-native: ## 既存の署名鍵をローテーションする (旧 active 鍵を verify-only に降格し新しい鍵を生成)
 	go run ./cmd/keygen -out $(SIGNING_KEYS_OUT) -rotate
 
+.PHONY: tidy-native
+tidy-native: ## go.mod/go.sum を整理する (go mod tidy。check には含めない)
+	go mod tidy
+
 else
 # =============================================================================
 # Host (IN_TOOLBOX unset) -- transparent delegation into the toolbox.
@@ -278,6 +296,10 @@ auth-signing-keys: ## RSA 署名鍵リングを生成する (.secrets/auth-signi
 .PHONY: rotate-signing-keys
 rotate-signing-keys: ## 署名鍵をローテーションする (旧 active 鍵を verify-only に降格し新しい active 鍵を追加。JWKS overlap 対応)
 	$(OFFLINE) make rotate-signing-keys-native SIGNING_KEYS_OUT=$(SIGNING_KEYS_OUT)
+
+.PHONY: tidy
+tidy: ## go.mod/go.sum を整理する (go mod tidy; ネットワーク有効な tools 経由。check には含めない)
+	$(ONLINE) make tidy-native
 
 endif
 

@@ -8,7 +8,7 @@ phase: orchestration
 target: rules/orchestration.md  # 併記: rules/workflow.md(維持作業の軽量フロー欠落)
 created: 2026-07-13
 updated: 2026-07-13
-synthesis:
+synthesis: RETROSUM-001
 tags: [missing-role, whitelist-gap, git-ops, ambiguous-rule]
 ---
 

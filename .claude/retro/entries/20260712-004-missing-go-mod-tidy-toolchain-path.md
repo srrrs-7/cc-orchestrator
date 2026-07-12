@@ -8,7 +8,7 @@ phase: impl
 target: rules/api.md  # 同型の欠落: rules/auth.md / rules/db.md(と各 Go スタックの Makefile)
 created: 2026-07-12
 updated: 2026-07-12
-synthesis:
+synthesis: RETROSUM-001
 tags: [missing-command, spec-009, makefile-gap, duplicated-workaround]
 ---
 

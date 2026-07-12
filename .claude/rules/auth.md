@@ -34,6 +34,7 @@ confidential client(client secret 認証)・API リソースサーバー向け a
 | 上記すべて | `make check` |
 | 署名鍵リング生成 | `make auth-signing-keys`(`.secrets/auth-signing-keys.json` を生成。ISSUE-036。生成であり検査ではないため `make check` には含めない) |
 | 署名鍵ローテーション | `make rotate-signing-keys`(旧 active 鍵を verify-only に降格し新 active 鍵を追加 = JWKS overlap 維持) |
+| 依存解決(go.mod 編集・merge 競合解消の後) | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。生成系と同様 `make check` には含めない) |
 
 ## レイアウト
 

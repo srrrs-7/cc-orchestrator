@@ -84,6 +84,17 @@ WORKDIR    := --workdir /workspace/app/api
 # migrate-create all run fully offline (no deps/install phase exists in
 # this Makefile that would need network).
 OFFLINE  := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools-offline
+# tools (network enabled; compose.tools.yml file header's "deps" lane,
+# the same one app/web/Makefile's `install` uses): reserved for phases
+# that must reach the module proxy. `go mod tidy` needs to resolve/verify
+# module metadata (and fetch anything not already in the shared
+# gomodcache volume, e.g. after a manual go.mod edit or a merge
+# conflict), which `tools-offline`'s GOPROXY=off would make fail --
+# unlike sqlc/goose/swag/goimports (installed CLIs invoked by binary
+# name, per compose.tools.yml's own header comment), `go mod tidy` is
+# the `go` toolchain itself doing real proxy/module-graph work, so it
+# stays on this lane rather than tools-offline.
+ONLINE   := $(TOOLBOX_ENV) $(COMPOSE) run --rm $(WORKDIR) tools
 # tools-db (postgres-reachable, no internet egress; SPEC-009 R6) +
 # compose.yml layered in, for `test`'s DB phase only (see DB_COMPOSE
 # above). Deliberately stops short of the service name/command:
@@ -226,6 +237,10 @@ migrate-create-native: ## 新しいマイグレーションファイルを作成
 	@if [ -z "$(name)" ]; then echo "usage: make migrate-create name=<slug>"; exit 1; fi
 	$(GOOSE) -dir $(MIGRATIONS_DIR) create $(name) sql
 
+.PHONY: tidy-native
+tidy-native: ## go.mod/go.sum を整理する (go mod tidy。check には含めない)
+	go mod tidy
+
 else
 # =============================================================================
 # Host (IN_TOOLBOX unset) -- transparent delegation into the toolbox.
@@ -289,6 +304,10 @@ sqlc: ## sqlc でクエリ (infra/postgres/schema/queries) からコード (infr
 .PHONY: migrate-create
 migrate-create: ## 新しいマイグレーションファイルを作成する (例: make migrate-create name=add_foo_column)
 	$(OFFLINE) make migrate-create-native name=$(name)
+
+.PHONY: tidy
+tidy: ## go.mod/go.sum を整理する (go mod tidy; ネットワーク有効な tools 経由。check には含めない)
+	$(ONLINE) make tidy-native
 
 endif
 

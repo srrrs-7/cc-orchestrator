@@ -8,7 +8,7 @@ phase: check
 target: agents/checker.md  # 併記: orchestration.md 割り振り表の checker/tester 境界(make check が test を含む)
 created: 2026-07-13
 updated: 2026-07-13
-synthesis:
+synthesis: RETROSUM-001
 tags: [report-format, missing-field, db-tests, require-db]
 ---
 

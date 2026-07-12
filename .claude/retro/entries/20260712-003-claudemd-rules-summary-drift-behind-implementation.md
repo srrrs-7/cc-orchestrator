@@ -8,7 +8,7 @@ phase: orchestration  # spec | plan | test | impl | check | review | orchestrati
 target: CLAUDE.md
 created: 2026-07-12
 updated: 2026-07-12
-synthesis:   # 統括レポートで扱われたら RETROSUM-NNN を記入(未統括なら空)
+synthesis: RETROSUM-001
 tags: [doc-drift, missing-command, stale-summary]
 ---
 

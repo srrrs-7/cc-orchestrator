@@ -20,6 +20,7 @@ paths:
 | test | `make test`(race 検査は `make test-race`) |
 | 上記すべて | `make check` |
 | OpenAPI 契約生成 | `make openapi`(swag v2 注釈から `docs/openapi.yaml` を生成。SPEC-003。生成であり検査ではないため `make check` には含めない) |
+| 依存解決(go.mod 編集・merge 競合解消の後) | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。生成系と同様 `make check` には含めない) |
 
 ## レイアウト
 

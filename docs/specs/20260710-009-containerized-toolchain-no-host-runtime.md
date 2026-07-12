@@ -4,7 +4,7 @@ title: 開発ツールチェーンのコンテナ隔離(ホスト runtime 不要
 status: in-progress  # draft | approved | in-progress | done | dropped | superseded
 created: 2026-07-10
 updated: 2026-07-11
-issues: [ISSUE-026, ISSUE-027, ISSUE-029]  # 関連Issue ID (例: [ISSUE-003])
+issues: [ISSUE-026, ISSUE-027, ISSUE-029, ISSUE-054]  # 関連Issue ID (例: [ISSUE-003])
 supersedes: null # 置き換える旧Spec ID
 ---
 

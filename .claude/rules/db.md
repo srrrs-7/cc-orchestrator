@@ -35,13 +35,14 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 | test DB の作成 + マイグレーション適用(`api_test` / `auth_test`) | リポジトリルート | `make migrate-test`(`db-up` を前提とし、`app/migrator` を `DB_NAME=api_test -target api` / `DB_NAME=auth_test -target auth` で 2 回実行する) |
 | マイグレーション適用(api・auth 両方、ローカル) | リポジトリルート | `make migrate`(`db-up` を前提ターゲットとし、`app/migrator` を `-target api` / `-target auth` で 2 回実行する) |
 | マイグレーション適用(任意の target・command を直接指定) | `app/migrator` | `go run ./cmd/migrator -target api\|auth [-command up\|down\|status] [-migrations-dir <path>]`(または `make run ARGS="..."`) |
+| 依存解決(`app/migrator` の go.mod 編集・merge 競合解消の後) | `app/migrator` | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。`make check` には含めない) |
 
 **per-stack の `migrate-up` / `migrate-down` / `migrate-status` ターゲットは存在しない**(この 2026-07-09 リファクタで `app/migrator` に一本化して移管済み)。マイグレーションの「適用」に関する操作はすべて `app/migrator` 経由で行う。
 
 上記の **生成 / スキーマ操作 / マイグレーション適用**(`sqlc` / `migrate-create` / `migrate-test` / `migrate`)は検査ではないため `make openapi` と同様に `make check` には含めない。一方、**DB 依存テストそのものは `make test` = `make check` の一部**(SPEC-013。実 test DB を要するため、正規経路は `make migrate-test` で test DB を用意してから `REQUIRE_DB=1` で実行する)。`app/migrator/Makefile` の `check` は `fmt-check` + `lint` + `vet` + `build` + `test` のみ(migrator 自身の DB 依存 integration テストは別レーン=`migrator-integration`)。
 一方、sqlc 生成コード(`infra/postgres/sqlcgen`)は `make build` / `make vet` / `make test` の対象であり、スキーマとの drift は許容しない(CI: `.github/workflows/sqlc-drift.yml` が `make sqlc` を再実行して diff を検査する)。
 
-**版**: goose `v3.24.1`(`app/migrator/go.mod` の `github.com/pressly/goose/v3` require が単一の情報源。`app/api`・`app/auth` の Makefile の `GOOSE_VERSION`(migrate-create の CLI 版)もこれと同じ値に保つ)/ sqlc `v1.31.1`(各スタックの Makefile が単一の情報源)。sqlc は常に `go run <pkg>@<version>` の CLI として実行し、module の go.mod には現れない。新規 runtime 依存は Postgres ドライバ `github.com/jackc/pgx/v5 v5.7.2` のみ(`app/api`・`app/auth`・`app/migrator` の go.mod いずれも)。`database/sql` の driver として blank-import し、sqlc 生成コード自体は `sqlc.yaml` の `sql_package: database/sql` により標準ライブラリのみで完結する。
+**版**: goose `v3.27.2`(`app/migrator/go.mod` の `github.com/pressly/goose/v3` require が単一の情報源。toolchain の CLI 版 `GOOSE_VERSION`(migrate-create 用。SPEC-009 で `.devcontainer/versions.env` に一元化)もこれと同じ値に保つ — 2026-07-13 時点で versions.env 側は v3.24.1 のままで要同期、ISSUE-054)/ sqlc `v1.31.1`(SPEC-009 で `.devcontainer/versions.env` の `SQLC_VERSION` に一元化)。sqlc / goose の CLI は toolchain イメージに `go install` 済みのバイナリとして実行され(SPEC-009。offline フェーズで `go run <pkg>@<version>` は使えない)、module の go.mod には現れない。新規 runtime 依存は Postgres ドライバ `github.com/jackc/pgx/v5 v5.10.0` のみ(`app/api`・`app/auth`・`app/migrator` の go.mod いずれも)。`database/sql` の driver として blank-import し、sqlc 生成コード自体は `sqlc.yaml` の `sql_package: database/sql` により標準ライブラリのみで完結する。
 
 ## レイアウト
 

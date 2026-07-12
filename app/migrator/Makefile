@@ -70,6 +70,17 @@ COMPOSE_TOOLS := $(TOOLBOX_ENV_PREFIX) \
 # of silently reaching out).
 OFFLINE := $(COMPOSE_TOOLS) run --rm tools-offline make -C $(MODULE_DIR)
 
+# `tools` (network enabled, no DB reachability needed) -- reserved for
+# phases that must reach the module proxy but not Postgres. `go mod
+# tidy` needs to resolve/verify module metadata (and fetch anything not
+# already in the shared gomodcache volume, e.g. after a manual go.mod
+# edit or a merge conflict), which tools-offline's GOPROXY=off would
+# make fail. Same lane/rationale as app/web/Makefile's `install` and
+# app/api/Makefile's own `tidy` (RETRO-004 / RETROSUM-001 提案 3):
+# unlike ONLINE_DB below, this does NOT layer the sibling compose.yml on
+# top, since `go mod tidy` never needs to reach the `postgres` service.
+ONLINE := $(COMPOSE_TOOLS) run --rm tools make -C $(MODULE_DIR)
+
 # `tools` (network enabled) layered on top of the sibling root
 # compose.yml, so the `postgres` service resolves by its compose
 # service name on their shared network -- this module's own `run`
@@ -161,6 +172,10 @@ test-race-native: ## race detector 付きでテストを実行する
 .PHONY: check-native
 check-native: fmt-check-native lint-native vet-native build-native test-native ## 全チェックを実行する (fmt-check + lint + vet + build + test)
 
+.PHONY: tidy-native
+tidy-native: ## go.mod/go.sum を整理する (go mod tidy。check には含めない)
+	go mod tidy
+
 .PHONY: run-native
 run-native: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/infra/postgres/schema/migrations")
 	go run ./cmd/migrator $(ARGS)
@@ -222,6 +237,10 @@ test-race: ## race detector 付きでテストを実行する (toolbox 内 (tool
 .PHONY: check
 check: ## 全チェックを実行する (fmt-check + lint + vet + build + test。toolbox 内 (tools-offline) で実行)
 	$(OFFLINE) check-native
+
+.PHONY: tidy
+tidy: ## go.mod/go.sum を整理する (go mod tidy。ネットワーク有効な tools 経由。check には含めない)
+	$(ONLINE) tidy-native
 
 .PHONY: run
 run: ## migrator を実行する (例: make run ARGS="-target api -migrations-dir ../api/infra/postgres/schema/migrations")。実 postgres 到達が要るため tools(+compose.yml) で実行する

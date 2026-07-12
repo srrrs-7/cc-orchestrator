@@ -8,7 +8,7 @@ phase: spec
 target: skills/spec
 created: 2026-07-11
 updated: 2026-07-11
-synthesis:   # 統括レポートで扱われたら RETROSUM-NNN を記入(未統括なら空)
+synthesis: RETROSUM-001
 tags: [spec-authoring, test-strategy, narrow-requirement, rework]
 ---
 

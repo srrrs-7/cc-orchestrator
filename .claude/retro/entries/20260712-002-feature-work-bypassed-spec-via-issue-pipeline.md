@@ -8,7 +8,7 @@ phase: orchestration  # spec | plan | test | impl | check | review | orchestrati
 target: rules/workflow.md
 created: 2026-07-12
 updated: 2026-07-12
-synthesis:   # 統括レポートで扱われたら RETROSUM-NNN を記入(未統括なら空)
+synthesis: RETROSUM-001
 tags: [ambiguous-rule, spec-vs-issue, process-bypass, doc-drift]
 ---
 
