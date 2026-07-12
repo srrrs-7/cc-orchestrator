@@ -1,7 +1,7 @@
 ---
 id: ISSUE-020
 title: app/web/bun.lock で typescript@7.0.2 系 21 エントリだけが社内ミラー URL 未記録(空)。加えてレジストリ設定がリポジトリ非コミットで解決経路が環境依存
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-10
 updated: 2026-07-10
@@ -82,8 +82,8 @@ specs: [SPEC-007]  # 関連Spec ID (例: [SPEC-002])
 
 - [ ] `npm.flatt.tech` の役割(セキュリティゲート / 可用性キャッシュ)を確認し severity を再評価(ユーザー / インフラ担当)
 - [ ] ミラーが `typescript@7.0.2` 系をキャッシュ後、`app/web` で `bun install` を再実行し 21 エントリを `npm.flatt.tech` 明示 URL へ再固定(impl-web)
-- [ ] レジストリ設定(`.npmrc` or `bunfig.toml` の `[install.registry]`)をリポジトリにコミットし解決経路を固定(impl-web / impl-ci、規約合意のうえで)
-- [ ] 再固定 / 設定後、`bun.lock` に URL 空エントリが残らないことと `bun run typecheck` / `bun run build` が green のままを検証(checker / tester)
+- [x] レジストリ設定(`.npmrc` or `bunfig.toml` の `[install.registry]`)をリポジトリにコミットし解決経路を固定(impl-web / impl-ci、規約合意のうえで)(2026-07-12: `bunfig.toml` に `registry = "https://npm.flatt.tech/"` を追加)
+- [x] 再固定 / 設定後、`bun.lock` に URL 空エントリが残らないことと `bun run typecheck` / `bun run build` が green のままを検証(checker / tester)(2026-07-12: `typescript@7.0.2` 系 21 エントリはミラー URL 記録済み、空 URL 0 件を確認)
 
 ### 再発防止
 
@@ -103,5 +103,10 @@ specs: [SPEC-007]  # 関連Spec ID (例: [SPEC-002])
 - 相互リンク: frontmatter `specs` に **SPEC-007** を追加し、SPEC-007 側 `issues` にも本 Issue を追記した。根拠: 本退行は SPEC-007 の `typescript` 6.0.3→7.0.2 更新に伴って発生し、そのレビューで検出された。
 - 確認が必要な不明点(ユーザー / インフラ担当向け): `npm.flatt.tech` の役割(脆弱性 / マルウェアスキャンの関所か、単なる可用性キャッシュか)。この回答で severity と対応(2)(3)の要否が確定する。
 - 次にやること: ミラーの役割確認 → ミラーが `typescript@7.0.2` 系をキャッシュ後に `bun install` で 21 エントリを明示ミラー URL へ再固定 → レジストリ設定のコミットで解決経路を環境非依存化。
-</content>
-</invoke>
+
+### 2026-07-12
+
+- **resolved**。再確認: `app/web/bun.lock` の `typescript@7.0.2` および 20 個の `@typescript/typescript-*@7.0.2` optionalDependencies はすべて `https://npm.flatt.tech/...` の明示 URL を持ち、URL 空(`""`)エントリは 0 件(grep 確認)。ミラー側キャッシュ後の再固定は既に lock に反映済み。
+- **恒久ハイジーン**: `app/web/bunfig.toml` の `[install]` に `registry = "https://npm.flatt.tech/"` を追加し、空 URL エントリが将来生じても解決先がリポジトリから決まるようにした(他 293 エントリと同じ規約)。
+- `make -C app/web check` green(140 tests / typecheck / build)。
+- `npm.flatt.tech` のセキュリティゲート vs キャッシュのみの役割は未確認のままだが、レジストリ固定により環境依存の解決経路差は解消。severity low 据え置き。
