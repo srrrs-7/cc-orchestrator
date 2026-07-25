@@ -1,9 +1,17 @@
 # --- build stage -----------------------------------------------------------
-# Go 1.24 on Alpine (musl). The module has no external requires and
+# Go 1.26 on Alpine (musl). The module has no external requires and
 # CGO_ENABLED=0 produces a fully static binary, so glibc/gcc from the
-# full golang:1.24 image are not needed; the binary still runs unmodified
+# full golang:1.26 image are not needed; the binary still runs unmodified
 # on the distroless runtime stage below.
-FROM golang:1.24-alpine AS build
+#
+# SPEC-016: pinned by immutable digest, not by tag alone -- `1.26-alpine` is
+# re-pushed on every patch/base rebuild, so the tag is a human-readable label
+# and the digest is the identity Docker actually resolves. It is a multi-arch
+# OCI *index* digest, so linux/arm64 (ECS, `make push-images`) and amd64 both
+# still resolve from this one pin. Refresh tag + digest together:
+#   docker pull golang:1.26-alpine
+#   docker inspect --format '{{index .RepoDigests 0}}' golang:1.26-alpine
+FROM golang:1.26-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS build
 WORKDIR /src
 
 # Copy only the dependency manifest first so the `go mod download` layer is
@@ -18,7 +26,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags='-s -w' -trimpath -o /out/ ./cmd/
 
 # --- runtime stage -----------------------------------------------------------
 # distroless/static: no shell, no package manager, non-root user by default.
-FROM gcr.io/distroless/static:nonroot AS runtime
+# Digest-pinned for the same reason as the build stage above (SPEC-016);
+# refresh with `docker pull` + `docker inspect --format '{{index .RepoDigests 0}}'`.
+FROM gcr.io/distroless/static:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6 AS runtime
 
 COPY --from=build /out/api /api
 COPY --from=build /out/healthcheck /healthcheck
@@ -26,7 +36,7 @@ COPY --from=build /out/healthcheck /healthcheck
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
-  CMD ["/healthcheck", "http://localhost:8080/tasks"]
+  CMD ["/healthcheck", "http://localhost:8080/health"]
 
 USER nonroot:nonroot
 

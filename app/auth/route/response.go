@@ -102,6 +102,8 @@ func authorizeErrorCode(err error) (code, description string) {
 		return "invalid_request", "redirect_uri is missing or malformed"
 	case errors.Is(err, client.ErrRedirectURIMismatch):
 		return "invalid_request", "redirect_uri does not match a registered redirect uri"
+	case errors.Is(err, client.ErrMissingResponseType):
+		return "invalid_request", "response_type is required"
 	case errors.Is(err, client.ErrUnsupportedResponseType):
 		return "unsupported_response_type", "only response_type=code is supported"
 	case errors.Is(err, authcode.ErrMissingOpenIDScope):
@@ -112,6 +114,8 @@ func authorizeErrorCode(err error) (code, description string) {
 		return "invalid_request", "code_challenge_method must be S256"
 	case errors.Is(err, authcode.ErrInvalidCodeVerifier):
 		return "invalid_request", "code_challenge is missing or malformed"
+	case errors.Is(err, service.ErrAccessDenied):
+		return "access_denied", "resource owner denied the request"
 	default:
 		return "", ""
 	}
@@ -172,6 +176,9 @@ func tokenErrorCode(err error) (status int, code, description string) {
 		return http.StatusBadRequest, "invalid_request", "client_id is required"
 	case errors.Is(err, client.ErrNotFound):
 		return http.StatusBadRequest, "invalid_client", "unknown client"
+	case errors.Is(err, client.ErrClientAuthFailed):
+		// RFC 6749 5.2: invalid_client with 401 when client authentication fails.
+		return http.StatusUnauthorized, "invalid_client", "client authentication failed"
 	case errors.Is(err, user.ErrNotFound):
 		// The authorization code / refresh token itself resolved
 		// successfully but the resource owner it names no longer

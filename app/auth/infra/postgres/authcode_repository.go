@@ -13,7 +13,7 @@ import (
 
 // AuthCodeRepository is a Postgres-backed implementation of
 // authcode.Repository (SPEC-005 R2): single-use redemption and TTL
-// expiry are enforced by the SQL itself (db/queries/authcodes.sql),
+// expiry are enforced by the SQL itself (schema/queries/authcodes.sql),
 // not by application-level locking, so the guarantees hold across
 // every process/instance sharing the same database -- the concrete
 // gap this Spec closes relative to infra/memory's single-instance
@@ -49,7 +49,7 @@ func NewAuthCodeRepository(db *sql.DB) *AuthCodeRepository {
 }
 
 // Save inserts ac as a new row. Authorization codes are issue-once
-// (see db/queries/authcodes.sql's InsertAuthCode doc comment): a
+// (see schema/queries/authcodes.sql's InsertAuthCode doc comment): a
 // primary-key collision here would indicate a broken random
 // generator, not a legitimate re-save, so this is a plain INSERT, not
 // an upsert.
@@ -64,6 +64,7 @@ func (r *AuthCodeRepository) Save(ctx context.Context, ac *authcode.Authorizatio
 		Challenge:       ac.Challenge().Challenge(),
 		ChallengeMethod: ac.Challenge().Method().String(),
 		ExpiresAt:       ac.ExpiresAt(),
+		AuthTime:        encodeAuthTime(ac.AuthTime()),
 	}); err != nil {
 		return fmt.Errorf("postgres: save authorization code: %w", err)
 	}
@@ -95,7 +96,7 @@ func (r *AuthCodeRepository) FindByCode(ctx context.Context, code authcode.Code)
 
 	ac, err := reconstructAuthCode(
 		row.Code, row.ClientID, row.UserID, row.RedirectUri, row.Scope,
-		row.Nonce, row.Challenge, row.ChallengeMethod, row.ExpiresAt, row.Consumed,
+		row.Nonce, row.Challenge, row.ChallengeMethod, row.AuthTime, row.ExpiresAt, row.Consumed,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: find authorization code: %w", err)
@@ -103,8 +104,23 @@ func (r *AuthCodeRepository) FindByCode(ctx context.Context, code authcode.Code)
 	return ac, nil
 }
 
+// PurgeExpired deletes every expired authorization_code row in a single
+// statement (ISSUE-015: bulk eviction). It returns the number of rows
+// deleted. Returning 0 (with nil error) is normal when no expired rows
+// exist -- the underlying DELETE ... WHERE expires_at <= now() is a no-op
+// in that case. This method is not part of the authcode.Repository domain
+// interface: it is an infra-layer GC concern called by the background
+// purge ticker in cmd/authz/main.go, not by the service layer.
+func (r *AuthCodeRepository) PurgeExpired(ctx context.Context) (int64, error) {
+	n, err := r.q.PurgeExpiredAuthCodes(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: purge expired authorization codes: %w", err)
+	}
+	return n, nil
+}
+
 // Consume atomically claims code for one-time use via a single
-// DELETE ... RETURNING statement (db/queries/authcodes.sql's
+// DELETE ... RETURNING statement (schema/queries/authcodes.sql's
 // ConsumeAuthCode): Postgres's own row-level locking guarantees that
 // when two callers race to consume the same code, exactly one DELETE
 // removes the row and every other caller's statement affects zero
@@ -141,10 +157,15 @@ func (r *AuthCodeRepository) Consume(ctx context.Context, code authcode.Code) er
 // authcode.ParseCodeChallengeMethod / authcode.NewCodeChallenge) so a
 // row that could not have been produced by this repository's own
 // Save is surfaced as an error rather than silently accepted.
+//
+// authTimeVal is the nullable auth_time column value (added by goose
+// migration 000005, ISSUE-038): SQL NULL decodes to time.Time{} (zero),
+// meaning "not available", via decodeAuthTime.
 func reconstructAuthCode(
 	codeStr, clientIDStr, userIDStr, redirectURIStr, scopeStr string,
 	nonce sql.NullString,
 	challengeStr, methodStr string,
+	authTimeVal sql.NullTime,
 	expiresAt time.Time,
 	consumed bool,
 ) (*authcode.AuthorizationCode, error) {
@@ -173,6 +194,7 @@ func reconstructAuthCode(
 		scope,
 		authcode.NewNonce(decodeNonce(nonce)),
 		challenge,
+		decodeAuthTime(authTimeVal),
 		expiresAt,
 		consumed,
 	), nil
@@ -197,4 +219,25 @@ func decodeNonce(n sql.NullString) string {
 		return ""
 	}
 	return n.String
+}
+
+// encodeAuthTime maps a time.Time onto the authorization_codes table's
+// nullable auth_time column (ISSUE-038): a zero time.Time (meaning "not
+// available") is stored as SQL NULL, so the round trip through sqlc's
+// sql.NullTime is unambiguous. Mirrors encodeNonce's pattern.
+func encodeAuthTime(t time.Time) sql.NullTime {
+	if t.IsZero() {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: t, Valid: true}
+}
+
+// decodeAuthTime is encodeAuthTime's inverse: SQL NULL decodes back to
+// time.Time{} (zero), the domain's canonical "auth_time not available"
+// value. Mirrors decodeNonce's pattern.
+func decodeAuthTime(n sql.NullTime) time.Time {
+	if !n.Valid {
+		return time.Time{}
+	}
+	return n.Time
 }

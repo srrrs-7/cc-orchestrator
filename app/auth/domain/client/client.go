@@ -7,21 +7,30 @@
 // *Client.
 package client
 
+import (
+	"fmt"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
 // Client is the aggregate root representing a registered OAuth 2.0
-// client application. It is deliberately modeled as a "public
-// client" (RFC 6749 2.1): this sample authorization server's primary
-// flow is Authorization Code + PKCE, and it does not authenticate
-// clients with a client_secret (token_endpoint_auth_methods_supported
-// = ["none"]).
+// client application. It supports both public clients (RFC 6749 2.1,
+// no client secret, token_endpoint_auth_method=none) and confidential
+// clients (RFC 6749 2.1, authenticated with a bcrypt-hashed
+// client_secret via client_secret_post or client_secret_basic).
+// secretHash nil means public client.
 type Client struct {
 	id            ClientID
+	secretHash    *string // nil = public client; non-nil = confidential client (bcrypt hash)
 	redirectURIs  []RedirectURI
 	allowedScopes map[string]struct{}
 	responseTypes map[string]struct{}
 	grantTypes    map[string]struct{}
 }
 
-// New is the factory for registering a brand new Client.
+// New is the factory for registering a brand new public Client
+// (token_endpoint_auth_method=none). For confidential clients, use
+// NewConfidential.
 func New(id ClientID, redirectURIs []RedirectURI, allowedScopes, responseTypes, grantTypes []string) *Client {
 	return &Client{
 		id:            id,
@@ -32,11 +41,35 @@ func New(id ClientID, redirectURIs []RedirectURI, allowedScopes, responseTypes, 
 	}
 }
 
+// NewConfidential is the factory for registering a brand new
+// confidential Client (RFC 6749 2.1). plaintextSecret is hashed with
+// bcrypt before storage; callers must never persist the returned hash
+// via SecretHash() outside infrastructure seed paths.
+func NewConfidential(id ClientID, redirectURIs []RedirectURI, allowedScopes, responseTypes, grantTypes []string, plaintextSecret string) (*Client, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(plaintextSecret), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("client: hash secret: %w", err)
+	}
+	h := string(hash)
+	return &Client{
+		id:            id,
+		secretHash:    &h,
+		redirectURIs:  append([]RedirectURI(nil), redirectURIs...),
+		allowedScopes: toSet(allowedScopes),
+		responseTypes: toSet(responseTypes),
+		grantTypes:    toSet(grantTypes),
+	}, nil
+}
+
 // Reconstruct rebuilds a Client from already-validated persisted
-// state. It is intended to be used exclusively by infrastructure-layer
-// repository implementations when loading a Client from storage.
-func Reconstruct(id ClientID, redirectURIs []RedirectURI, allowedScopes, responseTypes, grantTypes []string) *Client {
-	return New(id, redirectURIs, allowedScopes, responseTypes, grantTypes)
+// state. secretHash must be the bcrypt hash loaded from storage (nil
+// for public clients). It is intended to be used exclusively by
+// infrastructure-layer repository implementations when loading a
+// Client from storage.
+func Reconstruct(id ClientID, redirectURIs []RedirectURI, allowedScopes, responseTypes, grantTypes []string, secretHash *string) *Client {
+	c := New(id, redirectURIs, allowedScopes, responseTypes, grantTypes)
+	c.secretHash = secretHash
+	return c
 }
 
 func toSet(values []string) map[string]struct{} {
@@ -110,6 +143,34 @@ func (c *Client) ResponseTypes() []string {
 // reconstruct a clone of the aggregate for storage isolation.
 func (c *Client) GrantTypes() []string {
 	return fromSet(c.grantTypes)
+}
+
+// IsConfidential reports whether this Client requires secret
+// authentication at the token endpoint (RFC 6749 2.1).
+func (c *Client) IsConfidential() bool {
+	return c.secretHash != nil
+}
+
+// VerifySecret reports whether candidate matches the Client's stored
+// bcrypt hash using constant-time comparison via bcrypt. Always returns
+// true for public clients (no secret required). Returns false for
+// confidential clients when candidate is empty or does not match the hash.
+func (c *Client) VerifySecret(candidate string) bool {
+	if c.secretHash == nil {
+		return true
+	}
+	if candidate == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(*c.secretHash), []byte(candidate)) == nil
+}
+
+// SecretHash returns the stored bcrypt hash for confidential clients,
+// or nil for public clients. Exposed primarily so infrastructure-layer
+// repositories can persist the aggregate; application code should
+// prefer VerifySecret / IsConfidential.
+func (c *Client) SecretHash() *string {
+	return c.secretHash
 }
 
 func fromSet(set map[string]struct{}) []string {

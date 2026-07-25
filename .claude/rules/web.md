@@ -1,25 +1,34 @@
 ---
 paths:
   - "app/web/**"
+  - "app/auth-web/**"
 ---
 
-# app/web — TypeScript / React 規約
+# app/web / app/auth-web — TypeScript / React 規約
 
-## コマンド(package.json scripts 契約)
+本規約は `app/web`(タスク UI)と `app/auth-web`(IdP 管理 UI。auth の admin API を操作)の両 TypeScript / React stack に適用する。コマンド・レイアウト・コーディング規約は共通で、本文の `app/web` は原則 `app/auth-web` にも読み替える。差分は 2 点のみ: `generate`(OpenAPI 型生成)は app/web だけが持ち、auth-web は admin API の型を zod スキーマで直接定義する。実行は各 stack 自身のディレクトリ / `Makefile` で行う。
 
-`app/web/package.json` は必ず以下の scripts を提供する。checker / tester はこれを実行する。
+## コマンド(app/web/Makefile 契約)
 
-| 目的 | コマンド |
+`app/web/Makefile`(auth-web は `app/auth-web/Makefile`)は必ず以下のターゲットを提供する。checker / tester はこれを実行する。**ホストで bun / go を直接実行しない**(SPEC-009: toolchain コンテナ内のみ。`make` が `docker compose run` へ委譲する)。
+
+| 目的 | コマンド (`app/web` で実行) |
 |---|---|
-| format(チェック) | `bun run format:check` |
-| format(自動修正) | `bun run format` |
-| lint | `bun run lint` |
-| type check | `bun run typecheck` |
-| test | `bun run test` |
-| build | `bun run build` |
-| OpenAPI 契約消費・生成 | `bun run generate`(`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
+| 依存インストール | `make install` (`INSTALL_FLAGS=--frozen-lockfile` で CI 固定) |
+| format(チェック) | `make format-check` |
+| format(自動修正) | `make format` |
+| lint | `make lint` |
+| type check | `make typecheck` |
+| test | `make test` (単一ファイルは `make test TEST=<path>`) |
+| build | `make build` |
+| 全チェック | `make check` (= format-check + lint + typecheck + test + build) |
+| OpenAPI 契約消費・生成 | `make generate` (`../api/docs/openapi.yaml` から型 / Zod / TanStack Query を `src/features/tasks/api/generated` に生成。SPEC-003) |
 
-package manager / runtime は **Bun**。依存導入は `bun install`、スクリプト実行は `bun run <name>`。バンドラは Vite(`bun run build` = `tsc --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**(`test` script の実体は `vitest run`。RTL / jsdom / MSW と組み合わせるため Bun 標準ランナーではなく Vitest を採用)。実行はすべて `app/web` ディレクトリで行う。
+ルートからは `make web-<target>` / `make auth-web-<target>` でも同じターゲットを呼べる(例: `make web-check` / `make auth-web-check`)。
+
+`app/web/package.json` の scripts はコンテナ内で `bun run <script>` として実行される実体。scripts 名・内容は変更しない。**`dev`(Vite dev server)は Makefile 契約に含めない** — 画面の動作確認は compose の `web` / `auth-web` サービス(ルート `make up-d` → http://localhost:8080 / http://localhost:8083)で行う。ホストや toolchain コンテナで dev server を常駐させない(CLAUDE.md「実行境界: runtime はコンテナのみ」)。
+
+package manager / runtime は **Bun**(コンテナ内)。依存導入は `make install`、スクリプト実行は上表の `make` ターゲット経由。バンドラは Vite(`build` = `tsc --noEmit && vite build`)、テストランナーは **Vitest + React Testing Library**。
 
 lint / format は **Biome** 単一ツールで行う(`lint` = `biome lint`、`format` / `format:check` = `biome format`。設定は `biome.json`)。**ESLint / Prettier は使わない。**
 
@@ -32,6 +41,16 @@ Shai-Hulud 型の npm サプライチェーン攻撃(公開直後に汚染され
 - 意図的に最新を追う preview パッケージ(日次 dev ビルド等)を使う場合は `minimumReleaseAgeExcludes` に列挙して除外する(除外しないと更新が 21 日ブロックされる)。**現状、該当パッケージは無く `minimumReleaseAgeExcludes` は空**(SPEC-007 で tsgo=`@typescript/native-preview` を stable の `tsc` に置き換え、除外対象が消えた)
 - 既に `bun.lock` に固定済みのバージョンはゲートを通過する(ロック済み依存は影響を受けない)。ゲートは新規追加・更新時に効く。したがって依存追加は「必要な版を確定してから」ゲートを効かせる運用にする
 - 公開直後(21 日未満)の stable 版をどうしても前倒しで固定したい場合は **lock-then-restore**: 対象パッケージを一時的に `minimumReleaseAgeExcludes` に追加 → `bun install` で `bun.lock` に固定 → 除外を戻す。固定後はロック済みとしてゲートを通過する(SPEC-007 で `typescript@7.0.2` の導入に使用)。恒久的な除外(ゲートの無効化)にはしない
+
+### runtime イメージのビルドにも同じゲートを効かせる
+
+`bun install` は `make install`(toolchain コンテナ)だけでなく **`app/web/Dockerfile` / `app/auth-web/Dockerfile` の build ステージ**でも走る。ここが抜けるとリポジトリ内で唯一ゲート無しのインストール経路になるため、以下を必須とする(CLAUDE.md「実行境界: runtime はコンテナのみ」の Shai-Hulud 対策部と同一の契約)。
+
+- **`bunfig.toml` を `bun install` より前に COPY する**: `COPY package.json bun.lock bunfig.toml ./`。`bunfig.toml` はソースではなく「解決に影響するファイル」の一員として扱う(これを忘れると、そのビルドだけが既定の公開レジストリ・ゲート無しで解決される)
+- **`bun install --frozen-lockfile --ignore-scripts`**: lifecycle script(postinstall 等)は当該ワーム類の実行・流出経路そのもので、このビルドでは不要(ネイティブ依存は optionalDependencies のプリビルドバイナリで供給される)。Bun は既定でも lifecycle script を trusted パッケージに限定するが、`--ignore-scripts` は既定 trusted 集合まで塞ぐ
+- **build context に依存ツリーと資格情報を入れない**: 各 stack 直下の `.dockerignore`(ルートの `.dockerignore` は per-stack context には効かない)で `node_modules` / `dist` / `.env*` を除外する。`node_modules` を通すと後段の `COPY . .` がゲート済みインストール結果をホストの木で上書きしてしまう。`~/.npmrc` / クラウド資格情報 / docker.sock / SSH agent はビルドに渡さない
+- **runtime ステージに npm エコシステムを残さない**: 配信は nginx + `dist` の静的ファイルだけで、Node / Bun / パッケージマネージャを含めない。依存コードが動くのは build ステージのみに閉じる
+- **ベースイメージは digest 固定**(SPEC-016): build ステージは `oven/bun:<version>@sha256:...`(version は `versions.env` の `BUN_VERSION` と揃える。旧 `oven/bun:1` は major 浮動でツールチェーンとの版ズレも生んでいた)、runtime ステージは `nginxinc/nginx-unprivileged:alpine@sha256:...`。更新手順は各 Dockerfile のコメント(`docker pull` → `docker inspect --format '{{index .RepoDigests 0}}'`)
 
 ## TypeScript
 

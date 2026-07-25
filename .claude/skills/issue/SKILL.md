@@ -20,6 +20,8 @@ argument-hint: "[問題の説明 | update ISSUE-NNN | list]"
 
 ## 新規作成の手順
 
+起票の前に: 対象が新機能(新しいエンドポイント / 新しい集約 / 確定済み公開契約の追加・変更)なら、Issue ではなく Spec に回す(判定基準の正は `.claude/rules/workflow.md` のパイプライン節)。
+
 1. 採番: `ls docs/issues/` で既存ファイル名の連番NNNの最大値を確認して +1(3桁ゼロ埋め、初回は `001`)
 2. 日付: `date +%Y-%m-%d` で今日の日付を取得する(推測しない)
 3. ファイル名: `YYYYMMDD-NNN-<slug>.md`(日付はハイフンなし8桁、slugは英小文字ケバブケース)

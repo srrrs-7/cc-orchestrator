@@ -1,25 +1,29 @@
+// Discovery metadata tests. TestDiscovery_Metadata only exercises the
+// OIDC metadata endpoint in a way that never calls the authorization
+// or user-info service methods that touch repositories, so it uses the
+// nil-repo newDiscoveryTestHandler -- no DB required.
+//
+// TestDiscovery_JWKS -- which does a full authorize+token exchange to
+// verify the JWKS key -- requires a real Postgres test DB and lives in
+// discovery_integration_test.go. Both files run as part of the default
+// `make test` / `make check` (SPEC-013); there is no build-tag split.
 package route_test
 
 import (
-	"crypto/rsa"
-	"encoding/base64"
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
-	"strings"
 	"testing"
-
-	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/jwt"
 )
 
 type providerMetadataBody struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
+	RevocationEndpoint                string   `json:"revocation_endpoint"`
 	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
+	EndSessionEndpoint                string   `json:"end_session_endpoint"`
 	JWKSURI                           string   `json:"jwks_uri"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	SubjectTypesSupported             []string `json:"subject_types_supported"`
@@ -32,9 +36,11 @@ type providerMetadataBody struct {
 }
 
 // TestDiscovery_Metadata covers traceability #8: REQUIRED and
-// supported OIDC Discovery metadata.
+// supported OIDC Discovery metadata. Uses newDiscoveryTestHandler
+// (offline, no DB) because the discovery endpoint only reads the
+// issuer string and keyProvider -- no repository state is required.
 func TestDiscovery_Metadata(t *testing.T) {
-	h := newTestHandler(t)
+	h := newDiscoveryTestHandler(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
 	rec := httptest.NewRecorder()
@@ -55,7 +61,9 @@ func TestDiscovery_Metadata(t *testing.T) {
 	for name, got := range map[string]string{
 		"authorization_endpoint": meta.AuthorizationEndpoint,
 		"token_endpoint":         meta.TokenEndpoint,
+		"revocation_endpoint":    meta.RevocationEndpoint,
 		"userinfo_endpoint":      meta.UserInfoEndpoint,
+		"end_session_endpoint":   meta.EndSessionEndpoint,
 		"jwks_uri":               meta.JWKSURI,
 	} {
 		if got == "" {
@@ -78,82 +86,17 @@ func TestDiscovery_Metadata(t *testing.T) {
 	if !reflect.DeepEqual(meta.GrantTypesSupported, []string{"authorization_code", "refresh_token"}) {
 		t.Errorf("grant_types_supported = %v, want [authorization_code refresh_token] (SPEC-006 R9)", meta.GrantTypesSupported)
 	}
-	if !reflect.DeepEqual(meta.TokenEndpointAuthMethodsSupported, []string{"none"}) {
-		t.Errorf("token_endpoint_auth_methods_supported = %v, want [none] (public client, no client_secret support)", meta.TokenEndpointAuthMethodsSupported)
+	// ISSUE-035: client_secret_post and client_secret_basic are now
+	// supported in addition to none (public clients). Order is stable
+	// (defined in service/discovery_service.go).
+	wantAuthMethods := []string{"none", "client_secret_post", "client_secret_basic"}
+	if !reflect.DeepEqual(meta.TokenEndpointAuthMethodsSupported, wantAuthMethods) {
+		t.Errorf("token_endpoint_auth_methods_supported = %v, want %v (ISSUE-035)", meta.TokenEndpointAuthMethodsSupported, wantAuthMethods)
 	}
 	if len(meta.ScopesSupported) == 0 {
 		t.Error("scopes_supported is empty, want at least openid")
 	}
 	if len(meta.ClaimsSupported) == 0 {
 		t.Error("claims_supported is empty")
-	}
-}
-
-type jwkBody struct {
-	Kty string `json:"kty"`
-	Use string `json:"use"`
-	Alg string `json:"alg"`
-	Kid string `json:"kid"`
-	N   string `json:"n"`
-	E   string `json:"e"`
-}
-
-type jwksBody struct {
-	Keys []jwkBody `json:"keys"`
-}
-
-// TestDiscovery_JWKS covers traceability #9: the JWK Set shape and
-// that the published key can actually verify a JWT this server
-// issues.
-func TestDiscovery_JWKS(t *testing.T) {
-	h := newTestHandler(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusOK, rec.Body.String())
-	}
-
-	var set jwksBody
-	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil {
-		t.Fatalf("decode jwks: %v (body=%q)", err, rec.Body.String())
-	}
-	if len(set.Keys) != 1 {
-		t.Fatalf("keys = %d entries, want 1", len(set.Keys))
-	}
-	jwk := set.Keys[0]
-	if jwk.Kty != "RSA" || jwk.Use != "sig" || jwk.Alg != "RS256" || jwk.Kid == "" {
-		t.Fatalf("jwk = %+v, want kty=RSA use=sig alg=RS256 with a non-empty kid", jwk)
-	}
-
-	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)
-	if err != nil {
-		t.Fatalf("decode n: %v", err)
-	}
-	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
-	if err != nil {
-		t.Fatalf("decode e: %v", err)
-	}
-	pub := &rsa.PublicKey{N: new(big.Int).SetBytes(nBytes), E: int(new(big.Int).SetBytes(eBytes).Int64())}
-	verifier := jwt.NewVerifier(pub)
-
-	verifierStr := strings.Repeat("A", 43)
-	code := issueAuthCode(t, h, pkceChallenge(verifierStr), "openid", "")
-	tokenRec := doToken(t, h, url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {testRedirectURI},
-		"client_id":     {testClientID},
-		"code_verifier": {verifierStr},
-	})
-	if tokenRec.Code != http.StatusOK {
-		t.Fatalf("setup: token exchange status = %d, want %d (body=%q)", tokenRec.Code, http.StatusOK, tokenRec.Body.String())
-	}
-	tokenResp := decodeTokenResponse(t, tokenRec)
-
-	if _, err := verifier.Verify(tokenResp.AccessToken); err != nil {
-		t.Errorf("Verify() access_token using the JWKS-published key: %v, want success", err)
 	}
 }

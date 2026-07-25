@@ -8,7 +8,7 @@
 //     get their own database on the same Postgres instance (plan
 //     §RF.1.1), replacing the prior single-database/separate-schema
 //     design.
-//  2. Applies that stack's db/migrations against it via goose, run as
+//  2. Applies that stack's schema migrations against it via goose, run as
 //     a library (infra/goose.Runner, the migration.Runner port's
 //     implementation, backed by github.com/pressly/goose/v3) rather
 //     than the `go run` CLI app/{api,auth}/Makefile's migrate-create
@@ -121,7 +121,7 @@ func run(args []string) error {
 // parseFlags parses and validates this binary's CLI contract
 // (-target, -command, -migrations-dir), applying -migrations-dir's
 // default (target.DefaultMigrationsDir(), "/migrations/<target>",
-// matching the Dockerfile's COPY layout: COPY app/api/db/migrations
+// matching the Dockerfile's COPY layout: COPY app/api/infra/postgres/schema/migrations
 // /migrations/api and the auth equivalent) when the flag is not
 // explicitly set. -target and -command are validated by the migration
 // domain (migration.ParseTarget / migration.ParseCommand); this

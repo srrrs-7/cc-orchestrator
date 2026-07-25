@@ -127,6 +127,45 @@ func TestNewPage_InvalidOffset(t *testing.T) {
 	})
 }
 
+// TestNewPage_MaxOffset covers ISSUE-025 item D: an offset above
+// task.MaxOffset is rejected with a *task.ValidationError wrapping
+// task.ErrInvalidOffset; the boundary value MaxOffset itself is
+// accepted.
+func TestNewPage_MaxOffset(t *testing.T) {
+	tests := []struct {
+		name    string
+		offset  int
+		wantErr bool
+	}{
+		{name: "just above max (MaxOffset+1) is rejected", offset: task.MaxOffset + 1, wantErr: true},
+		{name: "far above max (999999999) is rejected", offset: 999999999, wantErr: true},
+		{name: "exactly at max (MaxOffset) is accepted, boundary", offset: task.MaxOffset, wantErr: false},
+		{name: "one below max (MaxOffset-1) is accepted", offset: task.MaxOffset - 1, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page, err := task.NewPage(nil, intPtr(tt.offset))
+			if tt.wantErr {
+				if !errors.Is(err, task.ErrInvalidOffset) {
+					t.Fatalf("NewPage(nil, %d) error = %v, want wrapping %v", tt.offset, err, task.ErrInvalidOffset)
+				}
+				var ve *task.ValidationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("NewPage(nil, %d) error = %v, want errors.As(&task.ValidationError{}) = true", tt.offset, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("NewPage(nil, %d) unexpected error: %v", tt.offset, err)
+				}
+				if page.Offset() != tt.offset {
+					t.Errorf("Offset() = %d, want %d", page.Offset(), tt.offset)
+				}
+			}
+		})
+	}
+}
+
 // TestNewPage_BoundaryLimitOne covers the lower boundary that is
 // valid (as opposed to TestNewPage_InvalidLimit's zero/negative
 // rejection): limit=1 is the smallest accepted value and must be

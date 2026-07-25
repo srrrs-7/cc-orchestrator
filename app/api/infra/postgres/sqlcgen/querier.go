@@ -33,7 +33,7 @@ type Querier interface {
 	// runs on, so infra/postgres/task_repository.go never narrows
 	// task.Page.Limit()/Offset() into a smaller type (gosec G115).
 	ListTasksPage(ctx context.Context, arg ListTasksPageParams) ([]Task, error)
-	// SPEC-005 R1/R4: sqlc input for the tasks table (db/migrations/000001_create_tasks.sql).
+	// SPEC-005 R1/R4: sqlc input for the tasks table (schema/migrations/000001_create_tasks.sql).
 	// `make sqlc` regenerates infra/postgres/sqlcgen from this file; keep
 	// both in the same commit (no drift).
 	// Backs task.Repository.Save: insert a new row, or update every

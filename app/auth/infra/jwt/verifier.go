@@ -37,18 +37,9 @@ func NewVerifier(publicKey *rsa.PublicKey) *Verifier {
 // signature against the Verifier's public key, checks it has not
 // expired, and returns the decoded Claims.
 func (v *Verifier) Verify(tokenString string) (token.Claims, error) {
-	parts := strings.Split(tokenString, ".")
-	if len(parts) != 3 {
-		return token.Claims{}, fmt.Errorf("jwt: verify: %w", token.ErrInvalidToken)
-	}
-
-	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	header, parts, err := decodeJWTHeader(tokenString)
 	if err != nil {
-		return token.Claims{}, fmt.Errorf("jwt: verify: decode header: %w", token.ErrInvalidToken)
-	}
-	var header jwtHeader
-	if err := json.Unmarshal(headerJSON, &header); err != nil {
-		return token.Claims{}, fmt.Errorf("jwt: verify: decode header: %w", token.ErrInvalidToken)
+		return token.Claims{}, err
 	}
 	// Strictly require RS256. This is the algorithm-confusion defense:
 	// never trust the token to declare an algorithm the verifier will
@@ -57,6 +48,32 @@ func (v *Verifier) Verify(tokenString string) (token.Claims, error) {
 		return token.Claims{}, fmt.Errorf("jwt: verify: alg %q: %w", header.Alg, token.ErrUnexpectedAlg)
 	}
 
+	return verifyRS256(parts, v.publicKey)
+}
+
+// decodeJWTHeader is a package-private helper shared between Verifier
+// and MultiKeyVerifier. It splits the compact JWT and decodes its JOSE
+// header, returning the header and the three raw parts on success.
+func decodeJWTHeader(tokenString string) (jwtHeader, [3]string, error) {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return jwtHeader{}, [3]string{}, fmt.Errorf("jwt: verify: %w", token.ErrInvalidToken)
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return jwtHeader{}, [3]string{}, fmt.Errorf("jwt: verify: decode header: %w", token.ErrInvalidToken)
+	}
+	var h jwtHeader
+	if err := json.Unmarshal(headerJSON, &h); err != nil {
+		return jwtHeader{}, [3]string{}, fmt.Errorf("jwt: verify: decode header: %w", token.ErrInvalidToken)
+	}
+	return h, [3]string{parts[0], parts[1], parts[2]}, nil
+}
+
+// verifyRS256 checks the RSASSA-PKCS1-v1_5/SHA-256 signature and
+// expiry of a compact JWT whose three parts have already been split.
+func verifyRS256(parts [3]string, publicKey *rsa.PublicKey) (token.Claims, error) {
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return token.Claims{}, fmt.Errorf("jwt: verify: decode signature: %w", token.ErrInvalidToken)
@@ -64,7 +81,7 @@ func (v *Verifier) Verify(tokenString string) (token.Claims, error) {
 
 	signingInput := parts[0] + "." + parts[1]
 	sum := sha256.Sum256([]byte(signingInput))
-	if err := rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, sum[:], signature); err != nil {
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, sum[:], signature); err != nil {
 		return token.Claims{}, fmt.Errorf("jwt: verify: %w", token.ErrSignatureInvalid)
 	}
 

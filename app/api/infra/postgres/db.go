@@ -18,17 +18,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// Mode identifies which task.Repository implementation
-// cmd/api/main.go's persistence wiring block should construct.
-type Mode string
-
-const (
-	// ModeMemory selects infra/memory.NewTaskRepository().
-	ModeMemory Mode = "memory"
-	// ModePostgres selects infra/postgres.NewTaskRepository(db).
-	ModePostgres Mode = "postgres"
-)
-
 // pingTimeout bounds how long Open waits for the initial connectivity
 // check at startup, independent of the caller's context (which, in
 // cmd/api/main.go, is the long-lived signal.NotifyContext used for
@@ -52,38 +41,6 @@ const (
 	connMaxLifetime = 30 * time.Minute
 	connMaxIdleTime = 5 * time.Minute
 )
-
-// SelectMode decides between Postgres and the in-memory fallback,
-// implementing SPEC-005 R6's fail-closed environment-selection
-// contract (docs/plans/SPEC-005-plan.md §0 "切替の env / DSN / 本番必須強制"):
-//
-//	DB_HOST set                  -> ModePostgres, regardless of APP_ENV
-//	DB_HOST unset, APP_ENV=local -> ModeMemory
-//	DB_HOST unset, APP_ENV=test  -> ModeMemory
-//	DB_HOST unset, otherwise     -> error (no memory fallback; this
-//	                                 includes APP_ENV=production, an
-//	                                 unset APP_ENV, and any unrecognized
-//	                                 APP_ENV value)
-//
-// SelectMode is a pure function of its two arguments: it never reads
-// os.Getenv itself. cmd/api/main.go reads DB_HOST/APP_ENV and passes
-// them in explicitly, which keeps this decision unit-testable without
-// mutating process-global environment state.
-func SelectMode(dbHost, appEnv string) (Mode, error) {
-	if dbHost != "" {
-		return ModePostgres, nil
-	}
-
-	switch appEnv {
-	case "local", "test":
-		return ModeMemory, nil
-	default:
-		return "", fmt.Errorf(
-			"postgres: select persistence mode: DB_HOST is not set and APP_ENV=%q does not permit the in-memory fallback (only \"local\" and \"test\" do); set DB_HOST to use Postgres, or APP_ENV=local/test to use the in-memory repository",
-			appEnv,
-		)
-	}
-}
 
 // Config holds the discrete DB_* connection settings SPEC-005 R6
 // standardizes on (docs/plans/SPEC-005-plan.md §0), as opposed to a

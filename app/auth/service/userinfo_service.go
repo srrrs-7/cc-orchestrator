@@ -14,17 +14,18 @@ import (
 // the claims about its subject that the token's granted scope
 // permits.
 type UserInfoService struct {
-	users    user.Repository
-	verifier token.Verifier
-	issuer   string
+	users       user.Repository
+	verifier    token.Verifier
+	issuer      string
+	apiAudience string
 }
 
-// NewUserInfoService builds a UserInfoService. issuer is used both to
-// validate the access token's "iss" claim and, per this
-// authorization server's audience design, its "aud" claim (see
-// AuthorizationService.Token).
-func NewUserInfoService(users user.Repository, verifier token.Verifier, issuer string) *UserInfoService {
-	return &UserInfoService{users: users, verifier: verifier, issuer: issuer}
+// NewUserInfoService builds a UserInfoService. issuer validates the
+// access token's "iss" claim. apiAudience validates the "aud" claim
+// (ISSUE-037): access tokens are now issued with aud=apiAudience
+// (the API resource identifier), not aud=issuer.
+func NewUserInfoService(users user.Repository, verifier token.Verifier, issuer, apiAudience string) *UserInfoService {
+	return &UserInfoService{users: users, verifier: verifier, issuer: issuer, apiAudience: apiAudience}
 }
 
 // UserInfo verifies bearerToken as an access token JWT and returns
@@ -32,16 +33,15 @@ func NewUserInfoService(users user.Repository, verifier token.Verifier, issuer s
 //
 // token.Verifier only checks the signature and "exp"; UserInfo
 // additionally checks "iss" (must be this issuer) and "aud" (must
-// also equal this issuer, since access tokens are minted with
-// aud=issuer to scope them to this UserInfo endpoint -- see
-// AuthorizationService.Token), and requires a non-empty "sub" (OIDC
-// Core 5.3.2: sub is REQUIRED in the UserInfo response).
+// equal apiAudience -- access tokens are now minted with
+// aud=apiAudience per ISSUE-037), and requires a non-empty "sub"
+// (OIDC Core 5.3.2: sub is REQUIRED in the UserInfo response).
 func (s *UserInfoService) UserInfo(ctx context.Context, bearerToken string) (UserInfoDTO, error) {
 	claims, err := s.verifier.Verify(bearerToken)
 	if err != nil {
 		return UserInfoDTO{}, fmt.Errorf("service: userinfo: %w", err)
 	}
-	if claims.Issuer != s.issuer || claims.Audience != s.issuer || claims.Subject == "" {
+	if claims.Issuer != s.issuer || claims.Audience != s.apiAudience || claims.Subject == "" {
 		return UserInfoDTO{}, fmt.Errorf("service: userinfo: %w", token.ErrInvalidToken)
 	}
 

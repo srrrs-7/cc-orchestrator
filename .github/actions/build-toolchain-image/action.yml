@@ -2,8 +2,7 @@
 #
 # SPEC-009 Phase C: shared "build the pinned toolchain image" step, used by
 # every job in .github/workflows/{cicd,contract-drift,sqlc-drift}.yml that
-# needs to run a `make <target>` (api/auth/migrator/iac Makefiles) or
-# `bun run <script>` (app/web, via bin/bun) command.
+# needs to run a `make <target>` command (all stacks including app/web).
 #
 # User decision (2026-07-10, SPEC-009 Phase C kickoff): CI builds and caches
 # the toolchain image itself in every job -- it does NOT push to GHCR and no
@@ -17,16 +16,16 @@
 # reference via their shared `x-tools-base` anchor's `image:` field -- is
 # already present in the runner's local Docker daemon. Every subsequent
 # `docker compose ... run --rm tools[-offline] ...` in the same job (which is
-# all that any stack's Makefile wrapper, or app/web's bin/bun shim, ever does
+# all that any stack's Makefile wrapper ever does
 # once invoked on the host/CI side -- see docs/plans/SPEC-009-plan.md
-# "Makefile 透過ラッパーの形" / "web の透過ラッパー") finds this image already
+# "Makefile 透過ラッパーの形") finds this image already
 # built and does not rebuild it, so callers can simply run `make check` /
-# `bun run test` / etc. exactly as documented in each stack's own rules file,
+# `make test` / etc. exactly as documented in each stack's own rules file,
 # with no toolchain-specific plumbing of their own.
 name: Build toolchain image
 description: >-
-  Builds docker/toolchain (SPEC-009's single pinned polyglot toolchain image)
-  from versions.env, using a GitHub Actions cache (buildx cache-from/to: gha)
+  Builds .devcontainer/toolchain (SPEC-009's single pinned polyglot toolchain image)
+  from .devcontainer/versions.env, using a GitHub Actions cache (buildx cache-from/to: gha)
   so repeat CI runs reuse layers instead of reinstalling every tool from
   scratch, and loads the result into the runner's local Docker daemon as
   cc-orchestrator/toolchain:local.
@@ -43,7 +42,7 @@ runs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    # versions.env (repo root, SPEC-009's single source of truth -- see that
+    # .devcontainer/versions.env (SPEC-009's single source of truth -- see that
     # file's own header comment) is the ONLY place these tool versions are
     # pinned. Loading it into $GITHUB_ENV here -- rather than hardcoding a
     # second copy of these same values in this action or in any calling
@@ -52,16 +51,20 @@ runs:
     # from drifting apart (docs/plans/SPEC-009-plan.md's "versions.env の設計"
     # note: this one file is meant to be readable by a shell, GitHub Actions,
     # docker compose, and make alike).
+    # `$GITHUB_ENV`'s file-command parser only accepts `KEY=value` lines and
+    # rejects comments/blank lines with "Invalid format" (versions.env's own
+    # header is a multi-line `#` comment block, so a plain `cat` here fails
+    # immediately) -- grep out only the `KEY=value` lines before appending.
     - name: Load versions.env
       shell: bash
-      run: cat "${{ github.workspace }}/versions.env" >> "$GITHUB_ENV"
+      run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${{ github.workspace }}/.devcontainer/versions.env" >> "$GITHUB_ENV"
 
     # Build-arg list mirrors compose.tools.yml's `x-tools-base.build.args`
     # exactly (same 10 keys, same versions.env source that anchor itself
     # reads via `${VAR}` compose substitution) -- keep both lists in sync if
     # either changes. POSTGRES_VERSION is deliberately excluded: it pins the
     # Postgres *service* image compose.yml / this repo's CI jobs start, not a
-    # docker/toolchain/Dockerfile build ARG (the Dockerfile has no such ARG).
+    # .devcontainer/toolchain/Dockerfile build ARG (the Dockerfile has no such ARG).
     #
     # provenance: false -- docker/build-push-action@v6 defaults to emitting a
     # build provenance attestation, which forces a multi-manifest image index
@@ -73,7 +76,7 @@ runs:
     - name: "Build (cache-from/to: gha)"
       uses: docker/build-push-action@v6
       with:
-        context: ${{ github.workspace }}/docker/toolchain
+        context: ${{ github.workspace }}/.devcontainer/toolchain
         tags: cc-orchestrator/toolchain:local
         load: true
         provenance: false

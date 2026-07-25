@@ -14,8 +14,8 @@ import (
 // ClientRepository is a Postgres-backed implementation of
 // client.Repository (SPEC-005 R2). client.Repository is read-only
 // (FindByID only); population happens through SeedClient, called once
-// at startup by cmd/authz/main.go's persistence wiring when Postgres
-// mode is selected (see SelectMode).
+// at startup by cmd/authz/main.go's persistence wiring (SPEC-011:
+// Postgres is the sole persistence backend).
 type ClientRepository struct {
 	q *sqlcgen.Queries
 }
@@ -47,6 +47,24 @@ func (r *ClientRepository) FindByID(ctx context.Context, id client.ClientID) (*c
 		return nil, fmt.Errorf("postgres: find client by id: %w", err)
 	}
 	return c, nil
+}
+
+// ListAll returns every Client ordered by id. An empty table yields a
+// nil slice, not an error.
+func (r *ClientRepository) ListAll(ctx context.Context) ([]*client.Client, error) {
+	rows, err := r.q.ListClients(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list clients: %w", err)
+	}
+	clients := make([]*client.Client, 0, len(rows))
+	for _, row := range rows {
+		c, err := rowToClient(row)
+		if err != nil {
+			return nil, fmt.Errorf("postgres: list clients: %w", err)
+		}
+		clients = append(clients, c)
+	}
+	return clients, nil
 }
 
 // rowToClient reconstructs a *client.Client from a persisted row,
@@ -88,7 +106,13 @@ func rowToClient(row sqlcgen.Client) (*client.Client, error) {
 		return nil, fmt.Errorf("decode grant_types: %w", err)
 	}
 
-	return client.Reconstruct(id, redirectURIs, allowedScopes, responseTypes, grantTypes), nil
+	var secretHash *string
+	if row.ClientSecretHash.Valid {
+		h := row.ClientSecretHash.String
+		secretHash = &h
+	}
+
+	return client.Reconstruct(id, redirectURIs, allowedScopes, responseTypes, grantTypes, secretHash), nil
 }
 
 // decodeStringSlice unmarshals a jsonb column (stored as a JSON array

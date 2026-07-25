@@ -1,0 +1,314 @@
+# compose.tools.yml — containerized developer/CI toolchain (SPEC-009,
+# revised by SPEC-013 R6 -- see the `tools-db` service below).
+#
+# Three services built from the single polyglot image
+# .devcontainer/toolchain/Dockerfile, whose tool versions all come from
+# versions.env (the single source of truth -- see that file):
+#
+#   tools          network enabled. Reserved for "deps" phases that must
+#                  reach the network: `bun install`/`add`/`remove`/
+#                  `update`, `go mod download`, `terraform init`/
+#                  `tflint --init`, and phases that need to reach the
+#                  sibling compose.yml's `postgres` service for
+#                  provisioning (`make migrate`, `make migrate-test`,
+#                  `terraform plan`) rather than for test *execution*
+#                  itself (see `tools-db` below for that).
+#   tools-offline  network_mode: none. The default execution service for
+#                  everything else: format/lint/vet/build/generate/
+#                  sqlc/openapi/migrate-create. GOPROXY=off makes any
+#                  accidental network fetch fail loudly (a build/test
+#                  that unexpectedly needs the network fails instead of
+#                  silently succeeding), so a cold/incomplete cache is
+#                  caught immediately instead of masking a real gap.
+#   tools-db       postgres-reachable, internet-egress denied (SPEC-013
+#                  R6, revising SPEC-009 R3's "every check/build/test
+#                  phase stays fully offline"). The default execution
+#                  service for DB-backed test *phases* specifically
+#                  (each stack's own `test`/`check` target, per that
+#                  stack's own Makefile -- this file only defines the
+#                  service *shape*, the same division of concerns as
+#                  `tools`/`tools-offline` above). Attached to the
+#                  `dbnet` internal network (this file's own bottom
+#                  `networks:` key) instead of the implicit default
+#                  network `tools`/`tools-offline` use -- see that
+#                  network's own comment for how it reaches `postgres`
+#                  by name while still having no route to the public
+#                  internet. Always used together with the sibling
+#                  compose.yml (`-f compose.yml -f
+#                  .devcontainer/compose.tools.yml`), same as `tools`
+#                  above when it reaches Postgres -- this service is
+#                  useless alone (no `postgres` to reach without that
+#                  overlay).
+#
+# No service mounts host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud
+# credentials, etc.) or the Docker socket -- see the shared
+# `x-tools-base` anchor below, which is the *only* place volumes/
+# environment/security options are declared (all three services inherit
+# it via YAML merge). The repository is bind-mounted read/write at
+# /workspace; every tool cache lives on a named volume instead, so nothing
+# a dependency install writes ever lands inside the bind-mounted repo
+# tree as a stray cache directory.
+#
+# `user:` is the invoking host user's uid:gid, supplied via the
+# TOOLBOX_UID/TOOLBOX_GID *shell* environment variables (not `-e`/
+# `--env`/`environment:` -- compose resolves `${...}` in a YAML value
+# from its own process environment or an --env-file, before the
+# container is even created; a `-e` flag passed to `docker compose run`
+# only sets a variable *inside* the already-created container, which is
+# too late to affect the `user:` field). Callers (Makefile wrappers, or a
+# human) must export both, e.g.:
+#
+#   TOOLBOX_UID="$(id -u)" TOOLBOX_GID="$(id -g)" \
+#     docker compose --env-file versions.env -f .devcontainer/compose.tools.yml \
+#     run --rm tools-offline make -C app/api check
+#
+# This keeps files created under the /workspace bind-mount owned by the
+# calling developer/CI user, never by root or this image's baked-in
+# uid:gid 1000 (see .devcontainer/toolchain/Dockerfile). When TOOLBOX_UID/
+# TOOLBOX_GID are not exported (e.g. a plain `docker compose up` from an
+# editor), both default to 1000:1000 -- the image's own built-in `tools`
+# user.
+#
+# Phases that need a real Postgres for *provisioning* (root Makefile's
+# `migrate`/`migrate-test`, app/migrator's own `run`/permission-boundary
+# `test-integration`) layer this file on top of the sibling compose.yml
+# (which owns the `postgres` service) and use the network-enabled `tools`
+# service, not `tools-db`:
+#
+#   docker compose --env-file versions.env -f compose.yml -f .devcontainer/compose.tools.yml \
+#     run --rm tools <command reaching DB_HOST=postgres>
+#
+# Phases that need a real Postgres for DB-backed test *execution* only
+# (SPEC-013: each stack's own `test`/`check`, once that stack's Makefile
+# routes it there) use the same file overlay but the `tools-db` service
+# instead, for the tighter no-internet-egress guarantee described in that
+# service's own comment above:
+#
+#   docker compose --env-file versions.env -f compose.yml -f .devcontainer/compose.tools.yml \
+#     run --rm tools-db <command reaching DB_HOST=postgres, no internet>
+#
+# This file only defines the three service *shapes*; deciding which
+# service (and which compose file combination) a given command goes
+# through is each stack's Makefile-wrapper concern, not this file's.
+#
+# IMPORTANT for Phase B (verified during Phase A implementation): `go
+# run pkg@version` (sqlc/goose/swag/goimports, as every Go stack's
+# Makefile currently invokes them) does NOT work under `tools-offline`
+# even with the exact module+version fully warmed in the gomodcache
+# volume -- `go run` performs a "loading deprecation for <module>"
+# module-proxy lookup on every invocation, unconditionally, and fails
+# under GOPROXY=off regardless of cache state. `go install` (a one-time
+# build, different code path) does not hit this, so
+# .devcontainer/toolchain/Dockerfile still uses it to pre-warm the cache, but
+# each stack's Makefile must invoke these four tools BY THEIR INSTALLED
+# BINARY NAME (`sqlc` / `goose` / `swag` / `goimports`, all already on
+# PATH in every image via GOBIN=/usr/local/go-tools/bin, present
+# regardless of volume state) rather than `go run pkg@version`, for the
+# exec phase to actually complete under `tools-offline`. This is the
+# SPEC-009 plan's own pre-approved fallback for this exact scenario, now
+# confirmed necessary rather than hypothetical -- see
+# .devcontainer/toolchain/Dockerfile's own comment on this for detail.
+
+# Build context and workspace bind-mount source are interpolated so this
+# one file works from either project-directory Compose may pick:
+#
+#   - The devcontainer (VS Code Dev Containers extension) runs Compose
+#     with THIS file's own directory (.devcontainer/) as the project
+#     directory, and sets none of the vars below -- so the defaults
+#     (`./toolchain` and `..`, both relative to .devcontainer/) resolve
+#     to .devcontainer/toolchain and the repo root respectively.
+#   - Every CLI/CI caller (the Makefile wrappers, the CI jobs)
+#     instead exports TOOLBOX_CONTEXT / TOOLBOX_WORKSPACE as *absolute*
+#     paths (repo-root-anchored), so the paths are correct regardless of
+#     which project directory Compose derives (tools-only invocations get
+#     .devcontainer/, `-f compose.yml -f ...` overlays get the repo root)
+#     and never depend on `-f` ordering. Those callers also pin
+#     COMPOSE_PROJECT_NAME=cc-orchestrator so the named cache volumes
+#     below stay a single shared set across every invocation (a
+#     tools-only project would otherwise default its name to
+#     "devcontainer" -- this file's parent dir -- and silently use a
+#     separate, unwarmed cache).
+x-tools-base: &tools-base
+  build:
+    context: ${TOOLBOX_CONTEXT:-./toolchain}
+    # Fallback defaults for build.args below: these are safety-nets for
+    # callers that do not supply an --env-file and have not exported the
+    # variables into their shell environment (e.g. `docker compose -f
+    # compose.tools.yml build` without --env-file, which is what the VS
+    # Code Dev Containers extension runs internally). They are the same
+    # pattern as compose.yml's `image: postgres:${POSTGRES_VERSION:-...}`.
+    #
+    # Source of truth for all pinned versions is .devcontainer/versions.env.
+    # These defaults MUST be kept in sync with that file whenever a version
+    # is bumped there (same discipline as compose.yml's POSTGRES_VERSION).
+    #
+    # Callers that DO supply the env file (make, CI --env-file versions.env)
+    # resolve the real values directly and never reach these fallbacks.
+    #
+    # Previously a `.env` symlink at the repo root pointing to
+    # .devcontainer/versions.env served this role via Compose's automatic
+    # default-.env auto-load; that symlink has been removed in favour of
+    # explicit fallback defaults here, which require no out-of-band file on
+    # disk.
+    args:
+      GO_VERSION: ${GO_VERSION:-1.26}
+      BUN_VERSION: ${BUN_VERSION:-1.3.14}
+      GOLANGCI_LINT_VERSION: ${GOLANGCI_LINT_VERSION:-2.12.2}
+      TERRAFORM_VERSION: ${TERRAFORM_VERSION:-1.10.5}
+      TFLINT_VERSION: ${TFLINT_VERSION:-v0.55.1}
+      TRIVY_VERSION: ${TRIVY_VERSION:-v0.69.2}
+      SQLC_VERSION: ${SQLC_VERSION:-v1.31.1}
+      GOOSE_VERSION: ${GOOSE_VERSION:-v3.24.1}
+      SWAG_VERSION: ${SWAG_VERSION:-v2.0.0-rc5}
+      GOIMPORTS_VERSION: ${GOIMPORTS_VERSION:-v0.42.0}
+  image: cc-orchestrator/toolchain:local
+  # See file header: host-caller-supplied uid:gid via shell env vars,
+  # defaulting to the image's own built-in tools user (1000:1000).
+  user: "${TOOLBOX_UID:-1000}:${TOOLBOX_GID:-1000}"
+  working_dir: /workspace
+  volumes:
+    # macOS (VirtioFS) performance note (SPEC-009 NFR): `:delegated`
+    # relaxes host<->container write-ordering guarantees in the
+    # container's favor. Under Docker Desktop's legacy osxfs backend
+    # this materially speeds up large bind-mounted trees; under the
+    # current VirtioFS-based backend it is close to a no-op, but is kept
+    # since it is harmless on Linux and correct either way.
+    - ${TOOLBOX_WORKSPACE:-..}:/workspace:delegated
+    - gomodcache:/cache/go/mod
+    - gobuild:/cache/go/build
+    - buncache:/cache/bun
+    - tfplugincache:/cache/tf-plugins
+  # No host secrets (~/.aws, ~/.ssh, ~/.npmrc, cloud credentials, etc.)
+  # and no docker.sock are ever mounted here -- see file header. AWS
+  # deploy steps (root Makefile's push-images/deploy-web) run `aws`
+  # itself on the host, never inside this toolbox (SPEC-009 R7).
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+
+x-tools-env: &tools-env
+  HOME: /home/tools
+  GOPATH: /cache/go
+  GOMODCACHE: /cache/go/mod
+  GOCACHE: /cache/go/build
+  BUN_INSTALL_CACHE_DIR: /cache/bun
+  TF_PLUGIN_CACHE_DIR: /cache/tf-plugins
+  # Marks "already inside the toolbox" for the IN_TOOLBOX-guarded
+  # Makefile wrappers, preventing them from
+  # re-invoking `docker compose run` from inside a container that is
+  # already the target (no multi-level re-wrapping).
+  IN_TOOLBOX: "1"
+  # `go build`/`go vet`/`go test` invoke `git` under the hood for VCS
+  # build-info stamping. Verified during Phase A implementation: the
+  # container's `user:` override (an arbitrary host uid:gid with no
+  # matching /etc/passwd entry) sees /workspace's bind-mounted top-level
+  # directory reported under a *different* uid than its own effective
+  # uid (observed under colima/virtiofs: the mount point itself reports
+  # uid=0 while files inside it correctly report the host uid) -- Git's
+  # "dubious ownership" protection (CVE-2022-24765) then refuses to run
+  # inside /workspace at all, failing every `go build`/`vet`/`test`
+  # invocation with "detected dubious ownership in repository at
+  # '/workspace'" (exit 128). Rather than requiring a persistent
+  # ~/.gitconfig write (HOME above is baked into the image, not a
+  # volume, so it would not even persist across `run` invocations), this
+  # trusts /workspace via Git's env-var config injection (supported
+  # since Git 2.31), which applies for the lifetime of each `run`
+  # regardless of uid/HOME state. Scoped to exactly /workspace (not a
+  # blanket `safe.directory=*`) -- the only path ever bind-mounted here.
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: safe.directory
+  GIT_CONFIG_VALUE_0: /workspace
+
+services:
+  # network enabled -- deps / DB-reaching phases only (see file header).
+  tools:
+    <<: *tools-base
+    environment:
+      <<: *tools-env
+
+  # network_mode:none -- the default execution service (see file header).
+  tools-offline:
+    <<: *tools-base
+    network_mode: none
+    environment:
+      <<: *tools-env
+      # Default GOPROXY is left alone for the network-enabled `tools`
+      # service (SPEC-009 plan §Dockerfile設計); only here is it forced
+      # off, so any exec-phase command that unexpectedly needs to fetch
+      # a module fails immediately with a clear "GOPROXY=off" error
+      # instead of hanging or (impossible anyway, network_mode:none)
+      # silently succeeding over the network.
+      GOPROXY: "off"
+
+  # postgres-reachable, internet-egress denied (SPEC-013 R6) -- the third
+  # network layer, for DB-backed test *execution* phases only (see file
+  # header). Deliberately does NOT list `default` alongside `dbnet` below
+  # (contrast with `tools`/`tools-offline` above, which stay on the
+  # implicit default network by omitting any `networks:` override at
+  # all): once a service declares an explicit `networks:` list, Compose
+  # only attaches it to the networks named there, so leaving `default`
+  # out here is what actually removes this service's route to the public
+  # internet. It can still resolve `postgres` by service name because the
+  # sibling compose.yml's `postgres` service is *also* a member of
+  # `dbnet` (see that file's own comment) -- Docker's embedded per-network
+  # DNS resolves container/service names independently on every network a
+  # container is joined to, `internal: true` or not.
+  tools-db:
+    <<: *tools-base
+    networks:
+      - dbnet
+    environment:
+      <<: *tools-env
+      # Same rationale as tools-offline's own GOPROXY=off above: this
+      # service has no network route to reach a module proxy at all, but
+      # forcing GOPROXY=off here too makes any unexpected fetch attempt
+      # fail with an immediate, clear error instead of a slow DNS/connect
+      # timeout against an unreachable host.
+      GOPROXY: "off"
+
+volumes:
+  # Named volumes (never bind-mounted into the repo tree): survive across
+  # `run` invocations, are seeded from .devcontainer/toolchain/Dockerfile's own
+  # baked-in cache content the first time each is created (see that
+  # file's header comment on Docker's volume-seeding behaviour), and are
+  # the only place install-time cache data lives.
+  gomodcache:
+  gobuild:
+  buncache:
+  tfplugincache:
+
+networks:
+  # internal: true (SPEC-013 R6) -- an isolated bridge network with no
+  # default route to the public internet, used only by the `tools-db`
+  # service above to reach the sibling compose.yml's `postgres` service
+  # (which is *also* declared a member of this same network, in that
+  # file) by service name, without granting it internet egress the way
+  # the plain default network (which `tools`/`tools-offline` above still
+  # use) would. Declared identically in compose.yml's own top-level
+  # `networks:` key so *each* file stays independently valid when
+  # composed alone: Compose validates every service's `networks:`
+  # references against whichever compose file(s) are actually passed to
+  # a given invocation, and this file alone (e.g. the devcontainer's own
+  # `tools`/`tools-offline` use, or any bare `docker compose -f
+  # .devcontainer/compose.tools.yml ...` invocation, which never layers
+  # compose.yml on top) would otherwise fail to parse `tools-db`'s
+  # reference to `dbnet` with no top-level definition in scope. When both
+  # files ARE layered together (`-f compose.yml -f
+  # .devcontainer/compose.tools.yml`, tools-db's only meaningful use),
+  # Compose merges the two identical declarations without conflict.
+  #
+  # UNVERIFIED (flagged for T7/checker+tester, SPEC-013 plan §6): that
+  # Docker's embedded per-network DNS resolves the `postgres` service name
+  # for a container attached to an `internal: true` network exactly the
+  # way it does on the regular default network has not been exercised
+  # against a live Docker daemon as part of this change -- the mechanism
+  # is Compose/Docker's documented behavior for `internal` networks
+  # (isolated from external routes, but same-network service discovery
+  # still works), but actual connectivity from `tools-db` to `postgres`
+  # should be confirmed by running e.g. `make -C app/api test
+  # REQUIRE_DB=1` (once T3/T4a wire testsupport's default DB_NAME to
+  # api_test and route the DB phase through tools-db) before relying on
+  # it in CI.
+  dbnet:
+    internal: true

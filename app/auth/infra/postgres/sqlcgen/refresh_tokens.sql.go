@@ -7,6 +7,7 @@ package sqlcgen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -55,8 +56,26 @@ func (q *Queries) DeleteExpiredRefreshToken(ctx context.Context, tokenHash strin
 	return err
 }
 
+const deleteRefreshTokensByClientID = `-- name: DeleteRefreshTokensByClientID :exec
+DELETE FROM refresh_tokens WHERE client_id = $1
+`
+
+func (q *Queries) DeleteRefreshTokensByClientID(ctx context.Context, clientID string) error {
+	_, err := q.db.ExecContext(ctx, deleteRefreshTokensByClientID, clientID)
+	return err
+}
+
+const deleteRefreshTokensByUserID = `-- name: DeleteRefreshTokensByUserID :exec
+DELETE FROM refresh_tokens WHERE user_id = $1
+`
+
+func (q *Queries) DeleteRefreshTokensByUserID(ctx context.Context, userID string) error {
+	_, err := q.db.ExecContext(ctx, deleteRefreshTokensByUserID, userID)
+	return err
+}
+
 const getRefreshToken = `-- name: GetRefreshToken :one
-SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+SELECT token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 FROM refresh_tokens
 WHERE token_hash = $1 AND expires_at > now()
 `
@@ -69,6 +88,7 @@ type GetRefreshTokenRow struct {
 	Scope     string
 	ExpiresAt time.Time
 	Consumed  bool
+	AuthTime  sql.NullTime
 }
 
 // Backs refreshtoken.Repository.FindByTokenHash. Unlike
@@ -93,6 +113,7 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (GetRef
 		&i.Scope,
 		&i.ExpiresAt,
 		&i.Consumed,
+		&i.AuthTime,
 	)
 	return i, err
 }
@@ -100,9 +121,9 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (GetRef
 const insertRefreshToken = `-- name: InsertRefreshToken :exec
 
 INSERT INTO refresh_tokens (
-    token_hash, family_id, client_id, user_id, scope, expires_at, consumed
+    token_hash, family_id, client_id, user_id, scope, expires_at, consumed, auth_time
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, false
+    $1, $2, $3, $4, $5, $6, false, $7
 )
 `
 
@@ -113,10 +134,11 @@ type InsertRefreshTokenParams struct {
 	UserID    string
 	Scope     string
 	ExpiresAt time.Time
+	AuthTime  sql.NullTime
 }
 
 // SPEC-006 R4/R5/R8: sqlc input for the refresh_tokens table
-// (db/migrations/000002_create_refresh_tokens.sql). `make sqlc`
+// (schema/migrations/000002_create_refresh_tokens.sql). `make sqlc`
 // regenerates infra/postgres/sqlcgen from this file; keep both in the
 // same commit (no drift).
 // Backs refreshtoken.Repository.Save (the initial refresh token minted
@@ -125,6 +147,9 @@ type InsertRefreshTokenParams struct {
 // INSERT, not an upsert: a token_hash collision would indicate a
 // broken random generator, not a legitimate re-save (mirrors
 // InsertAuthCode's doc comment in authcodes.sql).
+// auth_time ($7) is the OIDC IdP session login timestamp carried forward
+// through rotation; NULL means not available (maps to time.Time{} in Go --
+// see ISSUE-038).
 func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshTokenParams) error {
 	_, err := q.db.ExecContext(ctx, insertRefreshToken,
 		arg.TokenHash,
@@ -133,8 +158,30 @@ func (q *Queries) InsertRefreshToken(ctx context.Context, arg InsertRefreshToken
 		arg.UserID,
 		arg.Scope,
 		arg.ExpiresAt,
+		arg.AuthTime,
 	)
 	return err
+}
+
+const purgeExpiredRefreshTokens = `-- name: PurgeExpiredRefreshTokens :execrows
+DELETE FROM refresh_tokens WHERE expires_at <= now()
+`
+
+// Bulk eviction companion to DeleteExpiredRefreshToken (ISSUE-019 item 1):
+// deletes ALL rows whose expires_at is in the past in a single statement.
+// This covers both consumed (already-rotated) rows that were intentionally
+// kept for reuse detection during their TTL and unconsumed rows that were
+// never exchanged. Called by the background purge ticker in
+// cmd/authz/main.go (every 15 min).
+// Returns the number of rows deleted (sqlc :execrows).
+// Safe to call at any time: the WHERE guard makes it a no-op when no expired
+// rows exist, and it never touches live (unexpired) refresh tokens.
+func (q *Queries) PurgeExpiredRefreshTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeExpiredRefreshTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const revokeFamilyRefreshTokens = `-- name: RevokeFamilyRefreshTokens :exec

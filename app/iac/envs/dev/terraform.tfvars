@@ -40,7 +40,7 @@ fargate_weight      = 0
 fargate_spot_weight = 1
 
 origin_verify_header_name = "X-Origin-Verify"
-health_check_path         = "/tasks"
+health_check_path         = "/health"
 log_retention_days        = 14
 
 # auth (app/auth). desired_count is fixed at 1: app/auth generates a new RSA

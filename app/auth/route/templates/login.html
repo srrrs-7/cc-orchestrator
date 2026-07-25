@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: #f4f4f5; color: #18181b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #09090b; color: #fafafa; }
+      .card { background: #18181b; border-color: #27272a; }
+      input { background: #09090b; border-color: #3f3f46; color: inherit; }
+    }
+    .card { width: min(100% - 2rem, 24rem); padding: 1.5rem; border: 1px solid #e4e4e7; border-radius: 0.75rem; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 0.05); }
+    h1 { margin: 0 0 0.25rem; font-size: 1.25rem; }
+    p { margin: 0 0 1rem; color: #71717a; font-size: 0.875rem; }
+    label { display: block; font-size: 0.875rem; margin-bottom: 0.25rem; }
+    input { width: 100%; box-sizing: border-box; padding: 0.625rem 0.75rem; margin-bottom: 0.875rem; border: 1px solid #d4d4d8; border-radius: 0.5rem; font: inherit; }
+    button { width: 100%; padding: 0.625rem 0.75rem; border: 0; border-radius: 0.5rem; background: #18181b; color: #fafafa; font: inherit; cursor: pointer; }
+    .error { margin-bottom: 1rem; padding: 0.625rem 0.75rem; border-radius: 0.5rem; background: #fef2f2; color: #991b1b; font-size: 0.875rem; }
+    @media (prefers-color-scheme: dark) {
+      button { background: #fafafa; color: #18181b; }
+      .error { background: #450a0a; color: #fecaca; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Sign in</h1>
+    <p>Sign in to continue to the application.</p>
+    {{if .Error}}<div class="error" role="alert">{{.Error}}</div>{{end}}
+    <form method="post" action="">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required value="{{.Username}}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>

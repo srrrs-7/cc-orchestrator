@@ -1,10 +1,10 @@
 ---
 id: ISSUE-003
 title: /authorize が response_type の欠落と非対応値を区別せず一律 unsupported_response_type を返す(RFC 6749 4.1.2.1 の厳密区別)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-08
-updated: 2026-07-08
+updated: 2026-07-12
 specs: []  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -75,9 +75,9 @@ RFC 6749 §4.1.2.1 のエラーコード規定:
 
 ### 実施内容
 
-- [ ] `response_type` 欠落用の sentinel を追加し、非対応値と分離する
-- [ ] `route/response.go` で欠落 → `invalid_request`、非対応値 → `unsupported_response_type` にマップ
-- [ ] 空 `response_type` → `invalid_request` を検証する route テストを追加
+- [x] `response_type` 欠落用の sentinel を追加し、非対応値と分離する
+- [x] `route/response.go` で欠落 → `invalid_request`、非対応値 → `unsupported_response_type` にマップ
+- [x] 空 `response_type` → `invalid_request` を検証する route テストを追加
 
 ### 再発防止
 
@@ -91,3 +91,8 @@ RFC 6749 §4.1.2.1 のエラーコード規定:
 - 事実確認: `app/auth/service/authorization_service.go:100-102` が欠落・非対応値を一律 `client.ErrUnsupportedResponseType` にまとめ、`app/auth/route/response.go:80-81` が `unsupported_response_type` にマップすることを確認。RFC 6749 §4.1.2.1 では欠落 = `invalid_request`、非対応値 = `unsupported_response_type`。
 - severity は **low** と判定。判定根拠: 稼働中の実害はなく(基盤サンプルは `response_type=code` のみを主軸に提示)、クライアントは `error_description` で区別可能なため回避策あり。基盤サンプルの目的達成を妨げない仕様厳密化のため low(critical/high/medium ではないのは機能・価値が現に損なわれていないため)。
 - 次にやること: 実運用化・仕様厳密化を決めた時点で planner に計画化を依頼し、欠落/非対応値の分離と route テスト追加を impl-api/tester/checker/review-spec で実施する。
+
+### 2026-07-12
+
+- 対応完了。`client.ErrMissingResponseType` を追加し、`authorization_service.go` の `validateAuthorize` で `response_type` 欠落(空文字)と非対応値を分岐。`route/response.go` の `authorizeErrorCode` で欠落 → `invalid_request`、非対応値 → `unsupported_response_type` にマップ。
+- 検証: `TestAuthorize_VerifiedRedirectURI_RedirectsToRegisteredURI_OnMissingResponseType`(欠落 → `invalid_request`)と既存 `OnUnsupportedResponseType`(`token` → `unsupported_response_type`)を route テストで追加/維持。`cd app/auth && make check` PASS。

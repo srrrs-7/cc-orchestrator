@@ -41,7 +41,7 @@ func (t Target) String() string {
 
 // DefaultMigrationsDir returns this target's default migrations
 // directory, "/migrations/<target>", matching app/migrator/
-// Dockerfile's COPY layout (COPY app/api/db/migrations /migrations/api
+// Dockerfile's COPY layout (COPY app/api/infra/postgres/schema/migrations /migrations/api
 // and the app/auth equivalent).
 func (t Target) DefaultMigrationsDir() string {
 	return "/migrations/" + t.value

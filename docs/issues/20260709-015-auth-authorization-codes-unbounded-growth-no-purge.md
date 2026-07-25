@@ -1,7 +1,7 @@
 ---
 id: ISSUE-015
 title: SPEC-005 で Postgres 化した認可コードが lazy eviction のみで無制限に増加する(未消費・期限切れコードの恒久残存)
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved
 severity: medium  # critical | high | medium | low
 created: 2026-07-09
 updated: 2026-07-09
@@ -83,3 +83,8 @@ SPEC-005 は認可コードの単回使用・TTL セマンティクス(有効な
 - 事実確認: 期限切れ削除は `app/auth/infra/postgres/authcode_repository.go:62-88` の `FindByCode` 内で当該 code に対して `DeleteExpiredAuthCode`(`db/queries/authcodes.sql:32-40`)を呼ぶ lazy eviction のみ。テーブル全体の定期 purge は存在しない(`purge` / `cron` / `scheduled` の grep なし)。`/token` に到達しないコードは `Consume` されず、対応する `FindByCode` も来ないため恒久残存する。`infra/memory` は再起動でマップがリセットされ自然回収されていた劣化パス。
 - severity は **medium** と判定。判定根拠: 個々のクエリは PK 等価検索でテーブル肥大化に耐え(個別レイテンシへの即時影響なし)、機能は失われず、手動 / 定期 `DELETE ... WHERE expires_at <= now()` という回避策が存在する(= medium)一方、ストレージ・autovacuum コストが無制限に単調増加する累積的劣化で軽微(low)には収まらないため。review-performance は Major と評価。
 - 次にやること: 将来 planner が周期 purge の実行主体(スケジュール ECS タスク / pg_cron / アプリ内ティッカー)を確定し、impl-db(+ 必要なら impl-iac)が実装、tester / checker / review を通す。
+
+### 2026-07-12 (resolved)
+
+- `PurgeExpiredAuthCodes` bulk purge + `expires_at` index(migration 000007)。`cmd/authz` 15 分ティッカー。
+- 検証: `REQUIRE_DB=1 make -C app/auth check` 緑(purge integration test 含む)。

@@ -46,6 +46,17 @@ locals {
         environment = var.migration_environment
         secrets     = var.migration_secrets
 
+        # ISSUE-056: least-privilege hardening. app/migrator is a distroless
+        # static nonroot binary (see app/migrator/Dockerfile) that performs
+        # no runtime filesystem writes and needs no Linux capabilities, so
+        # both settings apply with no functional side effects.
+        readonlyRootFilesystem = true
+        linuxParameters = {
+          capabilities = {
+            drop = ["ALL"]
+          }
+        }
+
         logConfiguration = {
           logDriver = "awslogs"
           options = {
@@ -83,6 +94,17 @@ locals {
       # application's variable names.
       environment = var.environment
       secrets     = var.secrets
+
+      # ISSUE-056: least-privilege hardening. api and auth are distroless
+      # static nonroot binaries (see app/{api,auth}/Dockerfile) that perform
+      # no runtime filesystem writes and need no Linux capabilities, so both
+      # settings apply with no functional side effects.
+      readonlyRootFilesystem = true
+      linuxParameters = {
+        capabilities = {
+          drop = ["ALL"]
+        }
+      }
 
       logConfiguration = {
         logDriver = "awslogs"

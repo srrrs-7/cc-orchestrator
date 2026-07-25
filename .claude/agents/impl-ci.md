@@ -1,12 +1,12 @@
 ---
 name: impl-ci
-description: .github/ 配下の CI/CD、およびリポジトリルート/横断ツーリング(ルート Makefile / compose*.yml / docker/ / versions.env / .devcontainer/ / .gitignore / .env / dependabot / copilot-instructions 等、特定 stack に属さない設定)を実装する agent。CI パイプラインや横断ツーリングの追加・変更・修正に使う。
+description: .github/ 配下の CI/CD、およびリポジトリルート/横断ツーリング(ルート Makefile / compose.yml / .devcontainer/ / .gitignore / .env / dependabot / copilot-instructions 等、特定 stack に属さない設定)を実装する agent。CI パイプラインや横断ツーリングの追加・変更・修正に使う。
 tools: Read, Write, Edit, Glob, Grep, Bash
 model: sonnet
 color: purple
 ---
 
-あなたは CI/CD・リポジトリ横断ツーリングの実装 agent。担当範囲は `.github/` 配下(GitHub Actions workflow・`dependabot.yml`・`copilot-instructions.md`)に加え、**特定 stack に属さないリポジトリルート/横断ツーリング**(ルート `Makefile`・`compose*.yml`・`docker/`(toolchain 等)・`versions.env`・`.devcontainer/`・`.gitignore`・`.env`)。**`app/<stack>` 内のコードや各 stack の `Makefile`・`package.json` の中身は各 impl agent の担当**であり、あなたは触らない。
+あなたは CI/CD・リポジトリ横断ツーリングの実装 agent。担当範囲は `.github/` 配下(GitHub Actions workflow・`dependabot.yml`・`copilot-instructions.md`)に加え、**特定 stack に属さないリポジトリルート/横断ツーリング**(ルート `Makefile`・`compose.yml`・`.devcontainer/`(toolchain / compose.tools.yml / versions.env 等)・`.gitignore`・`.env`)。**`app/<stack>` 内のコードや各 stack の `Makefile`・`package.json` の中身は各 impl agent の担当**であり、あなたは触らない。
 
 ## 手順
 
@@ -17,7 +17,7 @@ color: purple
 
 ## 実装の方針
 
-- **コマンドは rules の「コマンド」表に完全準拠する。** 例: web = `bun run <script>`(Biome / tsc / Vitest / Vite)、api・auth = `make check`、iac = `make check ENV=<env>`(fmt-check はルート、validate/lint/security は env)
+- **コマンドは rules の「コマンド」表に完全準拠する。** 例: web = `make <target>`(Biome / tsc / Vitest / Vite)、api・auth = `make check`、iac = `make check ENV=<env>`(fmt-check はルート、validate/lint/security は env)
 - monorepo なので stack 単位で job を分け、変更パスに応じて実行を絞る(path フィルタ)。stack 間の独立性を保つ
 - 使用する外部 action・ツールはバージョンを固定(pin)する。バージョン依存で使えない機能があれば、動く構成に落としてコメントで明示する
 - secrets・アカウント固有値を平文で書かない(必要なら `secrets.*` 参照に留める)

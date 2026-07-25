@@ -23,7 +23,11 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
  *
  * Returns a page of tasks ordered by creation time (created_at, id ascending). limit defaults to 20 and is clamped to a maximum of 100; offset defaults to 0.
  */
-export const getTasks = <ThrowOnError extends boolean = false>(options?: Options<GetTasksData, ThrowOnError>): RequestResult<GetTasksResponses, GetTasksErrors, ThrowOnError> => (options?.client ?? client).get<GetTasksResponses, GetTasksErrors, ThrowOnError>({ url: '/tasks', ...options });
+export const getTasks = <ThrowOnError extends boolean = false>(options?: Options<GetTasksData, ThrowOnError>): RequestResult<GetTasksResponses, GetTasksErrors, ThrowOnError> => (options?.client ?? client).get<GetTasksResponses, GetTasksErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
+  url: '/tasks',
+  ...options
+});
 
 /**
  * Create a task
@@ -31,6 +35,7 @@ export const getTasks = <ThrowOnError extends boolean = false>(options?: Options
  * Creates a new task with the given title and an optional priority. An omitted or empty priority defaults to medium.
  */
 export const postTasks = <ThrowOnError extends boolean = false>(options: Options<PostTasksData, ThrowOnError>): RequestResult<PostTasksResponses, PostTasksErrors, ThrowOnError> => (options.client ?? client).post<PostTasksResponses, PostTasksErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
   url: '/tasks',
   ...options,
   headers: {
@@ -44,14 +49,22 @@ export const postTasks = <ThrowOnError extends boolean = false>(options: Options
  *
  * Returns a single task by id.
  */
-export const getTasksById = <ThrowOnError extends boolean = false>(options: Options<GetTasksByIdData, ThrowOnError>): RequestResult<GetTasksByIdResponses, GetTasksByIdErrors, ThrowOnError> => (options.client ?? client).get<GetTasksByIdResponses, GetTasksByIdErrors, ThrowOnError>({ url: '/tasks/{id}', ...options });
+export const getTasksById = <ThrowOnError extends boolean = false>(options: Options<GetTasksByIdData, ThrowOnError>): RequestResult<GetTasksByIdResponses, GetTasksByIdErrors, ThrowOnError> => (options.client ?? client).get<GetTasksByIdResponses, GetTasksByIdErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
+  url: '/tasks/{id}',
+  ...options
+});
 
 /**
  * Complete a task
  *
  * Transitions a task from doing to done.
  */
-export const postTasksByIdComplete = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdCompleteData, ThrowOnError>): RequestResult<PostTasksByIdCompleteResponses, PostTasksByIdCompleteErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdCompleteResponses, PostTasksByIdCompleteErrors, ThrowOnError>({ url: '/tasks/{id}/complete', ...options });
+export const postTasksByIdComplete = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdCompleteData, ThrowOnError>): RequestResult<PostTasksByIdCompleteResponses, PostTasksByIdCompleteErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdCompleteResponses, PostTasksByIdCompleteErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
+  url: '/tasks/{id}/complete',
+  ...options
+});
 
 /**
  * Change a task's priority
@@ -59,6 +72,7 @@ export const postTasksByIdComplete = <ThrowOnError extends boolean = false>(opti
  * Updates a task's priority (low, medium, or high) without altering its status.
  */
 export const postTasksByIdPriority = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdPriorityData, ThrowOnError>): RequestResult<PostTasksByIdPriorityResponses, PostTasksByIdPriorityErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdPriorityResponses, PostTasksByIdPriorityErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
   url: '/tasks/{id}/priority',
   ...options,
   headers: {
@@ -72,4 +86,8 @@ export const postTasksByIdPriority = <ThrowOnError extends boolean = false>(opti
  *
  * Transitions a task from todo to doing.
  */
-export const postTasksByIdStart = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdStartData, ThrowOnError>): RequestResult<PostTasksByIdStartResponses, PostTasksByIdStartErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdStartResponses, PostTasksByIdStartErrors, ThrowOnError>({ url: '/tasks/{id}/start', ...options });
+export const postTasksByIdStart = <ThrowOnError extends boolean = false>(options: Options<PostTasksByIdStartData, ThrowOnError>): RequestResult<PostTasksByIdStartResponses, PostTasksByIdStartErrors, ThrowOnError> => (options.client ?? client).post<PostTasksByIdStartResponses, PostTasksByIdStartErrors, ThrowOnError>({
+  security: [{ name: 'Authorization', type: 'apiKey' }],
+  url: '/tasks/{id}/start',
+  ...options
+});

@@ -39,16 +39,19 @@ func (s *DiscoveryService) Metadata(_ context.Context) ProviderMetadata {
 		Issuer:                            s.issuer,
 		AuthorizationEndpoint:             s.issuer + "/authorize",
 		TokenEndpoint:                     s.issuer + "/token",
+		RevocationEndpoint:                s.issuer + "/revoke",
+		IntrospectionEndpoint:             s.issuer + "/introspect",
 		UserInfoEndpoint:                  s.issuer + "/userinfo",
+		EndSessionEndpoint:                s.issuer + "/logout",
 		JWKSURI:                           s.issuer + "/.well-known/jwks.json",
 		ResponseTypesSupported:            []string{"code"},
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
-		ScopesSupported:                   []string{"openid", "profile", "email"},
-		ClaimsSupported:                   []string{"sub", "iss", "aud", "exp", "iat", "nonce", "name", "email"},
+		ScopesSupported:                   []string{"openid", "profile", "email", "offline_access"},
+		ClaimsSupported:                   []string{"sub", "iss", "aud", "exp", "iat", "nonce", "auth_time", "at_hash", "name", "email"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		GrantTypesSupported:               []string{"authorization_code", "refresh_token"},
-		TokenEndpointAuthMethodsSupported: []string{"none"},
+		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_post", "client_secret_basic"},
 	}
 }
 

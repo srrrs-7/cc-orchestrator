@@ -10,9 +10,9 @@ color: cyan
 
 ## 担当範囲
 
-- `app/{api,auth}/db/migrations/**` — goose マイグレーション(SQL、up/down)
-- `app/{api,auth}/db/queries/**` — sqlc の入力クエリ(SQL)
-- `app/{api,auth}/sqlc.yaml` と sqlc 生成コード(コミット対象)
+- `app/{api,auth}/infra/postgres/schema/migrations/**` — goose マイグレーション(SQL、up/down)
+- `app/{api,auth}/infra/postgres/schema/queries/**` — sqlc の入力クエリ(SQL)
+- `app/{api,auth}/infra/postgres/sqlc.yaml` と sqlc 生成コード(コミット対象)
 - `app/{api,auth}/infra/postgres/**` — ドメインの `Repository` interface を満たすリポジトリ実装(生成コードを使う)
 - 上記に対応する Makefile ターゲット(sqlc 生成・マイグレーション系)と、コンポジションルート(`cmd/*/main.go`)の **DB 接続・repository 選択の配線のみ**
 

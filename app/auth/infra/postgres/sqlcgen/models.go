@@ -22,14 +22,23 @@ type AuthorizationCode struct {
 	ExpiresAt       time.Time
 	Consumed        bool
 	CreatedAt       time.Time
+	AuthTime        sql.NullTime
 }
 
 type Client struct {
-	ID            string
-	RedirectUris  json.RawMessage
-	AllowedScopes json.RawMessage
-	ResponseTypes json.RawMessage
-	GrantTypes    json.RawMessage
+	ID               string
+	RedirectUris     json.RawMessage
+	AllowedScopes    json.RawMessage
+	ResponseTypes    json.RawMessage
+	GrantTypes       json.RawMessage
+	ClientSecretHash sql.NullString
+}
+
+type Consent struct {
+	UserID    string
+	ClientID  string
+	Scope     string
+	GrantedAt time.Time
 }
 
 type RefreshToken struct {
@@ -41,12 +50,13 @@ type RefreshToken struct {
 	ExpiresAt time.Time
 	Consumed  bool
 	CreatedAt time.Time
+	AuthTime  sql.NullTime
 }
 
 type User struct {
 	ID           string
 	Username     string
-	Password     string
+	PasswordHash string
 	ProfileName  string
 	ProfileEmail string
 }

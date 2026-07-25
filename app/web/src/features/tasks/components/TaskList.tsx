@@ -1,8 +1,11 @@
 import { useSearch } from "@tanstack/react-router";
 import { useMemo } from "react";
+import { Alert } from "../../../shared/ui/Alert";
 import { filterByStatus, sortByPriority } from "../domain/task";
 import { useTasksQuery } from "../hooks/useTasks";
+import { TaskEmptyState } from "./TaskEmptyState";
 import { TaskItem } from "./TaskItem";
+import { TaskListSkeleton } from "./TaskListSkeleton";
 import { TaskPager } from "./TaskPager";
 
 /**
@@ -27,23 +30,22 @@ export function TaskList() {
   );
 
   if (isLoading) {
-    return <p className="text-sm text-gray-500">Loading tasks...</p>;
+    return <TaskListSkeleton />;
   }
 
   if (isError) {
-    return (
-      <p role="alert" className="text-sm text-red-600">
-        Failed to load tasks: {error.message}
-      </p>
-    );
+    return <Alert>Failed to load tasks: {error.message}</Alert>;
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <section aria-labelledby="task-list-heading" className="flex flex-col gap-4">
+      <h2 id="task-list-heading" className="text-base font-semibold text-gray-900">
+        Tasks
+      </h2>
       {tasks.length === 0 ? (
-        <p className="text-sm text-gray-500">No tasks found.</p>
+        <TaskEmptyState status={status} total={data?.total ?? 0} />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-3">
           {tasks.map((task) => (
             <li key={task.id}>
               <TaskItem task={task} />
@@ -52,6 +54,6 @@ export function TaskList() {
         </ul>
       )}
       {data !== undefined && <TaskPager page={data} />}
-    </div>
+    </section>
   );
 }

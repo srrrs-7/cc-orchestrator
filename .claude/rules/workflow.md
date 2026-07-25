@@ -9,6 +9,8 @@
 
 機能開発は Spec を、不具合対応は Issue を起点とする。admin(メインセッションの Claude。役割と強制事項は `orchestration.md` 参照)は各フェーズを対応する subagent に委譲する。
 
+**Spec 起点 / Issue 起点の判定基準**: 新しい HTTP エンドポイント・新しいドメイン集約・確定済み公開契約(env 契約 / OpenAPI 契約 / ドメインポート / DB スキーマ)の追加・変更を伴うものは **Spec 必須**。既存挙動の不具合修正・内部改善は Issue でよい。ロードマップ plan が機能群を Issue 分割だけで着手指示している場合でも、着手前に Spec 化を先行させる。
+
 ```
 機能開発: spec skill で Spec を作成(status: approved にしてから着手)
 不具合  : issue-creator agent で Issue を起票
@@ -44,6 +46,23 @@
 - 不変条件: HTTP API / DTO / OpenAPI 契約・ドメインポートのシグネチャ・env 契約・DB スキーマ / マイグレーション / sqlc の結果を変えない。変えたくなったら refactor を止め、Spec / Issue を起こして該当 impl agent に回す
 - **テストを変えて通すのは禁止**(手順 2 の refactor と 3 の tester を分離するのが安全網)。リファクタでテストが落ちたら、テストではなく変更を戻す
 - 大きなリファクタ(モジュール構成の変更・広範な再配置)は planner で計画し、Spec / Issue に記録する。stack / モジュール境界を越える共通化はアーキテクチャ変更として Spec 化する
+
+## 維持作業(依存 bump / main 取り込みマージ)
+
+dependabot の依存更新の取り込みや feature ブランチへの main 取り込みマージなど、Spec / Issue を起点としない反復的な維持作業は次の軽量フローで行う:
+
+```
+維持作業:
+  → 1. admin   : ユーザーが指示・実行した git 操作(merge 等)を完了させる
+                 (orchestration.md のホワイトリスト参照)
+  → 2. impl-*  : 競合が app/ 配下に及ぶ場合、admin が解消方針を決めて指示し、
+                 編集はファイル所有 stack の impl agent に委譲する(独立していれば並列可)
+  → 3. checker : 影響 stack の make check
+  → 4. admin   : merge commit(手順 1 の git 操作の完了として)
+```
+
+- ドメインロジックの実質的な競合(コードの意味が衝突している場合)のみ planner / review-* を挟む
+- Go スタックは `make check` が build + test を含むため、tester を別途挟まなくてよい
 
 ## Plan(実装計画)
 

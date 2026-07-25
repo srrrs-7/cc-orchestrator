@@ -2,74 +2,17 @@ package service_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"slices"
-	"strings"
-	"sync"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/srrrs-7/cc-orchestrator/app/api/domain/task"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/api/infra/postgres/testsupport"
 	"github.com/srrrs-7/cc-orchestrator/app/api/service"
 )
-
-// fakeRepository is an in-memory task.Repository fake used to
-// exercise TaskService without depending on the infra layer.
-type fakeRepository struct {
-	mu    sync.Mutex
-	tasks map[task.ID]*task.Task
-}
-
-func newFakeRepository() *fakeRepository {
-	return &fakeRepository{tasks: make(map[task.ID]*task.Task)}
-}
-
-func (f *fakeRepository) Save(ctx context.Context, t *task.Task) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.tasks[t.ID()] = t
-	return nil
-}
-
-func (f *fakeRepository) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	t, ok := f.tasks[id]
-	if !ok {
-		return nil, task.ErrNotFound
-	}
-	return t, nil
-}
-
-func (f *fakeRepository) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, t := range f.tasks {
-		if t.Title() == title {
-			return t, nil
-		}
-	}
-	return nil, task.ErrNotFound
-}
-
-func (f *fakeRepository) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	all := make([]*task.Task, 0, len(f.tasks))
-	for _, t := range f.tasks {
-		all = append(all, t)
-	}
-	slices.SortFunc(all, func(a, b *task.Task) int {
-		if c := a.CreatedAt().Compare(b.CreatedAt()); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID().String(), b.ID().String())
-	})
-
-	total := len(all)
-	start := min(page.Offset(), total)
-	end := min(start+page.Limit(), total)
-	return all[start:end], total, nil
-}
 
 // intPtr returns a pointer to i, for building *int limit/offset
 // arguments to TaskService.List in table-driven tests below.
@@ -77,56 +20,114 @@ func intPtr(i int) *int {
 	return &i
 }
 
-func newTestService() (*service.TaskService, *fakeRepository) {
-	repo := newFakeRepository()
+// newTestService opens a real *sql.DB against the dedicated api_test
+// database (testsupport.OpenTestDB), truncates the tasks table so the
+// test starts from an empty store, and wires a TaskService backed by
+// the real postgres.TaskRepository. As of SPEC-013, service tests run
+// against real Postgres rather than a hand-written in-memory fake, so
+// this package's coverage cannot silently diverge from infra/postgres's
+// actual behavior.
+func newTestService(t *testing.T) *service.TaskService {
+	t.Helper()
+	db := testsupport.OpenTestDB(t)
+	testsupport.TruncateTasks(t, db)
+	repo := postgres.NewTaskRepository(db)
 	dupChk := task.NewDuplicateChecker(repo)
-	// SPEC-010: NewTaskService takes reader and writer separately
-	// (task.Reader / task.Writer). fakeRepository implements every
-	// method of both (a single in-memory-style store, mirroring
-	// infra/memory's R5 requirement), so the same value satisfies
-	// both roles here.
-	return service.NewTaskService(repo, repo, dupChk), repo
+	return service.NewTaskService(repo, repo, dupChk)
 }
 
-// stubListPageRepository wraps a *fakeRepository (inheriting its
-// Save/FindByID/FindByTitle) but overrides ListPage to return a
-// caller-configured items/total pair verbatim, decoupled from any
-// particular repository's own pagination math. It exists to test
-// TaskService.List's wiring in isolation (SPEC-008 R1-R3): that it
-// forwards task.NewPage's defaulted/clamped Page to the repository
-// and echoes the repository's own total (which need not equal
-// len(items), e.g. a real backend applying limit/offset over many
-// more rows) into TaskListDTO, and it records the Page it was called
-// with so tests can assert what TaskService actually passed through.
-type stubListPageRepository struct {
-	*fakeRepository
-	items []*task.Task
-	total int
-
-	gotPage      task.Page
-	listPageCall int
+// seedTasks inserts n distinct Tasks (titles derived from titlePrefix
+// plus an index, so they satisfy the tasks.title UNIQUE constraint)
+// directly into db via a real *postgres.TaskWriter. It gives paging
+// tests a known row count to assert TaskListDTO.Total/Limit/Offset/
+// len(Items) against, without this test package re-implementing any
+// pagination math of its own (that math lives in infra/postgres's SQL).
+func seedTasks(t *testing.T, db *sql.DB, n int, titlePrefix string) {
+	t.Helper()
+	writer := postgres.NewTaskWriter(db)
+	for i := range n {
+		title, err := task.NewTitle(fmt.Sprintf("%s %d", titlePrefix, i))
+		if err != nil {
+			t.Fatalf("NewTitle() unexpected error: %v", err)
+		}
+		if err := writer.Save(context.Background(), task.New(title, task.PriorityMedium)); err != nil {
+			t.Fatalf("seed Save() unexpected error: %v", err)
+		}
+	}
 }
 
-func (s *stubListPageRepository) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
-	s.gotPage = page
-	s.listPageCall++
-	return s.items, s.total, nil
+// postgresTimestampSlack is the maximum difference SPEC-013's real-DB
+// round trip can legitimately introduce between an in-process
+// time.Time (nanosecond precision, and carrying a monotonic reading)
+// and the same instant read back from Postgres's timestamptz column
+// (microsecond precision, no monotonic reading): Postgres's encoding
+// may truncate or round the sub-microsecond remainder, so the two
+// values can differ by up to (but never more than) one microsecond.
+// A hand-written fake previously returned the exact same struct, so
+// comparing DTOs with == worked by coincidence; the real repository
+// makes that comparison flake deterministically, so time fields must
+// be compared with this tolerance instead.
+const postgresTimestampSlack = time.Microsecond
+
+// assertTasksRepresentSameTask compares two TaskDTOs that are expected
+// to represent the same persisted Task: got is typically read back via
+// TaskService.Get/List (round-tripped through Postgres) and want is
+// typically the DTO TaskService.Create returned in-process. ID/Title/
+// Status/Priority must match exactly; CreatedAt/UpdatedAt are compared
+// within postgresTimestampSlack rather than via time.Time's == (see
+// postgresTimestampSlack's doc comment).
+func assertTasksRepresentSameTask(t *testing.T, got, want service.TaskDTO) {
+	t.Helper()
+
+	if got.ID != want.ID {
+		t.Errorf("ID = %q, want %q", got.ID, want.ID)
+	}
+	if got.Title != want.Title {
+		t.Errorf("Title = %q, want %q", got.Title, want.Title)
+	}
+	if got.Status != want.Status {
+		t.Errorf("Status = %q, want %q", got.Status, want.Status)
+	}
+	if got.Priority != want.Priority {
+		t.Errorf("Priority = %q, want %q", got.Priority, want.Priority)
+	}
+	assertTimeWithinSlack(t, "CreatedAt", got.CreatedAt, want.CreatedAt)
+	assertTimeWithinSlack(t, "UpdatedAt", got.UpdatedAt, want.UpdatedAt)
 }
 
-func newStubListPageService(items []*task.Task, total int) (*service.TaskService, *stubListPageRepository) {
-	stub := &stubListPageRepository{fakeRepository: newFakeRepository(), items: items, total: total}
-	dupChk := task.NewDuplicateChecker(stub)
-	return service.NewTaskService(stub, stub, dupChk), stub
+// assertTimeWithinSlack asserts got and want represent the same instant
+// within postgresTimestampSlack, using time.Time.Sub (not ==/Equal) so
+// the comparison is unaffected by monotonic-clock readings or timezone
+// representation differences between an in-process time.Time and one
+// read back from Postgres.
+func assertTimeWithinSlack(t *testing.T, field string, got, want time.Time) {
+	t.Helper()
+	diff := got.Sub(want)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > postgresTimestampSlack {
+		t.Errorf("%s = %v, want %v (diff %v exceeds the %v Postgres timestamptz round-trip tolerance)", field, got, want, diff, postgresTimestampSlack)
+	}
 }
 
 // readerSpy implements only task.Reader's three methods
-// (FindByID/FindByTitle/ListPage), delegating to a shared
-// *fakeRepository and counting each call. It deliberately has no Save
-// method, so passing it as TaskService's reader argument below is a
-// compile-time proof (SPEC-010 R1) that the reader parameter's type
-// requires nothing beyond task.Reader.
+// (FindByID/FindByTitle/ListPage), delegating to a real
+// *postgres.TaskReader (bound to the api_test database) and counting
+// each call. It deliberately has no Save method, so passing it as
+// TaskService's reader argument below is a compile-time proof
+// (SPEC-010 R1) that the reader parameter's type requires nothing
+// beyond task.Reader.
+//
+// As of SPEC-013 (R2 exception 2), this is a thin instrumentation
+// decorator over the real repository rather than a hand-written
+// in-memory fake: a real Postgres connection cannot itself reveal
+// which port (reader vs writer) TaskService routed a call through --
+// that is a property of TaskService's own wiring, not of the
+// database -- so the counters here, not the data, are what this test
+// observes.
 type readerSpy struct {
-	repo *fakeRepository
+	reader *postgres.TaskReader
 
 	findByIDCalls    int
 	findByTitleCalls int
@@ -135,53 +136,62 @@ type readerSpy struct {
 
 func (r *readerSpy) FindByID(ctx context.Context, id task.ID) (*task.Task, error) {
 	r.findByIDCalls++
-	return r.repo.FindByID(ctx, id)
+	return r.reader.FindByID(ctx, id)
 }
 
 func (r *readerSpy) FindByTitle(ctx context.Context, title task.Title) (*task.Task, error) {
 	r.findByTitleCalls++
-	return r.repo.FindByTitle(ctx, title)
+	return r.reader.FindByTitle(ctx, title)
 }
 
 func (r *readerSpy) ListPage(ctx context.Context, page task.Page) ([]*task.Task, int, error) {
 	r.listPageCalls++
-	return r.repo.ListPage(ctx, page)
+	return r.reader.ListPage(ctx, page)
 }
 
 // writerSpy implements only task.Writer's single method (Save),
-// delegating to the same shared *fakeRepository readerSpy wraps, and
-// counting calls. It deliberately has no Find*/ListPage method, so
-// passing it as TaskService's writer argument is a compile-time proof
-// that the writer parameter's type requires nothing beyond
-// task.Writer.
+// delegating to a real *postgres.TaskWriter bound to the same api_test
+// database readerSpy's TaskReader is bound to, and counting calls. It
+// deliberately has no Find*/ListPage method, so passing it as
+// TaskService's writer argument is a compile-time proof that the
+// writer parameter's type requires nothing beyond task.Writer.
 type writerSpy struct {
-	repo *fakeRepository
+	writer *postgres.TaskWriter
 
 	saveCalls int
 }
 
 func (w *writerSpy) Save(ctx context.Context, t *task.Task) error {
 	w.saveCalls++
-	return w.repo.Save(ctx, t)
+	return w.writer.Save(ctx, t)
 }
 
+var (
+	_ task.Reader = (*readerSpy)(nil)
+	_ task.Writer = (*writerSpy)(nil)
+)
+
 // newSpiedService builds a TaskService whose reader and writer
-// dependencies are two distinct, narrowly-typed spies sharing one
-// underlying store (so a Task saved via the writer is visible to the
-// reader, exactly like a single physical database observed through two
-// separate connection pools -- SPEC-010's writer/reader pool split).
-// This lets TestTaskService_RoutesReaderAndWriter observe, per
-// TaskService method, exactly which side (reader or writer) is called.
-func newSpiedService() (*service.TaskService, *readerSpy, *writerSpy) {
-	shared := newFakeRepository()
-	r := &readerSpy{repo: shared}
-	w := &writerSpy{repo: shared}
+// dependencies are two distinct, narrowly-typed spies both bound to
+// the same real api_test database (reader == writer == db, exactly
+// like the default SPEC-010 wiring when DB_READER_* is unset). This
+// lets tests observe, per TaskService method, exactly which side
+// (reader or writer) is called -- a routing property real Postgres
+// cannot reveal on its own, since a single shared connection can't
+// tell reader-role queries from writer-role queries apart (SPEC-013
+// R2 exception 2).
+func newSpiedService(t *testing.T) (*service.TaskService, *readerSpy, *writerSpy) {
+	t.Helper()
+	db := testsupport.OpenTestDB(t)
+	testsupport.TruncateTasks(t, db)
+	r := &readerSpy{reader: postgres.NewTaskReader(db)}
+	w := &writerSpy{writer: postgres.NewTaskWriter(db)}
 	dupChk := task.NewDuplicateChecker(r)
 	return service.NewTaskService(r, w, dupChk), r, w
 }
 
 func TestTaskService_Create_Success(t *testing.T) {
-	svc, _ := newTestService()
+	svc := newTestService(t)
 
 	dto, err := svc.Create(context.Background(), "buy milk", "")
 	if err != nil {
@@ -229,7 +239,7 @@ func TestTaskService_Create_Priority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc := newTestService(t)
 
 			dto, err := svc.Create(context.Background(), "buy milk", tt.priority)
 
@@ -250,7 +260,7 @@ func TestTaskService_Create_Priority(t *testing.T) {
 }
 
 func TestTaskService_Create_DuplicateTitle(t *testing.T) {
-	svc, _ := newTestService()
+	svc := newTestService(t)
 
 	if _, err := svc.Create(context.Background(), "buy milk", ""); err != nil {
 		t.Fatalf("setup Create() unexpected error: %v", err)
@@ -274,7 +284,7 @@ func TestTaskService_Create_InvalidTitle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc := newTestService(t)
 
 			_, err := svc.Create(context.Background(), tt.title, "")
 			if !errors.Is(err, tt.wantErr) {
@@ -286,7 +296,7 @@ func TestTaskService_Create_InvalidTitle(t *testing.T) {
 
 func TestTaskService_Get(t *testing.T) {
 	t.Run("existing task is found", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -296,13 +306,11 @@ func TestTaskService_Get(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get() unexpected error: %v", err)
 		}
-		if got != created {
-			t.Errorf("Get() = %+v, want %+v", got, created)
-		}
+		assertTasksRepresentSameTask(t, got, created)
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 
 		_, err := svc.Get(context.Background(), task.NewID().String())
 		if !errors.Is(err, task.ErrNotFound) {
@@ -311,7 +319,7 @@ func TestTaskService_Get(t *testing.T) {
 	})
 
 	t.Run("empty id is invalid", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 
 		_, err := svc.Get(context.Background(), "")
 		if !errors.Is(err, task.ErrInvalidID) {
@@ -321,7 +329,7 @@ func TestTaskService_Get(t *testing.T) {
 }
 
 func TestTaskService_List(t *testing.T) {
-	svc, _ := newTestService()
+	svc := newTestService(t)
 
 	got, err := svc.List(context.Background(), nil, nil)
 	if err != nil {
@@ -360,42 +368,42 @@ func TestTaskService_List(t *testing.T) {
 // page)/R3 (a limit above task.MaxLimit is clamped, and the clamped
 // value -- not the raw request -- is both forwarded to the
 // repository and echoed in the DTO).
+//
+// As of SPEC-013, this seeds a known row count into a real api_test
+// database and asserts black-box against TaskListDTO (Total/Limit/
+// Offset/len(Items)), rather than inspecting a stub's recorded
+// task.Page argument directly: infra/postgres's real SQL, not a
+// hand-written fake, is what actually applies limit/offset now.
 func TestTaskService_List_PagingAppliedAndEchoed(t *testing.T) {
-	title, err := task.NewTitle("buy milk")
-	if err != nil {
-		t.Fatalf("NewTitle() unexpected error: %v", err)
-	}
-	items := []*task.Task{task.New(title, task.PriorityMedium)}
-
 	tests := []struct {
 		name       string
+		seedCount  int
 		limit      *int
 		offset     *int
-		stubTotal  int
 		wantLimit  int
 		wantOffset int
 	}{
 		{
 			name:       "unspecified limit/offset default to 20/0 and echo the defaults (R1)",
+			seedCount:  3,
 			limit:      nil,
 			offset:     nil,
-			stubTotal:  3,
 			wantLimit:  task.DefaultLimit,
 			wantOffset: 0,
 		},
 		{
 			name:       "explicit limit/offset are forwarded to the repository and echoed (R2)",
+			seedCount:  15,
 			limit:      intPtr(5),
 			offset:     intPtr(10),
-			stubTotal:  42,
 			wantLimit:  5,
 			wantOffset: 10,
 		},
 		{
 			name:       "limit above MaxLimit is clamped to 100 before reaching the repository, and the clamp is echoed (R3)",
+			seedCount:  task.MaxLimit + 5,
 			limit:      intPtr(1000),
 			offset:     nil,
-			stubTotal:  250,
 			wantLimit:  task.MaxLimit,
 			wantOffset: 0,
 		},
@@ -403,18 +411,24 @@ func TestTaskService_List_PagingAppliedAndEchoed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, stub := newStubListPageService(items, tt.stubTotal)
+			db := testsupport.OpenTestDB(t)
+			testsupport.TruncateTasks(t, db)
+			seedTasks(t, db, tt.seedCount, "paging task")
+
+			repo := postgres.NewTaskRepository(db)
+			dupChk := task.NewDuplicateChecker(repo)
+			svc := service.NewTaskService(repo, repo, dupChk)
 
 			got, err := svc.List(context.Background(), tt.limit, tt.offset)
 			if err != nil {
 				t.Fatalf("List() unexpected error: %v", err)
 			}
 
-			// Total echoes the repository's own total verbatim, even
-			// though it does not equal len(items) here -- pinning that
+			// Total must equal the seeded row count, independent of the
+			// limit/offset window applied to Items -- pinning that
 			// TaskService never recomputes it from the returned page.
-			if got.Total != tt.stubTotal {
-				t.Errorf("Total = %d, want %d (must echo the repository's total, independent of items returned)", got.Total, tt.stubTotal)
+			if got.Total != tt.seedCount {
+				t.Errorf("Total = %d, want %d (must equal the store's full row count, independent of the page window)", got.Total, tt.seedCount)
 			}
 			if got.Limit != tt.wantLimit {
 				t.Errorf("Limit = %d, want %d", got.Limit, tt.wantLimit)
@@ -422,20 +436,15 @@ func TestTaskService_List_PagingAppliedAndEchoed(t *testing.T) {
 			if got.Offset != tt.wantOffset {
 				t.Errorf("Offset = %d, want %d", got.Offset, tt.wantOffset)
 			}
-			if len(got.Items) != len(items) {
-				t.Errorf("len(Items) = %d, want %d", len(got.Items), len(items))
-			}
 
-			// The repository must receive the already defaulted/clamped
-			// Page, not the raw caller-supplied limit/offset.
-			if stub.listPageCall != 1 {
-				t.Fatalf("repo.ListPage called %d times, want 1", stub.listPageCall)
-			}
-			if stub.gotPage.Limit() != tt.wantLimit {
-				t.Errorf("repo received Page.Limit() = %d, want %d", stub.gotPage.Limit(), tt.wantLimit)
-			}
-			if stub.gotPage.Offset() != tt.wantOffset {
-				t.Errorf("repo received Page.Offset() = %d, want %d", stub.gotPage.Offset(), tt.wantOffset)
+			// The already defaulted/clamped Page -- not the raw
+			// caller-supplied limit/offset -- must be what actually
+			// reached the repository: len(Items) proves this
+			// black-box, since a raw (unclamped) limit of 1000 forwarded
+			// to Postgres would return more than task.MaxLimit rows.
+			wantItems := min(tt.wantLimit, max(tt.seedCount-tt.wantOffset, 0))
+			if len(got.Items) != wantItems {
+				t.Errorf("len(Items) = %d, want %d (= min(limit, total-offset))", len(got.Items), wantItems)
 			}
 		})
 	}
@@ -444,7 +453,9 @@ func TestTaskService_List_PagingAppliedAndEchoed(t *testing.T) {
 // TestTaskService_List_InvalidLimitOffset covers R3's rejection path:
 // an out-of-range limit/offset is rejected by task.NewPage before
 // TaskService.List ever calls the repository, so no repository call
-// should be observed.
+// should be observed. It uses readerSpy's call counter (rather than a
+// hand-written fake) since ListPage is a pure read with no persisted
+// side effect this test package could otherwise observe.
 func TestTaskService_List_InvalidLimitOffset(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -459,15 +470,15 @@ func TestTaskService_List_InvalidLimitOffset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, stub := newStubListPageService(nil, 0)
+			svc, r, _ := newSpiedService(t)
 
 			_, err := svc.List(context.Background(), tt.limit, tt.offset)
 
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("List() error = %v, want wrapping %v", err, tt.wantErr)
 			}
-			if stub.listPageCall != 0 {
-				t.Errorf("repo.ListPage called %d times, want 0 (validation must short-circuit before the repository call)", stub.listPageCall)
+			if r.listPageCalls != 0 {
+				t.Errorf("reader.listPageCalls = %d, want 0 (validation must short-circuit before the repository call)", r.listPageCalls)
 			}
 		})
 	}
@@ -475,7 +486,7 @@ func TestTaskService_List_InvalidLimitOffset(t *testing.T) {
 
 func TestTaskService_Start(t *testing.T) {
 	t.Run("todo transitions to doing", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -491,7 +502,7 @@ func TestTaskService_Start(t *testing.T) {
 	})
 
 	t.Run("invalid transition error propagates", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -509,7 +520,7 @@ func TestTaskService_Start(t *testing.T) {
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 
 		_, err := svc.Start(context.Background(), task.NewID().String())
 		if !errors.Is(err, task.ErrNotFound) {
@@ -520,7 +531,7 @@ func TestTaskService_Start(t *testing.T) {
 
 func TestTaskService_Complete(t *testing.T) {
 	t.Run("doing transitions to done", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -539,7 +550,7 @@ func TestTaskService_Complete(t *testing.T) {
 	})
 
 	t.Run("invalid transition from todo propagates", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -554,7 +565,7 @@ func TestTaskService_Complete(t *testing.T) {
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 
 		_, err := svc.Complete(context.Background(), task.NewID().String())
 		if !errors.Is(err, task.ErrNotFound) {
@@ -569,7 +580,7 @@ func TestTaskService_Complete(t *testing.T) {
 // not-found boundary shared with Start/Complete.
 func TestTaskService_ChangePriority(t *testing.T) {
 	t.Run("changes priority without touching status", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "low")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -588,7 +599,7 @@ func TestTaskService_ChangePriority(t *testing.T) {
 	})
 
 	t.Run("invalid priority value is rejected (R5)", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -601,7 +612,7 @@ func TestTaskService_ChangePriority(t *testing.T) {
 	})
 
 	t.Run("empty priority value is rejected (R5, strict boundary)", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 		created, err := svc.Create(context.Background(), "buy milk", "")
 		if err != nil {
 			t.Fatalf("setup Create() unexpected error: %v", err)
@@ -614,7 +625,7 @@ func TestTaskService_ChangePriority(t *testing.T) {
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
-		svc, _ := newTestService()
+		svc := newTestService(t)
 
 		_, err := svc.ChangePriority(context.Background(), task.NewID().String(), "high")
 		if !errors.Is(err, task.ErrNotFound) {
@@ -635,7 +646,7 @@ func TestTaskService_ChangePriority(t *testing.T) {
 // reader/writer parameters are the narrow task.Reader/task.Writer
 // ports, not the full task.Repository.
 func TestTaskService_RoutesReaderAndWriter(t *testing.T) {
-	svc, r, w := newSpiedService()
+	svc, r, w := newSpiedService(t)
 	ctx := context.Background()
 
 	created, err := svc.Create(ctx, "buy milk", "")

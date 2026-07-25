@@ -67,7 +67,7 @@ describe("TaskList", () => {
     mockUseSearch.mockReturnValue({ status: "done", limit: 20, offset: 0 });
     renderWithQueryClient(<TaskList />);
 
-    expect(await screen.findByText("No tasks found.")).toBeInTheDocument();
+    expect(await screen.findByText("No tasks found")).toBeInTheDocument();
   });
 
   it("shows an error message when the request fails (abnormal)", async () => {

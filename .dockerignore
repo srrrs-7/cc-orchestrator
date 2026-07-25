@@ -7,7 +7,8 @@
 #
 # app/migrator/Dockerfile is the one exception: its build context is the
 # *repository root* (see that Dockerfile's header comment), because it also
-# COPYs app/api/db/migrations and app/auth/db/migrations, which live outside
+# COPYs app/api/infra/postgres/schema/migrations and
+# app/auth/infra/postgres/schema/migrations, which live outside
 # app/migrator's own directory tree:
 #
 #   docker build -f app/migrator/Dockerfile .
@@ -16,7 +17,7 @@
 # .git/ (packfile history) and app/iac/envs/dev/.terraform/ (provider
 # binaries) -- to the Docker daemon as build context on every invocation,
 # even though the Dockerfile's own COPY instructions only ever read
-# app/migrator/** and app/{api,auth}/db/migrations/**. None of the patterns
+# app/migrator/** and app/{api,auth}/infra/postgres/schema/migrations/**. None of the patterns
 # below match those two needed paths.
 
 # Version control metadata (never needed to build any image)
@@ -34,6 +35,16 @@
 .env
 .env.*
 !.env.example
+
+# app/auth's RSA signing key ring (ISSUE-036: `make auth-signing-keys` writes
+# .secrets/auth-signing-keys.json here, gitignored, real private keys). No
+# Dockerfile COPYs it -- but this is the *repository root* context, so without
+# this entry the whole directory would still be uploaded to the Docker daemon
+# on every root-context build (app/migrator's, `make push-migrator-image`).
+# The key ring reaches a running container only as a single read-only bind
+# mount at runtime (compose.yml's `auth` service), never as build context --
+# see CLAUDE.md「実行境界: runtime はコンテナのみ」.
+.secrets/
 
 # JS package manager output (large; only app/web's own build reads it, via
 # bun install inside app/web's own Dockerfile build stage, never via a COPY

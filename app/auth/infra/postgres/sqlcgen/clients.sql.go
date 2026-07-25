@@ -7,18 +7,32 @@ package sqlcgen
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 )
 
+const deleteClient = `-- name: DeleteClient :execrows
+DELETE FROM clients WHERE id = $1
+`
+
+// Removes a client row. Returns 0 rows when id is absent.
+func (q *Queries) DeleteClient(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteClient, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getClientByID = `-- name: GetClientByID :one
 
-SELECT id, redirect_uris, allowed_scopes, response_types, grant_types
+SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash
 FROM clients
 WHERE id = $1
 `
 
 // SPEC-005 R2/R4: sqlc input for the clients table
-// (db/migrations/000001_create_auth.sql). `make sqlc` regenerates
+// (schema/migrations/000001_create_auth.sql). `make sqlc` regenerates
 // infra/postgres/sqlcgen from this file; keep both in the same commit
 // (no drift).
 // Backs client.Repository.FindByID. Returns sql.ErrNoRows when
@@ -33,26 +47,66 @@ func (q *Queries) GetClientByID(ctx context.Context, id string) (Client, error) 
 		&i.AllowedScopes,
 		&i.ResponseTypes,
 		&i.GrantTypes,
+		&i.ClientSecretHash,
 	)
 	return i, err
 }
 
+const listClients = `-- name: ListClients :many
+SELECT id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash
+FROM clients
+ORDER BY id
+`
+
+// Backs client.Repository.ListAll for the admin management API.
+func (q *Queries) ListClients(ctx context.Context) ([]Client, error) {
+	rows, err := q.db.QueryContext(ctx, listClients)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Client
+	for rows.Next() {
+		var i Client
+		if err := rows.Scan(
+			&i.ID,
+			&i.RedirectUris,
+			&i.AllowedScopes,
+			&i.ResponseTypes,
+			&i.GrantTypes,
+			&i.ClientSecretHash,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertClient = `-- name: UpsertClient :exec
-INSERT INTO clients (id, redirect_uris, allowed_scopes, response_types, grant_types)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO clients (id, redirect_uris, allowed_scopes, response_types, grant_types, client_secret_hash)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE SET
-    redirect_uris  = EXCLUDED.redirect_uris,
-    allowed_scopes = EXCLUDED.allowed_scopes,
-    response_types = EXCLUDED.response_types,
-    grant_types    = EXCLUDED.grant_types
+    redirect_uris       = EXCLUDED.redirect_uris,
+    allowed_scopes      = EXCLUDED.allowed_scopes,
+    response_types      = EXCLUDED.response_types,
+    grant_types         = EXCLUDED.grant_types,
+    client_secret_hash  = EXCLUDED.client_secret_hash
 `
 
 type UpsertClientParams struct {
-	ID            string
-	RedirectUris  json.RawMessage
-	AllowedScopes json.RawMessage
-	ResponseTypes json.RawMessage
-	GrantTypes    json.RawMessage
+	ID               string
+	RedirectUris     json.RawMessage
+	AllowedScopes    json.RawMessage
+	ResponseTypes    json.RawMessage
+	GrantTypes       json.RawMessage
+	ClientSecretHash sql.NullString
 }
 
 // Backs the startup idempotent seed (infra/postgres/seed.go's
@@ -60,6 +114,8 @@ type UpsertClientParams struct {
 // Inserts a new row, or overwrites every column in place when id
 // already exists, so repeated process starts converge on the same
 // seed data rather than erroring on the second run.
+// client_secret_hash is NULL for public clients, non-NULL (bcrypt hash)
+// for confidential clients (ISSUE-035).
 func (q *Queries) UpsertClient(ctx context.Context, arg UpsertClientParams) error {
 	_, err := q.db.ExecContext(ctx, upsertClient,
 		arg.ID,
@@ -67,6 +123,7 @@ func (q *Queries) UpsertClient(ctx context.Context, arg UpsertClientParams) erro
 		arg.AllowedScopes,
 		arg.ResponseTypes,
 		arg.GrantTypes,
+		arg.ClientSecretHash,
 	)
 	return err
 }

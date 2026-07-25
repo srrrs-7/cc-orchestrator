@@ -230,8 +230,8 @@ variable "origin_verify_header_name" {
 
 variable "health_check_path" {
   type        = string
-  description = "api ALB target group health check path. Defaults to \"/tasks\" because app/api has no dedicated health endpoint yet (see ISSUE-001)."
-  default     = "/tasks"
+  description = "api ALB target group health check path. Defaults to \"/health\" (unauthenticated liveness probe; task endpoints require Bearer JWT since SPEC-015)."
+  default     = "/health"
 }
 
 variable "log_retention_days" {

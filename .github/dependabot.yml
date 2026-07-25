@@ -78,16 +78,16 @@ updates:
         patterns:
           - "*"
 
-  # --- docker/toolchain (SPEC-009 pinned dev/CI toolchain base image) ------
-  # Tracks docker/toolchain/Dockerfile's `FROM golang:${GO_VERSION}-bookworm`
-  # base image (the `ARG GO_VERSION=1.24` default value Dependabot resolves
+  # --- .devcontainer/toolchain (SPEC-009 pinned dev/CI toolchain base image) ------
+  # Tracks .devcontainer/toolchain/Dockerfile's `FROM golang:${GO_VERSION}-bookworm`
+  # base image (the `ARG GO_VERSION=1.26` default value Dependabot resolves
   # this FROM against). Every other job in this repo's CI now executes
   # inside this one image (SPEC-009 R6), so its own base image needs the
   # same supply-chain tracking as every app stack above it, not just the
   # tool versions layered on top (those live in versions.env, not a
   # Dependabot-trackable manifest).
   - package-ecosystem: docker
-    directory: /docker/toolchain
+    directory: /.devcontainer/toolchain
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -1,0 +1,204 @@
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import {
+  buildAuthorizeUrl,
+  buildEndSessionUrl,
+  exchangeCode,
+  fetchDiscovery,
+  revokeToken,
+} from "../api/oidc";
+import { resolveAuthConfig } from "../domain/config";
+import { deriveCodeChallenge, generateCodeVerifier } from "../domain/pkce";
+import { refreshStoredSession, shouldRefreshSession, isAccessTokenValid } from "../domain/refresh";
+import {
+  clearAllAuthStorage,
+  clearStoredPkce,
+  getStoredPkce,
+  getStoredSession,
+  isSessionValid,
+  setReturnTo,
+  setStoredPkce,
+  setStoredSession,
+} from "../domain/session";
+import { extractDisplayName, extractSub, parseJwtPayload } from "../domain/token";
+
+export type AuthUser = {
+  readonly sub: string;
+  readonly displayName: string;
+};
+
+type AuthContextValue = {
+  readonly isAuthenticated: boolean;
+  readonly user: AuthUser | null;
+  /**
+   * Initiate the OIDC Authorization Code + PKCE login flow.
+   * Stores PKCE state, then redirects the browser to the authorization
+   * endpoint. `returnTo` is the path to navigate to after the callback
+   * completes (defaults to "/").
+   */
+  readonly login: (returnTo?: string) => Promise<void>;
+  /** Clear the session and end the IdP session via RP-initiated logout. */
+  readonly logout: () => Promise<void>;
+  /**
+   * Complete the OIDC callback: validate `state`, exchange `code` for tokens,
+   * parse the ID token, and persist the session.
+   * Call this from the /callback route component.
+   */
+  readonly handleCallback: (code: string, state: string) => Promise<void>;
+  /** Return the current access token, or null if the session has expired. */
+  readonly getAccessToken: () => string | null;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+type AuthProviderProps = {
+  readonly children: ReactNode;
+};
+
+export function AuthProvider({ children }: AuthProviderProps) {
+  // Initialise from any existing session in sessionStorage so that a page
+  // reload keeps the user logged in for the duration of the browser tab.
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    const session = getStoredSession();
+    if (!session || !isSessionValid(session)) return null;
+    return { sub: session.sub, displayName: session.displayName };
+  });
+
+  const login = useCallback(async (returnTo = "/"): Promise<void> => {
+    const config = resolveAuthConfig();
+    const verifier = await generateCodeVerifier();
+    const challenge = await deriveCodeChallenge(verifier);
+    const state = crypto.randomUUID();
+
+    setStoredPkce({ verifier, state });
+    setReturnTo(returnTo);
+
+    const discovery = await fetchDiscovery(config.issuer);
+    const authorizeUrl = buildAuthorizeUrl({
+      authorizationEndpoint: discovery.authorization_endpoint,
+      clientId: config.clientId,
+      redirectUri: config.redirectUri,
+      scopes: config.scopes,
+      codeChallenge: challenge,
+      state,
+    });
+
+    window.location.href = authorizeUrl;
+  }, []);
+
+  const logout = useCallback(async (): Promise<void> => {
+    const session = getStoredSession();
+    const idTokenHint = session?.idToken;
+    const refreshTokenValue = session?.refreshToken;
+
+    const config = resolveAuthConfig();
+    try {
+      const discovery = await fetchDiscovery(config.issuer);
+      if (refreshTokenValue && discovery.revocation_endpoint) {
+        await revokeToken({
+          revocationEndpoint: discovery.revocation_endpoint,
+          token: refreshTokenValue,
+          clientId: config.clientId,
+          tokenTypeHint: "refresh_token",
+        });
+      }
+
+      clearAllAuthStorage();
+      setUser(null);
+
+      if (discovery.end_session_endpoint) {
+        window.location.href = buildEndSessionUrl({
+          endSessionEndpoint: discovery.end_session_endpoint,
+          clientId: config.clientId,
+          idTokenHint,
+          postLogoutRedirectUri: `${window.location.origin}/login`,
+        });
+        return;
+      }
+    } catch {
+      clearAllAuthStorage();
+      setUser(null);
+    }
+    window.location.href = "/login";
+  }, []);
+
+  const handleCallback = useCallback(async (code: string, state: string): Promise<void> => {
+    const pkce = getStoredPkce();
+    if (!pkce) {
+      throw new Error("No PKCE state found — please restart the sign-in flow.");
+    }
+    if (pkce.state !== state) {
+      throw new Error("State mismatch — possible CSRF. Please restart the sign-in flow.");
+    }
+    clearStoredPkce();
+
+    const config = resolveAuthConfig();
+    const discovery = await fetchDiscovery(config.issuer);
+    const tokens = await exchangeCode({
+      tokenEndpoint: discovery.token_endpoint,
+      code,
+      redirectUri: config.redirectUri,
+      clientId: config.clientId,
+      codeVerifier: pkce.verifier,
+    });
+
+    const payload = parseJwtPayload(tokens.id_token);
+    const sub = extractSub(payload);
+    const displayName = extractDisplayName(payload);
+
+    setStoredSession({
+      accessToken: tokens.access_token,
+      idToken: tokens.id_token,
+      refreshToken: tokens.refresh_token,
+      expiresAt: Date.now() + tokens.expires_in * 1000,
+      sub,
+      displayName,
+    });
+
+    setUser({ sub, displayName });
+  }, []);
+
+  const getAccessToken = useCallback((): string | null => {
+    const session = getStoredSession();
+    if (!session || !isSessionValid(session)) return null;
+    return session.accessToken;
+  }, []);
+
+  // Proactively refresh when the access token is near expiry so API calls
+  // and route guards rarely hit an expired token.
+  useEffect(() => {
+    const tick = (): void => {
+      const session = getStoredSession();
+      if (!session?.refreshToken) return;
+      if (isAccessTokenValid(session) && !shouldRefreshSession(session)) return;
+      void refreshStoredSession().then((refreshed) => {
+        if (refreshed) {
+          setUser({ sub: refreshed.sub, displayName: refreshed.displayName });
+        }
+      });
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const value: AuthContextValue = {
+    isAuthenticated: user !== null,
+    user,
+    login,
+    logout,
+    handleCallback,
+    getAccessToken,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(): AuthContextValue {
+  const ctx = useContext(AuthContext);
+  if (ctx === null) {
+    throw new Error("useAuth must be used inside <AuthProvider>");
+  }
+  return ctx;
+}

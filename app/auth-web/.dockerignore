@@ -1,0 +1,29 @@
+# Build context filter for app/auth-web/Dockerfile (its build context is this
+# directory -- the repository-root .dockerignore does not apply to it, which is
+# why this file has to exist per-stack). Mirrors app/web/.dockerignore.
+#
+# Two entries are load-bearing beyond context size:
+#
+#   node_modules / dist -- the Dockerfile's `COPY . .` runs *after* its own
+#   `bun install --frozen-lockfile --ignore-scripts`. Without these excluded,
+#   the host working copy's dependency tree (installed at some unknown time,
+#   possibly with lifecycle scripts run) would be copied over the gated tree
+#   the image build just produced, silently voiding both the lockfile pin and
+#   the no-lifecycle-scripts guarantee (Shai-Hulud countermeasure -- see that
+#   Dockerfile's build stage and .claude/rules/web.md).
+#
+#   .env / .env.* -- no local credential file is ever handed to the Docker
+#   daemon as build context (CLAUDE.md「実行境界: runtime はコンテナのみ」: the
+#   runtime image build takes no secrets, no ~/.npmrc, no cloud credentials).
+node_modules
+dist
+dist-ssr
+.git
+.gitignore
+*.md
+coverage
+.vscode
+*.local
+.env
+.env.*
+!.env.example

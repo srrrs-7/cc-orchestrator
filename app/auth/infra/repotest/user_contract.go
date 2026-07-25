@@ -13,13 +13,11 @@ import (
 //
 // user.Repository is read-only (FindByID / FindByUsername; see
 // domain/user/repository.go): seeding is necessarily performed
-// outside the interface, through whatever mechanism each
-// implementation uses in production (infra/memory.UserRepository's
-// Seed method; infra/postgres's planned startup idempotent-seed
-// UpsertUser, per docs/plans/SPEC-005-plan.md §2.2). Implementations
-// MUST start from an empty store on every call, the same way
-// memory.NewUserRepository() does, so subtests never observe data
-// left behind by another subtest.
+// outside the interface, through postgres.SeedUser's idempotent
+// upsert (wrapped by testsupport.SeedUser for tests; infra/postgres
+// is the sole implementation since SPEC-011). Implementations MUST
+// start from an empty store on every call so subtests never observe
+// data left behind by another subtest.
 type NewUserRepository func(t *testing.T, seed ...*user.User) user.Repository
 
 // RunUserRepositoryContract runs the behavioral contract shared by
@@ -97,6 +95,35 @@ func RunUserRepositoryContract(t *testing.T, newRepo NewUserRepository) {
 			t.Errorf("FindByUsername(exact case) unexpected error: %v", err)
 		}
 	})
+
+	t.Run("ListAll returns every seeded user ordered by id", func(t *testing.T) {
+		u1 := newTestUser(t, "user-a", "alice", "s3cret", "Alice", "alice@example.com")
+		u2 := newTestUser(t, "user-b", "bob", "s3cret", "Bob", "bob@example.com")
+		repo := newRepo(t, u2, u1)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("ListAll() len = %d, want 2", len(got))
+		}
+		if got[0].ID().String() != "user-a" || got[1].ID().String() != "user-b" {
+			t.Errorf("ListAll() order = [%q, %q], want [user-a, user-b]", got[0].ID(), got[1].ID())
+		}
+	})
+
+	t.Run("ListAll on an empty store returns an empty slice", func(t *testing.T) {
+		repo := newRepo(t)
+
+		got, err := repo.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("ListAll() unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("ListAll() len = %d, want 0", len(got))
+		}
+	})
 }
 
 func newTestUser(t *testing.T, id, username, password, profileName, profileEmail string) *user.User {
@@ -114,7 +141,11 @@ func newTestUser(t *testing.T, id, username, password, profileName, profileEmail
 	if err != nil {
 		t.Fatalf("setup NewProfile(%q, %q) unexpected error: %v", profileName, profileEmail, err)
 	}
-	return user.New(userID, uname, password, profile)
+	u, err := user.New(userID, uname, password, profile)
+	if err != nil {
+		t.Fatalf("setup user.New() unexpected error: %v", err)
+	}
+	return u
 }
 
 func assertSameUser(t *testing.T, got, want *user.User) {
@@ -125,8 +156,8 @@ func assertSameUser(t *testing.T, got, want *user.User) {
 	if got.Username() != want.Username() {
 		t.Errorf("Username() = %v, want %v", got.Username(), want.Username())
 	}
-	if got.Password() != want.Password() {
-		t.Errorf("Password() = %v, want %v", got.Password(), want.Password())
+	if got.PasswordHash() != want.PasswordHash() {
+		t.Errorf("PasswordHash() = %v, want %v", got.PasswordHash(), want.PasswordHash())
 	}
 	if got.Profile().Name() != want.Profile().Name() {
 		t.Errorf("Profile().Name() = %v, want %v", got.Profile().Name(), want.Profile().Name())

@@ -1,4 +1,8 @@
 [install]
+# 社内ミラー固定(ISSUE-020): bun.lock の大半が npm.flatt.tech URL を持つ規約と揃え、
+# 空 URL エントリ(typescript 系)が環境の ~/.npmrc 依存にならないようにする。
+registry = "https://npm.flatt.tech/"
+
 # Shai-Hulud 等のサプライチェーン攻撃対策:
 # 公開から 21 日(1814400 秒)未満のバージョンはインストールしない
 minimumReleaseAge = 1814400

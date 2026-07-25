@@ -1,13 +1,24 @@
 {
   "name": "cc-orchestrator toolchain (SPEC-009)",
-  // References compose.tools.yml's "tools" service (network enabled) --
-  // the same image/service every Makefile wrapper and CI job (from
-  // Phase B/C onward) runs through, so an editor session sees the exact
-  // same pinned toolchain as a local `make check` or CI. This is an
+  // References the sibling compose.tools.yml's "tools" service (network
+  // enabled) -- the same image/service every Makefile wrapper and CI job
+  // (from Phase B/C onward) runs through, so an editor session sees the
+  // exact same pinned toolchain as a local `make check` or CI. This is an
   // optional convenience layer on top of that: `docker compose run` is
   // still the source-of-truth execution path (SPEC-009 §4), not this
   // file.
-  "dockerComposeFile": ["../compose.tools.yml"],
+  //
+  // The Dev Containers extension runs Compose with THIS directory
+  // (.devcontainer/) as the project directory, so:
+  //   - compose.tools.yml's build context/workspace defaults
+  //     (./toolchain, ..) resolve correctly with no extra config; and
+  //   - Compose auto-loads a `.env` from this directory for the image's
+  //     build ARG versions. Create it once as a symlink to the
+  //     repo-root single source of truth (gitignored):
+  //       ln -s ../versions.env .devcontainer/.env
+  //     CLI/CI callers do NOT need this -- they export versions.env
+  //     directly (see .devcontainer/toolchain/README.md).
+  "dockerComposeFile": ["compose.tools.yml"],
   "service": "tools",
   // Keeps the "tools" container running after VS Code disconnects, so
   // it does not race the sibling app/{api,auth,web} containers managed
@@ -15,7 +26,7 @@
   // compose project).
   "shutdownAction": "none",
   "workspaceFolder": "/workspace",
-  // Non-root by default (docker/toolchain/Dockerfile's built-in `tools`
+  // Non-root by default (.devcontainer/toolchain/Dockerfile's built-in `tools`
   // user, uid/gid 1000) -- no host secrets and no docker.sock are
   // mounted into this service (see compose.tools.yml), so there is no
   // privilege to escalate to in the first place, but the container

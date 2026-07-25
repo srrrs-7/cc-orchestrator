@@ -1,5 +1,3 @@
-//go:build integration
-
 package postgres_test
 
 import (
@@ -7,21 +5,19 @@ import (
 
 	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/authcode"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres"
+	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/postgres/testsupport"
 	"github.com/srrrs-7/cc-orchestrator/app/auth/infra/repotest"
 )
 
-// TestAuthCodeRepository_Contract runs the same behavioral contract
-// as infra/memory (infra/memory/authcode_repository_contract_test.go)
-// against a real Postgres-backed authcode.Repository, proving R2's
-// single-use + TTL requirements hold for a shared, cross-instance
-// store (the concrete problem statement in SPEC-005 §1: "同じコードが別
-// インスタンスで再利用され得る"). Unlike client/user,
+// TestAuthCodeRepository_Contract runs the behavioral contract shared
+// by every authcode.Repository implementation (SPEC-005 R2 / SPEC-011 R3)
+// against a real Postgres-backed authcode.Repository. Unlike client/user,
 // authcode.Repository.Save is part of the domain port, so no separate
-// seed helper is needed here.
+// seed helper is needed.
 func TestAuthCodeRepository_Contract(t *testing.T) {
 	repotest.RunAuthCodeRepositoryContract(t, func(t *testing.T) authcode.Repository {
-		db := openTestDB(t)
-		truncateTable(t, db, "authorization_codes")
+		db := testsupport.OpenTestDB(t)
+		testsupport.TruncateTable(t, db, "authorization_codes")
 		return postgres.NewAuthCodeRepository(db)
 	})
 }

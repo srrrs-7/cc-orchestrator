@@ -33,17 +33,15 @@ PKCE(RFC 7636, S256)+ refresh_token グラント(RFC 6749 §6、SPEC-006)によ�
 - 依存の向きは `route → service → domain` の一方向。`domain` は他のどの層にも依存しない。
 - `domain/token` は JWT の署名・検証・JWK 公開を **ポート(`Signer` / `Verifier` /
   `KeyProvider` インターフェース)** として宣言するのみで、RSA による実装は持たない。
-  `infra/jwt` がその実装を提供する(**依存性逆転の原則 / DIP**。`app/api` の
-  `domain/task.Repository` ⇔ `infra/memory.TaskRepository` と同型)。同様に `client` /
+  `infra/jwt` がその実装を提供する(**依存性逆転の原則 / DIP**)。同様に `client` /
   `user` / `authcode` / `refreshtoken` の各 `Repository`(書き込みを持つ `authcode` /
-  `refreshtoken` は SPEC-010 で `Reader`/`Writer` にも additive に分割)は `infra/memory`
-  (in-memory)と `infra/postgres`(Postgres。SPEC-005)が同格で実装し、切替可能にする。
-  両実装が同一の振る舞いを満たすことは `infra/repotest` の共有契約テストで保証する
-  (`.claude/rules/testing.md`)。
-- `cmd/authz` はコンポジションルート。RSA 鍵生成・永続化(Postgres / in-memory)の選択と
-  配線・デモ client/user の seed・各層の配線を行うのみで、ビジネスロジックを一切持たない。
-  永続化の選択規則・接続 env・CQRS reader/writer 2 プールの詳細は `.claude/rules/db.md`
-  が正(担当は impl-db)。
+  `refreshtoken` は SPEC-010 で `Reader`/`Writer` にも additive に分割)は **Postgres 一本化
+  (SPEC-011): `infra/postgres` が唯一の実装**。別ストア(例: MySQL)へ差し替える場合は
+  `infra/postgres` を同じポート contract を満たす新実装で置き換え、`infra/repotest` の
+  共有契約テストを回して動作を保証する。
+- `cmd/authz` はコンポジションルート。RSA 鍵生成・Postgres への永続化配線・デモ client/user の
+  seed・各層の配線を行うのみで、ビジネスロジックを一切持たない。接続 env・CQRS reader/writer 2
+  プールの詳細は `.claude/rules/db.md` が正(担当は impl-db)。
 
 ### 集約間の関係(パッケージ依存を作らない設計)
 
@@ -64,7 +62,7 @@ PKCE(RFC 7636, S256)+ refresh_token グラント(RFC 6749 §6、SPEC-006)によ�
 | 集約ルート (Aggregate Root) | 不変条件を守る単位。外部からは集約ルート経由でのみ操作 | `client.Client` / `user.User` / `authcode.AuthorizationCode` / `refreshtoken.RefreshToken` / (ポートのみの)`token` |
 | 値オブジェクト (Value Object) | 属性の値そのもので同一性が決まる不変オブジェクト | `client.ClientID` / `client.RedirectURI`、`user.UserID` / `user.Username` / `user.Profile`、`authcode.Code` / `authcode.CodeChallenge` / `authcode.Scope` / `authcode.Nonce`、`refreshtoken.Token` / `refreshtoken.TokenHash` / `refreshtoken.FamilyID` / `refreshtoken.ClientID` / `refreshtoken.UserID` / `refreshtoken.Scope`、`token.Claims` |
 | ファクトリ (Factory) | 不変条件の充足をカプセル化する生成手段 | 各集約の `New(...)`(新規生成)/ `Reconstruct(...)`(永続化層からの再構築専用)。`refreshtoken` はローテーション専用に `Issue(...)`(新規発行。認可コード交換時)/ `Rotate(...)`(リフレッシュ時の次トークン生成)も持つ |
-| リポジトリ (Repository) | 集約の永続化をコレクションのように抽象化する境界 | `client.Repository` / `user.Repository` / `authcode.Repository` / `refreshtoken.Repository`(定義はドメイン層、実装は `infra/memory` と `infra/postgres` が同格で提供。SPEC-010 で `authcode` / `refreshtoken` は additive に `Reader`/`Writer` へも分割) |
+| リポジトリ (Repository) | 集約の永続化をコレクションのように抽象化する境界 | `client.Repository` / `user.Repository` / `authcode.Repository` / `refreshtoken.Repository`(定義はドメイン層、実装は `infra/postgres`。SPEC-010 で `authcode` / `refreshtoken` は additive に `Reader`/`Writer` へも分割) |
 | ポート (Port) / ヘキサゴナル | ドメインが必要とする外部機能をインターフェースとして宣言し、実装は外側に置く | `token.Signer` / `token.Verifier` / `token.KeyProvider`(定義は `domain/token`、RSA 実装は `infra/jwt`) |
 | アプリケーションサービス (Application Service) | ユースケースを実現するためドメインを協調させる薄い層。ビジネスルールは持たない | `service.AuthorizationService`(authorize / token: 認可コード交換 + refresh_token グラント)、`service.UserInfoService`、`service.DiscoveryService` |
 | ドメインエラー | sentinel error による分岐可能なエラー表現 | 各 `domain/<aggregate>/errors.go`。`errors.Is` で判定 |
@@ -102,9 +100,8 @@ app/auth/
 │   ├── userinfo_service.go
 │   └── discovery_service.go
 ├── infra/
-│   ├── memory/                    in-memory Repository 実装(client/user/authcode/refreshtoken)
 │   ├── postgres/                  Postgres Repository 実装(client/user/authcode/refreshtoken。SPEC-005。SPEC-010 で reader/writer 2 プールへ配線)
-│   ├── repotest/                  memory/postgres 共通のふるまい契約テスト(`Run<集約>RepositoryContract`)
+│   ├── repotest/                  ふるまい契約テスト(`Run<集約>RepositoryContract`。Postgres 実装に対して integration tag で実行)
 │   └── jwt/                       RS256 の Signer/Verifier/KeyProvider 実装
 ├── route/                       プレゼンテーション層
 │   ├── router.go
@@ -113,16 +110,18 @@ app/auth/
 │   ├── userinfo_handler.go
 │   ├── discovery_handler.go
 │   └── response.go
-├── db/
-│   ├── migrations/                goose マイグレーション SQL(up/down)
-│   └── queries/                   sqlc の入力クエリ SQL
-├── sqlc.yaml                    sqlc 設定(`db/queries` → `infra/postgres/sqlcgen` を生成)
+├── infra/postgres/
+│   ├── schema/
+│   │   ├── migrations/            goose マイグレーション SQL(up/down)
+│   │   └── queries/               sqlc の入力クエリ SQL
+│   ├── sqlc.yaml                  sqlc 設定(`schema/queries` → `sqlcgen` を生成)
+│   └── sqlcgen/                   sqlc 生成コード(commit 対象)
 ├── Makefile                     開発コマンド(下記「開発コマンド」参照)
 ├── Dockerfile                   コンテナイメージ定義
 └── .golangci.yml                lint 設定
 ```
 
-永続化(`infra/postgres` / `db/*` / `sqlc.yaml` / マイグレーション適用)の規約・接続 env・
+永続化(`infra/postgres` / `schema/*` / `sqlc.yaml` / マイグレーション適用)の規約・接続 env・
 CQRS reader/writer 分離の詳細は `.claude/rules/db.md` が正で、本 README では重複させない
 (担当は impl-db)。
 
@@ -141,7 +140,7 @@ Docker のみ)。コマンド名・契約はこの配線変更の前後で不変
 | `make vet` / `make build` | go vet / go build |
 | `make test` / `make test-race` | テスト実行(race detector 付きは test-race) |
 | `make check` | 上記チェックを一括実行(fmt-check + lint + vet + build + test) |
-| `make run` | 認可サーバー起動 |
+| `make run` | 認可サーバーを runtime コンテナで起動(compose の `auth` サービス。ホストでの `go run` は禁止) |
 
 上記に加え、永続化(DB)系のターゲット(`make sqlc` / `make migrate-create` /
 `make test-integration`)がある。これらは生成 / 実 DB 依存であり検査ではないため
@@ -150,17 +149,16 @@ Docker のみ)。コマンド名・契約はこの配線変更の前後で不変
 
 ## 起動方法
 
+runtime はコンテナでのみ起動する(**ホストでの `go run ./cmd/authz` は禁止**。正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。`make run` は compose の `auth` サービス = `app/auth/Dockerfile` の runtime イメージ(distroless static / non-root / read-only rootfs / `cap_drop: ALL`)を `--build` して起動し、その前段でルート `make migrate` が Postgres を起動してマイグレーションを適用する。
+
 ```sh
 cd app/auth
-make run  # または go run ./cmd/authz
+make run          # auth(+ postgres。前段で migrate)。停止は Ctrl+C
 ```
 
-デフォルトでは `:8080` で待ち受け、issuer は `http://localhost:8080` になる。
-`PORT` / `ISSUER` 環境変数で変更できる。
+全 5 サービス(web / api / auth / auth-web / postgres)をまとめて起動する場合はリポジトリルートで `make up-d`(停止・撤去は `make down`)。IdP のログイン画面は web / auth-web の nginx が同一オリジンで proxy する経路(`http://localhost:8080/auth/...`)から辿る。
 
-```sh
-PORT=9000 ISSUER=https://auth.example.com go run ./cmd/authz
-```
+コンテナ内の listen は `:8080` 固定で、ホストからは `http://localhost:8082` に publish される(`127.0.0.1` バインドのみ)。`ISSUER` / `API_AUDIENCE` / `DEMO_PASSWORD` / `ADMIN_API_KEY` / `DB_*` は `compose.yml` の `auth` サービスが与えるので、変えたい場合はそこを編集する。署名鍵をプロセス再起動をまたいで保持したい場合は ISSUE-036 の手順(ルート `make auth-signing-keys` → `compose.yml` の `SIGNING_KEYS_FILE` と read_only bind のコメント解除)に従う。
 
 `Ctrl+C`(SIGINT)または SIGTERM で graceful shutdown する。
 
@@ -170,15 +168,12 @@ PORT=9000 ISSUER=https://auth.example.com go run ./cmd/authz
   でなければならない。この基盤はローカル開発の利便性のため `ISSUER` 未設定時に
   `http://localhost:8080` を既定値として使うが、本番相当の環境にデプロイする場合は
   `ISSUER` に https の URL を必ず注入すること(`cmd/authz/main.go` の `run()` 内コメント参照)。
-- **本番は Postgres 必須(fail-closed)。** `DB_HOST` が設定されていれば `APP_ENV` の値に
-  関わらず Postgres(`infra/postgres`)に接続する。`DB_HOST` 未設定時は `APP_ENV` が
-  `local` / `test` のときに限り `infra/memory` へフォールバックし、それ以外
-  (`APP_ENV=production`・未設定・未知の値)では起動時にエラーで終了する。接続情報を渡し
-  忘れたまま非永続の in-memory 実装で本番稼働してしまう事故を防ぐための設計(SPEC-005、
-  `cmd/authz/main.go` の `setupPersistence` / `postgres.SelectMode`)。接続 env(writer 用
-  `DB_*` に加え、CQRS reader/writer 分離(SPEC-010)用の reader 用 `DB_READER_*`。各項目は
-  未設定時に対応する writer 値へフォールバックする)の一覧・既定値・マイグレーション適用
-  (`app/migrator`)は `.claude/rules/db.md` の「接続 env 契約」が正。
+- **Postgres 必須(fail-closed)。** `DB_HOST` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` が
+  設定されていない場合は起動時にエラーで終了する(SPEC-011: in-memory フォールバックは
+  廃止。`cmd/authz/env.go` の `validate()` が起動前に必須フィールドを検証する)。
+  接続 env(writer 用 `DB_*` に加え、CQRS reader/writer 分離(SPEC-010)用の reader 用
+  `DB_READER_*`。各項目は未設定時に対応する writer 値へフォールバックする)の一覧・既定値・
+  マイグレーション適用(`app/migrator`)は `.claude/rules/db.md` の「接続 env 契約」が正。
 - **RSA 秘密鍵はプロセス起動のたびにメモリ上で生成する。** ディスクにもコードにも書き出さない
   代わりに、**再起動すると鍵(と `kid`)が変わり、それ以前に発行したトークンはすべて検証不能
   になる。** 鍵の永続化・ローテーション・複数鍵での JWKS 提供は将来拡張点(未実装)。

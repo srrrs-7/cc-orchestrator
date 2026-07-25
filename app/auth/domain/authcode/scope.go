@@ -9,6 +9,13 @@ import (
 // authorization request (OIDC Core 3.1.2.1).
 const ScopeOpenID = "openid"
 
+// ScopeOfflineAccess is the scope value that requests issuance of a
+// refresh token (OIDC Core §11). A client supporting
+// grant_type=refresh_token only receives a refresh token when this
+// scope is included in the granted scope; without it the token
+// endpoint returns access/ID tokens only.
+const ScopeOfflineAccess = "offline_access"
+
 // Scope is a value object representing a space-delimited set of OAuth
 // 2.0 / OIDC scope values (RFC 6749 3.3).
 type Scope struct {

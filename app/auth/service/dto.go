@@ -6,11 +6,16 @@
 // objects never leak upward.
 package service
 
-import "github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
+import (
+	"time"
+
+	"github.com/srrrs-7/cc-orchestrator/app/auth/domain/token"
+)
 
 // AuthorizeRequest is the application-layer input for
 // AuthorizationService.Authorize, built by route/authorize_handler.go
-// from the /authorize query string.
+// from the /authorize query string. AuthTime is the IdP session login
+// timestamp obtained from the active session; zero when not available.
 type AuthorizeRequest struct {
 	ResponseType        string
 	ClientID            string
@@ -21,6 +26,7 @@ type AuthorizeRequest struct {
 	CodeChallenge       string
 	CodeChallengeMethod string
 	LoginHint           string
+	AuthTime            time.Time
 }
 
 // AuthorizeResult is the application-layer output of
@@ -38,11 +44,14 @@ type AuthorizeResult struct {
 // the /token form body. RefreshToken and Scope are used only by
 // grant_type=refresh_token (SPEC-006 R1/R7); Code/RedirectURI/
 // CodeVerifier are used only by grant_type=authorization_code.
+// ClientSecret is the plaintext secret for confidential clients
+// (ISSUE-035); empty for public clients (token_endpoint_auth_method=none).
 type TokenRequest struct {
 	GrantType    string
 	Code         string
 	RedirectURI  string
 	ClientID     string
+	ClientSecret string
 	CodeVerifier string
 	RefreshToken string
 	Scope        string
@@ -93,7 +102,10 @@ type ProviderMetadata struct {
 	Issuer                            string   `json:"issuer"`
 	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
 	TokenEndpoint                     string   `json:"token_endpoint"`
+	RevocationEndpoint                string   `json:"revocation_endpoint"`
+	IntrospectionEndpoint             string   `json:"introspection_endpoint,omitempty"`
 	UserInfoEndpoint                  string   `json:"userinfo_endpoint"`
+	EndSessionEndpoint                string   `json:"end_session_endpoint"`
 	JWKSURI                           string   `json:"jwks_uri"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	SubjectTypesSupported             []string `json:"subject_types_supported"`
@@ -103,6 +115,16 @@ type ProviderMetadata struct {
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	GrantTypesSupported               []string `json:"grant_types_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+}
+
+// IntrospectionResponse is the JSON body returned from POST /introspect
+// (RFC 7662 §2.2). Active is always present; Subject/Exp/Scope are
+// populated only when active is true.
+type IntrospectionResponse struct {
+	Active  bool   `json:"active"`
+	Subject string `json:"sub,omitempty"`
+	Exp     int64  `json:"exp,omitempty"`
+	Scope   string `json:"scope,omitempty"`
 }
 
 // JWKSet is the JSON body returned from /.well-known/jwks.json,

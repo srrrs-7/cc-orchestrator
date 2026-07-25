@@ -1,10 +1,10 @@
 ---
 id: ISSUE-022
 title: app/migrator の並行 goose up に排他制御(advisory lock)が無く、desired_count>1 のローリングデプロイで goose_db_version 書き込みが競合し得る
-status: open  # open | investigating | fixing | resolved | closed | wontfix
+status: resolved  # open | investigating | fixing | resolved | closed | wontfix
 severity: low  # critical | high | medium | low
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-12
 specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 ---
 
@@ -70,8 +70,8 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 
 ### 実施内容
 
-- [ ] `desired_count>1` を採用する前提として、advisory lock 導入(app/migrator)と一回限り task 方式(iac)のいずれを採るか決める
-- [ ] 採用方式を実装する(app/migrator の `SessionLocker` 有効化 or iac の一回限り ECS タスク定義)
+- [x] `desired_count>1` を採用する前提として、advisory lock 導入(app/migrator)と一回限り task 方式(iac)のいずれを採るか決める → advisory lock 導入を採用
+- [x] 採用方式を実装する(app/migrator の `SessionLocker` 有効化)
 - [ ] iac の README(`modules/service`)の `desired_count>=2` に関する記述に「並行 migrate の排他」をチェック項目として追記する
 - [ ] ISSUE-002(SPOF 解消で `desired_count>=2` を挙げる項目 7・14)と本 Issue の依存関係を相互に確認する
 
@@ -88,3 +88,7 @@ specs: [SPEC-005]  # 関連Spec ID (例: [SPEC-002])
 - 重複確認: 既存 Issue に advisory lock / 並行 `goose up` / `goose_db_version` 書き込み競合を扱うものは無い(`docs/issues` を横断確認)。`desired_count` の既存言及(ISSUE-001 のデータ一貫性、ISSUE-002 の項目 7・14 = ECS の SPOF 解消)はいずれも **可用性 / 単一障害点**の文脈であり、マイグレーションの排他とは別テーマ。SPEC-005 起票済みの ISSUE-005(平文パスワード)/ ISSUE-015(authcode 無制限増加)/ ISSUE-016(DB 最小権限・TLS)/ ISSUE-017(migrate イメージの ECR push 経路)とも重複しない独立テーマ。ISSUE-018(route エラー型)/ ISSUE-020(bun.lock)/ ISSUE-021(healthcheck SSRF)とも無関係。
 - severity は **low** と判定(依頼の「low〜medium」の下限を採用)。判定根拠: 現構成(`desired_count = 1` 固定)では **一切発生せず実害が無い** ため、現時点の性質は軽微(low)。ただし `desired_count>1` へ構成変更した場合は `goose_db_version` の書き込み競合というデータ整合性リスク(実質 medium 相当)に上がるため、**`desired_count>1` 化の前提条件**として追跡する。回避策(`desired_count = 1` 維持 / 一回限り task / advisory lock)が複数存在する。
 - 次にやること: `desired_count>1` を採用する意思決定が生じた時点で、後続の impl-db(app/migrator の advisory lock)または impl-iac(一回限り ECS タスク)がいずれかを実装し、iac README のチェック項目に反映する。
+
+### 2026-07-12
+
+- advisory lock 導入を採用し実装した。`app/migrator/infra/goose/runner.go` を goose のグローバル API(`goose.RunContext`)から Provider API(`goose.NewProvider` + `goose.WithSessionLocker`)へ移行。`lock.NewPostgresSessionLocker()` で Postgres session-level advisory lock(`pg_try_advisory_lock`)を生成し、`goose.WithSessionLocker` で Provider に渡すことで、複数の init コンテナが同一 DB へ並行して `goose up` を実行した場合でも直列化される。既存の `r.timeout` によるコンテキストキャンセルは引き続き advisory lock の取得待ちにも適用されるため、ハング時のフェイルファスト挙動は維持されている。`make check`(fmt-check + lint + vet + build + test)全項目パス確認済み。残タスク: iac README の `desired_count>=2` チェック項目追記・ISSUE-002 との依存確認は別途対応。

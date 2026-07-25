@@ -17,10 +17,23 @@ import (
 func TestToken_AuthorizationCode_IssuesRefreshToken(t *testing.T) {
 	h := newTestHandler(t)
 
-	got := issueTokens(t, h, "openid profile email", "")
+	got := issueTokens(t, h, "openid profile email offline_access", "")
 
 	if got.RefreshToken == "" {
 		t.Error("refresh_token is empty, want a non-empty refresh_token issued alongside access_token/id_token")
+	}
+}
+
+// TestToken_AuthorizationCode_NoOfflineAccess_NoRefreshToken verifies
+// ISSUE-038: refresh_token is only issued when offline_access scope
+// was granted. Without it the token response must omit refresh_token.
+func TestToken_AuthorizationCode_NoOfflineAccess_NoRefreshToken(t *testing.T) {
+	h := newTestHandler(t)
+
+	got := issueTokens(t, h, "openid profile email", "")
+
+	if got.RefreshToken != "" {
+		t.Errorf("refresh_token = %q, want empty when offline_access scope was not granted", got.RefreshToken)
 	}
 }
 
@@ -32,7 +45,7 @@ func TestToken_AuthorizationCode_IssuesRefreshToken(t *testing.T) {
 // success path.
 func TestRefreshToken_Success_IssuesNewAccessAndIDToken(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid profile email", "abc-nonce")
+	orig := issueTokens(t, h, "openid profile email offline_access", "abc-nonce")
 	origIDClaims := decodeJWTPayload(t, orig.IDToken)
 
 	rec := doRefreshToken(t, h, orig.RefreshToken, testClientID, "")
@@ -94,7 +107,7 @@ func TestRefreshToken_Success_IssuesNewAccessAndIDToken(t *testing.T) {
 // redeemed must be rejected as invalid_grant.
 func TestRefreshToken_Rotation_OldTokenRejected(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	first := doRefreshToken(t, h, orig.RefreshToken, testClientID, "")
 	if first.Code != http.StatusOK {
@@ -118,7 +131,7 @@ func TestRefreshToken_Rotation_OldTokenRejected(t *testing.T) {
 // immediately afterward (RFC 9700 §4.14).
 func TestRefreshToken_Reuse_RevokesFamily(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	first := doRefreshToken(t, h, orig.RefreshToken, testClientID, "")
 	if first.Code != http.StatusOK {
@@ -152,7 +165,7 @@ func TestRefreshToken_Reuse_RevokesFamily(t *testing.T) {
 // rejected as invalid_grant.
 func TestRefreshToken_ClientMismatch_InvalidGrant(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	rec := doRefreshToken(t, h, orig.RefreshToken, testClientID2, "")
 	if rec.Code != http.StatusBadRequest {
@@ -170,7 +183,7 @@ func TestRefreshToken_ClientMismatch_InvalidGrant(t *testing.T) {
 // not be able to regain the dropped scope).
 func TestRefreshToken_ScopeNarrower_OK(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid profile email", "")
+	orig := issueTokens(t, h, "openid profile email offline_access", "")
 
 	rec := doRefreshToken(t, h, orig.RefreshToken, testClientID, "openid profile")
 	if rec.Code != http.StatusOK {
@@ -199,7 +212,7 @@ func TestRefreshToken_ScopeNarrower_OK(t *testing.T) {
 // invalid_scope.
 func TestRefreshToken_ScopeWiden_InvalidScope(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid profile", "")
+	orig := issueTokens(t, h, "openid profile offline_access", "")
 
 	rec := doRefreshToken(t, h, orig.RefreshToken, testClientID, "openid profile email")
 	if rec.Code != http.StatusBadRequest {
@@ -285,7 +298,7 @@ func TestRefreshToken_ErrorResponse_HasNoCacheHeaders(t *testing.T) {
 // the repository's Rotate critical section has no data race.
 func TestRefreshToken_ConcurrentUse_ExactlyOneSucceeds(t *testing.T) {
 	h := newTestHandler(t)
-	orig := issueTokens(t, h, "openid", "")
+	orig := issueTokens(t, h, "openid offline_access", "")
 
 	form := url.Values{
 		"grant_type":    {"refresh_token"},

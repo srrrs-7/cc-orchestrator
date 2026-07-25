@@ -2,17 +2,17 @@
 // suite for task.Repository implementations (SPEC-005). The domain
 // layer's Repository interface (domain/task/repository.go) is the
 // single source of truth for what a task.Repository must do;
-// RunTaskRepositoryContract exercises that contract once, so
-// infra/memory and (once implemented) infra/postgres can both be
-// proven to behave identically without duplicating test logic
-// per-implementation.
+// RunTaskRepositoryContract exercises that contract once, so every
+// implementation can be proven to behave identically without
+// duplicating test logic per-implementation.
 //
-// This file carries no build tag: it must compile and be usable both
-// by the default (untagged) build -- exercised today against
-// infra/memory -- and by the "integration" build (see
-// infra/postgres/task_repository_integration_test.go) once
-// infra/postgres exists. It must therefore not depend on anything
-// beyond the standard library and the task domain package.
+// SPEC-011 完了: infra/memory 削除済み。SPEC-013 以降、この contract は
+// default `make test` の一部として実 DB(`api_test`)に対して実行される
+// (see infra/postgres/task_repository_integration_test.go).
+//
+// This file carries no build tag: it must remain compilable regardless
+// of build tags, so it must not depend on anything beyond the standard
+// library and the task domain package.
 package repotest
 
 import (
@@ -28,25 +28,21 @@ import (
 // empty store, ready for a single subtest.
 //
 // Implementations MUST return a repository whose store is empty every
-// time this is called (a fresh in-memory map for infra/memory; a
-// truncated table for infra/postgres), so that RunTaskRepositoryContract's
-// subtests never observe data left behind by another subtest. See
-// infra/memory/task_repository_contract_test.go and (once it exists)
-// infra/postgres/task_repository_integration_test.go for the two
-// concrete factories.
+// time this is called (a truncated table for infra/postgres), so that
+// RunTaskRepositoryContract's subtests never observe data left behind
+// by another subtest. See infra/postgres/task_repository_integration_test.go
+// for the concrete factory (SPEC-011: Postgres is the sole implementation).
 type NewTaskRepository func(t *testing.T) task.Repository
 
 // RunTaskRepositoryContract runs the behavioral contract shared by
-// every task.Repository implementation (SPEC-005 R1 / SPEC-008 R5:
-// infra/postgres must behave identically to infra/memory for Save /
-// FindByID / FindByTitle / ListPage).
+// every task.Repository implementation (SPEC-005 R1 / SPEC-008 R5 /
+// SPEC-011 R3) for Save / FindByID / FindByTitle / ListPage.
 //
 // Deliberately NOT covered here (see docs/plans/SPEC-005-plan.md
-// §6.1 R-a): UNIQUE(title) enforcement. infra/memory silently allows
-// saving two distinct Tasks that share a Title, while a Postgres
-// UNIQUE constraint on tasks.title is expected to reject it. That
-// asymmetry is intentionally out of scope for a *shared* contract and
-// is instead verified by a Postgres-only test in infra/postgres.
+// §6.1 R-a): UNIQUE(title) enforcement. A Postgres UNIQUE constraint
+// on tasks.title rejects duplicate titles; that is verified by a
+// Postgres-only test in infra/postgres rather than in this shared
+// contract.
 func RunTaskRepositoryContract(t *testing.T, newRepo NewTaskRepository) {
 	t.Helper()
 
@@ -246,10 +242,7 @@ func longRuneString(n int) string {
 // want. CreatedAt/UpdatedAt are compared with microsecond truncation:
 // Postgres's timestamptz column has microsecond precision, while
 // Go's time.Now() carries nanoseconds, so an exact time.Time ==
-// comparison would spuriously fail once this contract is exercised
-// against a real database (it does not affect infra/memory today,
-// which never truncates, but keeps this file usable unmodified by
-// infra/postgres later).
+// comparison would spuriously fail against a real database.
 func assertSameTask(t *testing.T, got, want *task.Task) {
 	t.Helper()
 	if got.ID() != want.ID() {
