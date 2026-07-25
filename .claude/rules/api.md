@@ -11,6 +11,8 @@ paths:
 
 実行はすべて `app/api` ディレクトリで行う。checker / tester はこれを実行する。各ターゲットの実体は `app/api/Makefile` が単一の情報源。SPEC-009 により全コマンドは toolchain コンテナ内で実行される(ホストで go を直接実行しない)。`make test` は実 test DB `api_test` を要する(SPEC-013。正規経路はルート `make migrate-test` で用意 → `REQUIRE_DB=1`。意味論の正は `.claude/rules/testing.md`)。
 
+例外は `make run`(= サーバー起動 = runtime)だけで、これは toolchain コンテナではなく **`app/api/Dockerfile` の runtime イメージ**(compose の `api` サービス)で実行する。**ホストでの `go run` と toolchain コンテナ内での常駐起動はどちらも禁止**(正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。
+
 | 目的 | コマンド |
 |---|---|
 | format(チェック) | `make fmt-check` |
@@ -21,6 +23,7 @@ paths:
 | 上記すべて | `make check` |
 | OpenAPI 契約生成 | `make openapi`(swag v2 注釈から `docs/openapi.yaml` を生成。SPEC-003。生成であり検査ではないため `make check` には含めない) |
 | 依存解決(go.mod 編集・merge 競合解消の後) | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。生成系と同様 `make check` には含めない) |
+| ローカル起動(runtime) | `make run`(compose の `api` サービスを `--build` して起動。前段でルート `make migrate` を実行する。**検査ではなく常駐する**ため checker / tester は実行しない。全 5 サービスはルート `make up` / `up-d`) |
 
 ## レイアウト
 

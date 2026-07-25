@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 応答フォーマット: 要点のみ・最小文字数(必須)
+
+会話でユーザーに返す出力は、**要点だけ**を**箇条書き**で書く。目的は (1) トークン使用量の削減、(2) 人間が読む文字量の削減。**網羅性より短さを優先する**(網羅的な記録は `docs/` とコード内コメントが担う)。
+
+- **結論を先に 1 行** → 続けて箇条書き 3〜7 点。前置き・依頼文の復唱・謝辞・感想・自己評価は書かない
+- **1 行 1 事実**。1 行は 100 文字程度まで。ネストは 1 段まで。同じことを言い換えない
+- **差分だけ書く**: 「どのファイルを・何にしたか」。変更していない箇所・自明な背景・検討の過程は書かない
+- **コードは貼らない**。`path:line` で位置を示す(数行で結論が変わる差分のみ例外)
+- **表は 3 列以内・5 行以内**。長い理由や設計判断は本文に展開せず、コード内コメント / `docs/specs` / `docs/issues` に置いてそこを指す
+- **検証は結論のみ**(例: `5 サービス healthy / 4 endpoint 200 / guard 3 本 fail 確認`)。ログ貼り付けは**失敗時の該当行だけ**
+- **未完了・失敗・リスクは 1 行ずつ必ず出す**。短くすることと省いて隠すことは別
+- 長文にするのは、ユーザーが「詳しく」「全文」「理由を説明して」と明示的に求めたときだけ
+
+subagent の報告も同じ規約に従う(admin が検収時に長い報告を要約して返すのではなく、**報告自体を要点のみにさせる**)。
+
 ## 開発体制: Multi-Agent 強制
 
 すべての開発タスクは **admin**(メインセッションの Claude・最上位モデル)が細分化・計画し、`.claude/agents/` の subagent に割り振って実行する。admin は実装・テスト・チェック・レビューを直接行わない(軽微な修正も例外にしない)。役割定義・割り振り表・ホワイトリスト・禁止事項は `.claude/rules/orchestration.md`(常時ロード)に従うこと。
@@ -67,7 +82,7 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 ## コマンド早見表(正は各 rules ファイルの「コマンド」表)
 
-**実行環境(SPEC-009)**: 下表のコマンドは、ホストに go / bun / golangci-lint / terraform 等を入れず、**単一の toolchain コンテナ内でのみ実行**される(ホストの前提は Docker のみ。サプライチェーン攻撃対策)。各 stack の `Makefile` がホスト呼び出しを `docker compose -f .devcontainer/compose.tools.yml run` へ委譲する。**ホストから bun / go を直接実行しない**。通常の検査系は `--network none`(オフライン)、依存取得・DB 到達フェーズのみネットワーク有効。詳細は `docs/specs/20260710-009-containerized-toolchain-no-host-runtime.md`。
+**実行環境(SPEC-009)**: 下表のコマンドは、ホストに go / bun / golangci-lint / terraform 等を入れず、**単一の toolchain コンテナ内でのみ実行**される(ホストの前提は Docker のみ。サプライチェーン攻撃対策)。各 stack の `Makefile` がホスト呼び出しを `docker compose -f .devcontainer/compose.tools.yml run` へ委譲する。**ホストから bun / go を直接実行しない**。通常の検査系は `--network none`(オフライン)、依存取得・DB 到達フェーズのみネットワーク有効。詳細は `docs/specs/20260710-009-containerized-toolchain-no-host-runtime.md`。アプリの**起動(runtime)はこの toolchain レーンではなく別レーン**で行う(次節「実行境界: runtime はコンテナのみ」)。
 
 | stack | 実行場所 | ツール |
 |---|---|---|
@@ -79,10 +94,63 @@ app/api・app/auth のデータは Postgres に永続化する(SPEC-005 / SPEC-0
 
 永続化(DB)系の生成・スキーマ操作ターゲット(各 Go スタックの `make sqlc` / `migrate-create`、およびルートの `make migrate` / `make migrate-test`= `app/migrator` 実行)は、生成 / DB 作成・マイグレーションのため `make check` には含めない(正は `.claude/rules/db.md`)。**一方、DB 依存テストは `make test` = `make check` の一部**(SPEC-013。実 test DB `api_test` / `auth_test` を要し、正規経路は `make migrate-test` で用意してから `REQUIRE_DB=1` で実行する。ルート `make test-db` はこの一連=migrate-test + api / auth の test を一括実行する)。テスト規約(TDD・`REQUIRE_DB=1` = fail / 未設定 = skip の意味論・doubles の可否)の正は `.claude/rules/testing.md`。**マイグレーション実行は `app/migrator`(`-target api|auth`)に集約**されている(per-stack の `migrate-up/down/status` は廃止)。
 
+## 実行境界: runtime はコンテナのみ / ホスト実行禁止
+
+コードが動く経路は **2 レーンだけ**で、混ぜない。ホストに要求するのは **Docker のみ**(go / bun / nginx / postgres をホストに入れない)。
+
+| レーン | 何を動かすか | 実体 | 権限・マウント |
+|---|---|---|---|
+| **toolchain レーン**(SPEC-009) | 検査・ビルド・生成・依存解決(`make check` / `test` / `lint` / `build` / `sqlc` / `openapi` / `tidy`)と、リポジトリへ書き込む生成 CLI(`cmd/keygen` = `make auth-signing-keys`) | `.devcontainer/compose.tools.yml` の `tools` / `tools-offline` / `tools-db` | リポジトリを `/workspace` に read/write bind mount。`cap_drop: ALL` + `no-new-privileges`。ホスト資格情報(`~/.aws` / `~/.ssh` / `~/.npmrc`)と docker.sock は渡さない。通常は `--network none`、依存取得・DB 到達フェーズのみネットワーク有効 |
+| **runtime レーン**(SPEC-016) | アプリの常駐プロセス(api / auth / web / auth-web / postgres)と、DB マイグレーション(`app/migrator`) | ローカルは `compose.yml`(各 `app/*/Dockerfile` の runtime イメージ。`migrator` は profile で `up` から除外された一発実行)、本番は ECS Fargate(`app/iac/modules/service` の app + migration init コンテナ) | 最小権限(後述)。マウントは postgres の `pgdata` と auth の署名鍵ファイル(read_only bind)のみ。リポジトリ・docker.sock・資格情報は渡さない |
+
+### 禁止事項(必須)
+
+- **ホストで runtime を起動しない。** `go run ./cmd/api` / `go run ./cmd/authz` / `bun run dev`(Vite dev server)/ ホストの nginx・postgres による代替起動はすべて禁止。ホストに Go / Bun が無い前提(SPEC-009)であるうえ、あったとしてもホストユーザーの全権限とファイルシステムを常駐プロセスに与えることになる
+- **toolchain コンテナで runtime を常駐させない。** toolbox はビルドツール一式 + リポジトリの read/write bind mount を抱えている = runtime コンテナが手放しているはずの blast radius をそのまま持つ。`docker compose run tools` がポートを publish しないのはこの区別のため。`IN_TOOLBOX=1` の中で `make run` を叩くと各 stack Makefile のガードが明示エラーで落とす
+- **runtime コンテナにマウントを増やさない。** リポジトリの bind mount / docker.sock / ホスト資格情報を渡さない。どうしても必要なら「単一ファイル + `read_only: true`」に限る(現状の唯一の例外が auth の署名鍵 `.secrets/auth-signing-keys.json`。既定では無効=コメントアウト)
+- **runtime イメージにビルドツール・シェルを残さない。** Go 3 サービスは distroless static、web / auth-web は nginx + `dist` の静的ファイルのみ(Node / Bun / パッケージマネージャを含めない)
+
+### 正規経路
+
+| やりたいこと | コマンド |
+|---|---|
+| 全 5 サービスを起動 | ルート `make up`(フォアグラウンド)/ `make up-d`(デタッチ)。前段で `make migrate` が走る |
+| 単一サービスだけ起動 | `make -C app/api run` / `make -C app/auth run`(ルートからは `make api-run` / `make auth-run`)= compose の該当サービスを `--build` して起動する。**ホスト `go run` ではない** |
+| postgres だけ起動 | ルート `make db-up` |
+| マイグレーション適用 | ルート `make migrate`(dev DB)/ `make migrate-test`(`api_test` / `auth_test`)。任意引数は `make -C app/migrator run ARGS="-target api -command status"` |
+| 停止・片付け | ルート `make down`(`make clean` は named volume も削除) |
+
+**マイグレーションも runtime レーン**(SPEC-016)。`make migrate` / `migrate-test` / `make -C app/migrator run` は compose の profile 付き `migrator` サービス = `app/migrator/Dockerfile` の runtime イメージで走る(distroless static / non-root / read-only rootfs / `cap_drop: ALL`、内部ネットワーク `dbnet` のみ、マイグレーション SQL はイメージに焼き込み)。**ローカル・CI・ECS の migration init コンテナが同一アーティファクト**になる。新しいマイグレーションファイルはイメージ再ビルドで反映されるため、各呼び出しは `--build` を付ける(`make` ターゲットが既にそうしている)。
+
+toolchain レーンに残る唯一の Go バイナリ実行は `app/auth/cmd/keygen`(`make auth-signing-keys` / `rotate-signing-keys`)。常駐せず、リポジトリの `.secrets/` へ**書き込む**ことが目的なので、書き込み可能な bind mount を持つ toolbox 側が正しい置き場になる。常駐サーバーをこの例外に含めない。
+
+### 最小権限・最小マウント(runtime コンテナ)
+
+新規の runtime コンテナ(Dockerfile / compose サービス / ECS タスク定義)は最初からこれを満たす。適用状況の正は `compose.yml` / 各 `Dockerfile` / `app/iac/modules/service/ecs.tf` のコメント、経緯は ISSUE-056。
+
+- **non-root**: Go は `gcr.io/distroless/static:nonroot` + `USER nonroot`、nginx は `nginxinc/nginx-unprivileged`(uid 101)で **非特権ポート 8080** を listen する(ホスト公開ポート 8080 / 8083 は不変)
+- **`cap_drop: ALL`**(全サービス)。追加が要る場合のみ最小集合を理由付きで `cap_add`(現状の例外は postgres 公式イメージの初回 init に必要な chown / su-exec 系のみ)
+- **`read_only: true` + 必要最小の tmpfs**(api / auth / web / auth-web)。ECS は `readonlyRootFilesystem: true` + `capabilities.drop: ["ALL"]`。postgres はローカル専用のため read_only を見送る(理由は `compose.yml` のコメントが正)
+- **`security_opt: no-new-privileges:true`**(全サービス)
+- **公開範囲**: ホストへの publish は `127.0.0.1` バインドのみ(`0.0.0.0` で公開しない)
+- **ベースイメージは digest 固定**: `FROM <image>:<tag>@sha256:...`(タグは人間向けラベル、digest が同一性)。対象は api / auth / migrator の build+runtime ステージ、web / auth-web の build+runtime ステージ、compose の postgres(`versions.env` の `POSTGRES_VERSION` + `POSTGRES_IMAGE_DIGEST`。**必ず 2 つ同時に更新する** — digest が優先されるためタグだけ上げても切り替わらない)。すべて multi-arch の OCI *index* digest なので ECS の linux/arm64 も解決できる。更新手順は各 Dockerfile のコメント
+- **egress は publish と両立しない**(2026-07-25 実測): egress を止める唯一の手段が `internal: true` ネットワークだが、この Docker(29.2.1)では internal ネットワークのみに接続したコンテナの publish ポートへホストから接続できない(busybox httpd の対照実験: 通常 bridge → 200 / internal → connection refused)。したがって publish する 5 サービスは default ネットワークに残し、**publish しない面(`tools-offline` = `network_mode: none`、`tools-db` / `migrator` = `dbnet`)だけ egress を落とす**。詳細と再測定手順は `compose.yml` の `networks:` コメント
+
+### サプライチェーン(Shai-Hulud 型 npm ワーム)対策
+
+npm エコシステムのコードがこのリポジトリで実行されるのは (1) toolchain コンテナの `make install`、(2) web / auth-web の **runtime イメージ build ステージ** の 2 箇所だけ。**両方に同じゲートを効かせる**(規約の正は `.claude/rules/web.md`、ゲート導入の経緯は ISSUE-020)。
+
+- `bunfig.toml`(社内ミラー固定 + `minimumReleaseAge` = 21 日の隔離)を **`bun install` より前に COPY** する。build ステージが `bunfig.toml` を持たないと、そのビルドだけが既定の公開レジストリ・ゲート無しで解決される(= リポジトリ内で唯一の抜け道になる)
+- build ステージは **`bun install --frozen-lockfile --ignore-scripts`**。lifecycle script(postinstall 等)は当該ワーム類の実行・流出経路そのもので、このビルドには不要(ネイティブ依存は optionalDependencies のプリビルドバイナリで供給される)
+- **build context に資格情報と依存ツリーを入れない**。各 stack 直下の `.dockerignore` で `node_modules` / `dist` / `.env*` を除外する(ルートの `.dockerignore` は per-stack context には効かないので stack ごとに置く)。`node_modules` が入ると後段の `COPY . .` がゲート済みインストール結果をホストの木で上書きしてしまう。リポジトリルートを context に取るビルド(`app/migrator`)向けには、ルート `.dockerignore` が `.secrets/`(auth の RSA 署名鍵)と `.env*` を除外する
+- ビルドにも実行にも `~/.npmrc` / クラウド資格情報 / docker.sock / SSH agent を渡さない。AWS 認証を要する操作(`push-images` / `deploy-web`)は host 側の `aws` CLI に限定する(SPEC-009 R7)
+- runtime ステージに npm エコシステムを残さない。依存コードが動く面をビルド時に閉じ、常駐面(= 外部公開面)には持ち込まない
+
 ## ローカル実行(全スタック)
 
-リポジトリルートの `Makefile` + `compose.yml` で 5 サービス(web / api / auth / auth-web と `postgres`。各 app は `app/*/Dockerfile` をビルド)をまとめて起動する: `make up`(フォアグラウンド)/ `make up-d`(バックグラウンド)/ `make down` / `make logs` / `make ps`。api・auth は compose 上では Postgres 経路(fail-closed)のため、`make up` / `up-d` は先に `make migrate`(`app/migrator` 経由で api/auth の DB 作成 + マイグレーション。**SPEC-009 により toolchain コンテナ内で実行**され、ホストに Go は不要=前提は Docker のみ)を実行してからサービスを起動する。`make db-up`(postgres のみ)/ `make migrate` も個別に使える。起動後は web `http://localhost:8080` / api `http://localhost:8081` / auth `http://localhost:8082` / auth-web `http://localhost:8083` / postgres `127.0.0.1:5432`(ホストは `127.0.0.1` のみバインド)。web の nginx は `/api` / `/auth` を api / auth へ、auth-web の nginx は `/auth` を auth へ、それぞれ同一オリジンで proxy する(SPEC-015。OIDC issuer は `http://localhost:8080/auth`)。全ターゲットは `make help`。
+リポジトリルートの `Makefile` + `compose.yml` で 5 サービス(web / api / auth / auth-web と `postgres`。各 app は `app/*/Dockerfile` をビルド)をまとめて起動する: `make up`(フォアグラウンド)/ `make up-d`(バックグラウンド)/ `make down` / `make logs` / `make ps`。api・auth は compose 上では Postgres 経路(fail-closed)のため、`make up` / `up-d` は先に `make migrate`(`app/migrator` で api/auth の DB 作成 + マイグレーション。**SPEC-016 により compose の `migrator` サービス= `app/migrator/Dockerfile` の runtime イメージで実行**され、ECS の migration init コンテナと同一アーティファクトになる。ホストに Go は不要=前提は Docker のみ)を実行してからサービスを起動する。`make db-up`(postgres のみ)/ `make migrate` も個別に使える。起動後は web `http://localhost:8080` / api `http://localhost:8081` / auth `http://localhost:8082` / auth-web `http://localhost:8083` / postgres `127.0.0.1:5432`(ホストは `127.0.0.1` のみバインド)。web の nginx は `/api` / `/auth` を api / auth へ、auth-web の nginx は `/auth` を auth へ、それぞれ同一オリジンで proxy する(SPEC-015。OIDC issuer は `http://localhost:8080/auth`)。全ターゲットは `make help`。
 
+- ここが **runtime レーンの正規経路**(前節「実行境界: runtime はコンテナのみ」)。単一サービスだけ起動したい場合は `make api-run` / `make auth-run`(= `make -C app/api run` / `make -C app/auth run`)で、compose の当該サービスを `--build` して起動する。**ホストで `go run` / `bun run dev` して代替しない**
 - 各 stack のコマンドはルートから `make <stack>-<target>`(接頭辞 `api-` / `auth-` / `web-` / `auth-web-` / `iac-` / `migrator-`。例: `make api-check`、`make web-test TEST=<path>`、`make iac-plan ENV=dev`)でも呼べる(パターンルールのため `make help` の一覧には出ない)
 - auth の署名鍵は compose 既定では ephemeral(再起動で失効)。永続化するには `make auth-signing-keys` で `.secrets/auth-signing-keys.json` を生成し、`compose.yml` のコメントアウトされた `SIGNING_KEYS_FILE` + mount を有効化する(ISSUE-036。ローテーションは `make rotate-auth-signing-keys`。`.secrets/` は絶対にコミットしない)
 

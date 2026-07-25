@@ -34,7 +34,13 @@ DDD の依存性逆転を守り、永続化の詳細(SQL・ドライバ・生成
 | 実 DB テスト(DB 依存テスト全般) | `app/api` または `app/auth` | `make test`(`-p 1`。実 test DB `api_test` / `auth_test` に接続。`//go:build integration` は廃止・SPEC-013。事前にルート `make migrate-test` で test DB 作成 + 適用済みであること。`REQUIRE_DB=1` 時は未接続で skip でなく fail) |
 | test DB の作成 + マイグレーション適用(`api_test` / `auth_test`) | リポジトリルート | `make migrate-test`(`db-up` を前提とし、`app/migrator` を `DB_NAME=api_test -target api` / `DB_NAME=auth_test -target auth` で 2 回実行する) |
 | マイグレーション適用(api・auth 両方、ローカル) | リポジトリルート | `make migrate`(`db-up` を前提ターゲットとし、`app/migrator` を `-target api` / `-target auth` で 2 回実行する) |
-| マイグレーション適用(任意の target・command を直接指定) | `app/migrator` | `go run ./cmd/migrator -target api\|auth [-command up\|down\|status] [-migrations-dir <path>]`(または `make run ARGS="..."`) |
+| マイグレーション適用(任意の target・command を直接指定) | `app/migrator` | `make run ARGS="-target api\|auth [-command up\|down\|status]"` |
+
+**マイグレーションの実行レーン(SPEC-016)**: 上の 3 ターゲットはいずれも compose の profile 付き `migrator` サービス = **`app/migrator/Dockerfile` の runtime イメージ**で実行される(distroless static / non-root / read-only rootfs / `cap_drop: ALL`、内部ネットワーク `dbnet` のみ = インターネット egress なし、リポジトリの bind mount なし)。ECS の migration init コンテナと同一アーティファクトで、ローカル・CI・本番が 1 つの経路に揃う。含意:
+
+- **ホストでの `go run ./cmd/migrator` と toolchain コンテナ内での実行はどちらも禁止**(正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。toolbox 側の `run-native` は SPEC-016 で削除済み
+- マイグレーション SQL は**イメージに焼き込まれる**(`/migrations/<target>`)。新規マイグレーションファイルはイメージ再ビルドで反映されるため、各ターゲットは `--build` 付きで呼ぶ(Makefile が既にそうしている)。`-migrations-dir` は既定値どおりのため渡さない
+- `app/migrator` の Go テスト(`make check` / `make test-integration`)は Go ツールチェーンを要するので **toolchain レーンのまま**
 | 依存解決(`app/migrator` の go.mod 編集・merge 競合解消の後) | `app/migrator` | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。`make check` には含めない) |
 
 **per-stack の `migrate-up` / `migrate-down` / `migrate-status` ターゲットは存在しない**(この 2026-07-09 リファクタで `app/migrator` に一本化して移管済み)。マイグレーションの「適用」に関する操作はすべて `app/migrator` 経由で行う。

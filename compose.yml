@@ -33,7 +33,14 @@ services:
     # is a safety net for env-file-less invocations, not itself a second
     # source of truth) -- otherwise those env-file-less targets would keep
     # starting the old, un-bumped Postgres version.
-    image: postgres:${POSTGRES_VERSION:-17.5-alpine}
+    # SPEC-016: pinned by immutable digest, not by tag alone. Official image
+    # tags like `17.5-alpine` are re-pushed whenever their own base layer is
+    # rebuilt, so the tag is a human-readable label while the digest is the
+    # actual identity (Docker resolves the digest and ignores the tag). Both
+    # come from versions.env (POSTGRES_VERSION / POSTGRES_IMAGE_DIGEST) and
+    # MUST be bumped together -- see that file for the refresh command. The
+    # `:-` fallbacks keep env-file-less invocations working, same as above.
+    image: postgres:${POSTGRES_VERSION:-17.5-alpine}@${POSTGRES_IMAGE_DIGEST:-sha256:6567bca8d7bc8c82c5922425a0baee57be8402df92bae5eacad5f01ae9544daa}
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
@@ -50,6 +57,30 @@ services:
       start_period: 5s
     security_opt:
       - "no-new-privileges:true"
+    # ISSUE-056 (§1.4 of docs/plans/ISSUE-056-plan.md): drop all Linux
+    # capabilities and re-add only the minimal set the official postgres
+    # image's entrypoint needs for first-time init on an empty volume (it
+    # starts as root, chowns/prepares the data directory, then drops
+    # privileges to the `postgres` user via su-exec) -- CHOWN (chown the
+    # data dir), DAC_OVERRIDE/FOWNER (bypass/adjust file permission checks
+    # during that prep), SETUID/SETGID (the su-exec privilege drop itself).
+    # `read_only: true` is intentionally NOT applied here (unlike
+    # api/auth/web/auth-web below): the entrypoint writes outside the
+    # `pgdata` volume too (the `/var/run/postgresql` socket dir, `/tmp`,
+    # generated config), so making the root filesystem read-only would
+    # require tmpfs-ing all of those write targets -- high risk of missed
+    # paths for a local-only DB that is already bound to 127.0.0.1 with
+    # fixed, non-secret credentials (low marginal security benefit here).
+    # Least privilege is still enforced via cap_drop + this minimal cap_add
+    # + no-new-privileges + the ip_forward=0 sysctl below.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
     restart: unless-stopped
     # SPEC-013 R6 (revises SPEC-009 R3's "test phases stay fully
     # offline"): also joins the `dbnet` internal network (declared in this
@@ -84,6 +115,63 @@ services:
     sysctls:
       net.ipv4.ip_forward: "0"
 
+  # ---- one-shot migration runner (never started by `up`) -------------------
+  # SPEC-016 / ISSUE-057: the root Makefile's `migrate` / `migrate-test` used
+  # to run `go run ./cmd/migrator` inside the *toolchain* container -- source
+  # compiled on the fly, with the whole build toolchain present and this
+  # repository bind-mounted read/write. They now run this service instead: the
+  # very same app/migrator/Dockerfile image ECS uses for its migration init
+  # container (distroless static, non-root, no shell), so local, CI and
+  # production apply migrations with one identical artifact.
+  #
+  # `profiles:` keeps it out of `up` / `ps` / `build`: this is a task that
+  # runs and exits, not a service that stays up. Callers enable it explicitly:
+  #
+  #   docker compose --profile migrate run --rm --build migrator -target api
+  #
+  # `--build` is what picks up newly added migration SQL -- the image *bakes*
+  # both stacks' migrations at /migrations/<target> (see that Dockerfile)
+  # rather than reading them from the repo, which is precisely why no bind
+  # mount is needed here. `-migrations-dir` is therefore omitted: the binary
+  # defaults to /migrations/<target> for the `-target` it was given.
+  #
+  # Attached to `dbnet` (internal: true) only -- the migration runner needs
+  # exactly one peer, `postgres`, and gets no route to the public internet.
+  # That is strictly less reach than the toolchain container it replaces had.
+  migrator:
+    profiles:
+      - migrate
+    build:
+      # Repository root, not app/migrator: that Dockerfile also COPYs both
+      # stacks' schema/migrations trees (see its own header comment).
+      context: .
+      dockerfile: app/migrator/Dockerfile
+    image: cc-orchestrator/migrator:local
+    environment:
+      # Same fixed, non-secret local-only credentials as the `postgres`
+      # service above. DB_NAME is deliberately absent: app/migrator defaults
+      # it to the `-target` name (api / auth), and the test-database path
+      # (root `make migrate-test`) overrides it per invocation with
+      # `-e DB_NAME=api_test` / `auth_test`.
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: app
+      DB_PASSWORD: app
+      DB_SSLMODE: disable
+    security_opt:
+      - "no-new-privileges:true"
+    # Same posture as the long-running services: nothing to write (goose reads
+    # the baked SQL and talks to Postgres over the network), no capabilities
+    # needed, non-root by way of the image's own `USER nonroot`.
+    cap_drop:
+      - ALL
+    read_only: true
+    networks:
+      - dbnet
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: ./app/api
@@ -102,6 +190,16 @@ services:
       AUTH_AUDIENCE: http://localhost:8081/api
     security_opt:
       - "no-new-privileges:true"
+    # ISSUE-056 (§1.4): distroless static nonroot binary with no runtime
+    # writes (verified by exhaustive search of the codebase for
+    # os.Create/os.WriteFile/os.MkdirAll etc. -- see plan §0-2), so
+    # cap_drop ALL + a read-only root filesystem are both safe. `/tmp` is
+    # tmpfs'd defensively in case Go's default TMPDIR is ever touched.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     depends_on:
       postgres:
@@ -117,7 +215,17 @@ services:
       ISSUER: http://localhost:8080/auth
       API_AUDIENCE: http://localhost:8081/api
       DEMO_PASSWORD: demo
+      # ISSUE-051 / ISSUE-056 (§1.5 of docs/plans/ISSUE-056-plan.md): the
+      # auth server only ever logs DEMO_PASSWORD in plaintext when this
+      # flag is exactly "1" (app/auth/cmd/authz's env.go/main.go -- a bare
+      # non-empty DEMO_PASSWORD no longer triggers it). This is an
+      # explicit, local-only opt-in: DEMO_PASSWORD above is a known,
+      # non-secret fixed value ("demo"), so surfacing it in `make logs`
+      # is a deliberate local-login convenience, not a leak. Unset this
+      # (or set "0") to suppress the log line even with DEMO_PASSWORD set.
       DEMO_LOG_PASSWORD: "1"
+      # Fixed, non-secret local-only admin API key (never reused for any
+      # real environment) -- same convention as the DB credentials above.
       ADMIN_API_KEY: local-dev-admin-key
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -139,6 +247,14 @@ services:
     #     read_only: true
     security_opt:
       - "no-new-privileges:true"
+    # ISSUE-056 (§1.4): same rationale as `api` above -- distroless static
+    # nonroot binary, no runtime writes outside `/tmp` (verified by
+    # exhaustive search of the codebase; see plan §0-2).
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     depends_on:
       postgres:
@@ -148,10 +264,26 @@ services:
     build:
       context: ./app/web
     image: cc-orchestrator/web:local
+    # ISSUE-056 (§1.2 of docs/plans/ISSUE-056-plan.md): app/web's Dockerfile
+    # now builds on `nginxinc/nginx-unprivileged:alpine` (non-root, listens
+    # on 8080 instead of 80) -- only the container-side (right-hand) port
+    # below changes to follow; the host-side published port (127.0.0.1:8080)
+    # is unchanged.
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8080:8080"
     security_opt:
       - "no-new-privileges:true"
+    # ISSUE-056 (§1.4): nginx-unprivileged needs a small set of writable
+    # paths even though it no longer runs as root -- its pid file
+    # (/tmp/nginx.pid) and its temp/cache directories under
+    # /var/cache/nginx (client_body, proxy, fastcgi, etc. temp paths).
+    # Everything else (config, static assets) is read-only.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
     restart: unless-stopped
     depends_on:
       api:
@@ -163,10 +295,19 @@ services:
     build:
       context: ./app/auth-web
     image: cc-orchestrator/auth-web:local
+    # ISSUE-056 (§1.2): same nginx-unprivileged / 8080 change as `web`
+    # above -- container-side port follows, host-side port unchanged.
     ports:
-      - "127.0.0.1:8083:80"
+      - "127.0.0.1:8083:8080"
     security_opt:
       - "no-new-privileges:true"
+    # ISSUE-056 (§1.4): same rationale as `web` above.
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
     restart: unless-stopped
     depends_on:
       auth:
@@ -176,6 +317,29 @@ volumes:
   pgdata:
 
 networks:
+  # Why the long-running services below stay on the implicit `default`
+  # network instead of an internal (egress-denied) one -- SPEC-016, measured
+  # 2026-07-25, do not "fix" this without re-measuring:
+  #
+  # Denying internet egress to a Compose service means putting it on a network
+  # with `internal: true` (there is no separate egress switch). That is
+  # mutually exclusive with publishing a host port on this Docker version
+  # (29.2.1): a container attached only to an internal bridge network gets its
+  # published port bound on the host, but connections to 127.0.0.1:<port> are
+  # refused -- verified with a busybox httpd control pair (identical container,
+  # normal bridge -> HTTP 200; internal bridge -> connection refused, while
+  # in-container DNS/egress was confirmed dead as expected). Since web / api /
+  # auth / postgres all publish to 127.0.0.1 by design (the documented local
+  # entry points), an internal network would trade away host access for them.
+  #
+  # Egress is therefore restricted where it costs nothing instead: the
+  # toolchain lane (`tools-offline` = network_mode:none, `tools-db` = `dbnet`
+  # below) and the one-shot `migrator` service above, none of which publish
+  # ports. The published runtime services keep egress; the npm-ecosystem
+  # supply-chain gates that matter for them are applied at *image build* time
+  # (see app/web/Dockerfile's build stage) and their runtime images contain no
+  # package manager, shell or interpreter to exfiltrate with.
+  #
   # internal: true -- SPEC-013 R6 (see the `postgres` service's own
   # comment above and .devcontainer/compose.tools.yml's `tools-db`
   # service comment for the full rationale: an isolated bridge network

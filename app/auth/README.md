@@ -140,7 +140,7 @@ Docker のみ)。コマンド名・契約はこの配線変更の前後で不変
 | `make vet` / `make build` | go vet / go build |
 | `make test` / `make test-race` | テスト実行(race detector 付きは test-race) |
 | `make check` | 上記チェックを一括実行(fmt-check + lint + vet + build + test) |
-| `make run` | 認可サーバー起動 |
+| `make run` | 認可サーバーを runtime コンテナで起動(compose の `auth` サービス。ホストでの `go run` は禁止) |
 
 上記に加え、永続化(DB)系のターゲット(`make sqlc` / `make migrate-create` /
 `make test-integration`)がある。これらは生成 / 実 DB 依存であり検査ではないため
@@ -149,17 +149,16 @@ Docker のみ)。コマンド名・契約はこの配線変更の前後で不変
 
 ## 起動方法
 
+runtime はコンテナでのみ起動する(**ホストでの `go run ./cmd/authz` は禁止**。正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。`make run` は compose の `auth` サービス = `app/auth/Dockerfile` の runtime イメージ(distroless static / non-root / read-only rootfs / `cap_drop: ALL`)を `--build` して起動し、その前段でルート `make migrate` が Postgres を起動してマイグレーションを適用する。
+
 ```sh
 cd app/auth
-make run  # または go run ./cmd/authz
+make run          # auth(+ postgres。前段で migrate)。停止は Ctrl+C
 ```
 
-デフォルトでは `:8080` で待ち受け、issuer は `http://localhost:8080` になる。
-`PORT` / `ISSUER` 環境変数で変更できる。
+全 5 サービス(web / api / auth / auth-web / postgres)をまとめて起動する場合はリポジトリルートで `make up-d`(停止・撤去は `make down`)。IdP のログイン画面は web / auth-web の nginx が同一オリジンで proxy する経路(`http://localhost:8080/auth/...`)から辿る。
 
-```sh
-PORT=9000 ISSUER=https://auth.example.com go run ./cmd/authz
-```
+コンテナ内の listen は `:8080` 固定で、ホストからは `http://localhost:8082` に publish される(`127.0.0.1` バインドのみ)。`ISSUER` / `API_AUDIENCE` / `DEMO_PASSWORD` / `ADMIN_API_KEY` / `DB_*` は `compose.yml` の `auth` サービスが与えるので、変えたい場合はそこを編集する。署名鍵をプロセス再起動をまたいで保持したい場合は ISSUE-036 の手順(ルート `make auth-signing-keys` → `compose.yml` の `SIGNING_KEYS_FILE` と read_only bind のコメント解除)に従う。
 
 `Ctrl+C`(SIGINT)または SIGTERM で graceful shutdown する。
 

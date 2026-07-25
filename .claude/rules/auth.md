@@ -24,6 +24,8 @@ confidential client(client secret 認証)・API リソースサーバー向け a
 
 実行はすべて `app/auth` ディレクトリで行う。checker / tester はこれを実行する。各ターゲットの実体は `app/auth/Makefile` が単一の情報源(`app/api/Makefile` と同じ構成)。SPEC-009 により全コマンドは toolchain コンテナ内で実行される(ホストで go を直接実行しない)。`make test` は実 test DB `auth_test` を要する(SPEC-013。正規経路はルート `make migrate-test` で用意 → `REQUIRE_DB=1`。意味論の正は `.claude/rules/testing.md`)。
 
+例外は `make run`(= 認可サーバー起動 = runtime)だけで、これは toolchain コンテナではなく **`app/auth/Dockerfile` の runtime イメージ**(compose の `auth` サービス)で実行する。**ホストでの `go run` と toolchain コンテナ内での常駐起動はどちらも禁止**(正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。署名鍵生成 CLI(`make auth-signing-keys` / `rotate-signing-keys`)は常駐せずリポジトリの `.secrets/` へ書くため、従来どおり toolchain コンテナ側に残る。
+
 | 目的 | コマンド |
 |---|---|
 | format(チェック) | `make fmt-check` |
@@ -35,6 +37,7 @@ confidential client(client secret 認証)・API リソースサーバー向け a
 | 署名鍵リング生成 | `make auth-signing-keys`(`.secrets/auth-signing-keys.json` を生成。ISSUE-036。生成であり検査ではないため `make check` には含めない) |
 | 署名鍵ローテーション | `make rotate-signing-keys`(旧 active 鍵を verify-only に降格し新 active 鍵を追加 = JWKS overlap 維持) |
 | 依存解決(go.mod 編集・merge 競合解消の後) | `make tidy`(`go mod tidy` を network 有効の toolchain コンテナ経由で実行。生成系と同様 `make check` には含めない) |
+| ローカル起動(runtime) | `make run`(compose の `auth` サービスを `--build` して起動。前段でルート `make migrate` を実行する。**検査ではなく常駐する**ため checker / tester は実行しない。全 5 サービスはルート `make up` / `up-d`) |
 
 ## レイアウト
 

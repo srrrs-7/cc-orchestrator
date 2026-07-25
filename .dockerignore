@@ -36,6 +36,16 @@
 .env.*
 !.env.example
 
+# app/auth's RSA signing key ring (ISSUE-036: `make auth-signing-keys` writes
+# .secrets/auth-signing-keys.json here, gitignored, real private keys). No
+# Dockerfile COPYs it -- but this is the *repository root* context, so without
+# this entry the whole directory would still be uploaded to the Docker daemon
+# on every root-context build (app/migrator's, `make push-migrator-image`).
+# The key ring reaches a running container only as a single read-only bind
+# mount at runtime (compose.yml's `auth` service), never as build context --
+# see CLAUDE.md「実行境界: runtime はコンテナのみ」.
+.secrets/
+
 # JS package manager output (large; only app/web's own build reads it, via
 # bun install inside app/web's own Dockerfile build stage, never via a COPY
 # from the repository root)

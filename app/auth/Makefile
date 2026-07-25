@@ -43,7 +43,7 @@ include $(DEVCONTAINER_DIR)/versions.env
 # `--env-file` needed, as long as the variable is actually exported into that
 # process's environment (bare `include`d make variables are not -- hence the
 # explicit `export` below).
-export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION POSTGRES_IMAGE_DIGEST
 
 # TOOLBOX_UID/TOOLBOX_GID MUST be exported as real shell environment
 # variables (not passed via `docker compose run -e`) for
@@ -303,15 +303,46 @@ tidy: ## go.mod/go.sum を整理する (go mod tidy; ネットワーク有効な
 
 endif
 
-# `run` starts the authz server itself (not a check/build/generate step),
-# and is not part of SPEC-009's network 切り分け表 (`docker compose run`
-# publishes no ports for tools/tools-offline, so wrapping this the same
-# way would make the server unreachable from the host). Local full-stack
-# serving already has a containerized path -- the root Makefile's
-# `make up`/`up-d` (compose.yml's own `auth` service, built from
-# app/auth/Dockerfile, with published ports) -- so this target is left
-# as a host-side convenience for interactive development and is out of
-# this Phase's scope, per SPEC-009 plan §手順 B2.
+# `run` starts the authz server itself -- a *runtime* execution, not a
+# check/build/generate step, so it belongs to neither toolbox lane the rest of
+# this Makefile delegates to. SPEC-009 plan §手順 B2 originally left it as a
+# host-side `go run ./cmd/authz` convenience, explicitly out of that Phase's
+# scope; that exemption is withdrawn (CLAUDE.md「実行境界: runtime はコンテナ
+# のみ」). The server now runs only from the app/auth/Dockerfile runtime image
+# -- distroless static, non-root, read-only root filesystem, all capabilities
+# dropped -- i.e. compose.yml's own `auth` service, the same artifact and the
+# same privilege set ECS runs, with ports published so the host can reach it.
+# This mirrors app/api/Makefile's own `run` 1:1 (the two stacks share one
+# wrapper shape), adjusted only for this stack's service name.
+#
+# Two things this deliberately does NOT do:
+#   - run on the host: a host `go run` needs a host Go toolchain (SPEC-009
+#     removed that prerequisite: Docker is the only host requirement) and the
+#     server would inherit the developer's full ambient privileges and file
+#     system access -- pointed at a signing-key ring (.secrets/, ISSUE-036)
+#     that only this service should ever read;
+#   - run inside the toolchain container: it carries every build tool plus a
+#     read/write bind mount of this repository -- exactly the blast radius a
+#     runtime container is meant to give up (and the reason `docker compose
+#     run tools` publishes no ports in the first place).
+#
+# Root `migrate` runs first because compose.yml wires this service to Postgres
+# fail-closed (no in-memory fallback since SPEC-011): it brings `postgres` up
+# and applies both stacks' migrations. Ctrl-C stops the server; tear the stack
+# down with `make -C $(REPO_ROOT) down`.
+RUNTIME_COMPOSE := $(COMPOSE_BIN) -f $(REPO_ROOT)/compose.yml
+
+ifdef IN_TOOLBOX
 .PHONY: run
-run: ## 認可サーバーを起動する (PORT / ISSUER 環境変数で変更可。ホスト go 実行。コンテナ経由のフルスタック起動はルート `make up` を使う)
-	go run ./cmd/authz
+run:
+	@echo "ERROR: runtime execution inside the toolchain container is prohibited" >&2
+	@echo "       (CLAUDE.md「実行境界: runtime はコンテナのみ」)." >&2
+	@echo "       Run 'make run' from the host: it starts compose.yml's auth service," >&2
+	@echo "       built from app/auth/Dockerfile. Full stack: root 'make up'." >&2
+	@exit 1
+else
+.PHONY: run
+run: ## 認可サーバーを runtime コンテナで起動する (compose の auth サービス = app/auth/Dockerfile の runtime イメージ。ホストでの go run は禁止。全サービス起動はルート `make up`)
+	$(MAKE) -C $(REPO_ROOT) migrate
+	$(RUNTIME_COMPOSE) up --build auth
+endif

@@ -1,3 +1,10 @@
+# Build context filter for app/web/Dockerfile (context = this directory; the
+# repository-root .dockerignore does not apply to it). Kept identical to
+# app/auth-web/.dockerignore -- see that file's header for why `node_modules`,
+# `dist` and `.env*` are load-bearing rather than merely size optimizations
+# (they are what keeps the host working copy from overwriting the Dockerfile's
+# own gated `bun install`, and keeps local credentials out of the build
+# context).
 node_modules
 dist
 dist-ssr

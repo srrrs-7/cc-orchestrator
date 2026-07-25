@@ -90,20 +90,24 @@ app/api/
 | `make vet` / `make build` | go vet / go build |
 | `make test` / `make test-race` | テスト実行(race detector 付きは test-race) |
 | `make check` | 上記チェックを一括実行(fmt-check + lint + vet + build + test) |
-| `make run` | API サーバー起動 |
+| `make run` | API サーバーを runtime コンテナで起動(compose の `api` サービス。ホストでの `go run` は禁止) |
 
 ## 起動方法
 
+runtime はコンテナでのみ起動する(**ホストでの `go run ./cmd/api` は禁止**。正は CLAUDE.md「実行境界: runtime はコンテナのみ」)。`make run` は compose の `api` サービス = `app/api/Dockerfile` の runtime イメージ(distroless static / non-root / read-only rootfs / `cap_drop: ALL`)を `--build` して起動し、その前段でルート `make migrate` が Postgres を起動してマイグレーションを適用する。
+
 ```sh
 cd app/api
-make run  # または go run ./cmd/api
+make run          # api(+ postgres。前段で migrate)。停止は Ctrl+C
 ```
 
-デフォルトでは `:8080` で待ち受ける。ポートを変えたい場合は `PORT` 環境変数を指定する。
+全 5 サービス(web / api / auth / auth-web / postgres)をまとめて起動する場合はリポジトリルートで:
 
 ```sh
-PORT=9000 go run ./cmd/api
+make up-d         # デタッチ起動。停止・撤去は make down
 ```
+
+コンテナ内の listen は `:8080` 固定で、ホストからは `http://localhost:8081` に publish される(`127.0.0.1` バインドのみ)。ポートや env(`PORT` / `DB_*` / `AUTH_*`)を変えたい場合は `compose.yml` の `api` サービスを編集する。
 
 `Ctrl+C`(SIGINT)または SIGTERM で graceful shutdown する。
 

@@ -303,13 +303,14 @@ jobs:
   # This job invokes `docker compose run` directly (rather than through
   # app/migrator/Makefile's `run`/`test-integration` targets) because it
   # needs to forward two extra environment variables — APP_DB_USER /
-  # APP_DB_PASSWORD — that those targets' own DB_ONLINE_ENV does not expose
+  # APP_DB_PASSWORD — that those targets' own env sets do not expose
   # (by design: that fixed set covers only the master-credential connection
   # every OTHER caller of those targets needs). This is additive plumbing
-  # only: the actual command run inside the container on each step below
-  # (`go run ./cmd/migrator ...` / `go test -tags=integration ./...`) is
-  # exactly app/migrator's own CLI contract (.claude/rules/db.md) — nothing
-  # here invents a different command.
+  # only: each step below runs exactly what app/migrator's own contract
+  # (.claude/rules/db.md) prescribes for its lane — the migration step through
+  # the `migrator` *runtime* image (SPEC-016, same as `make migrate` locally),
+  # the privilege-boundary suite through the toolchain container (`go test
+  # -tags=integration`, a Go test run and therefore a toolchain-lane phase).
   #
   # Contract: .claude/rules/db.md (ISSUE-016 R-c) + app/migrator's CLI
   # (`-target`/`-command`/`-migrations-dir`, see app/migrator/cmd/migrator/
@@ -347,15 +348,22 @@ jobs:
       # role with least privilege (CONNECT to "api" only, DML but never DDL
       # on schema public). This is the precondition the "integration"-tagged
       # suite below asserts against.
+      # SPEC-016: the migration itself now runs from app/migrator's *runtime*
+      # image (compose.yml's profile-gated `migrator` service, the same
+      # artifact as the ECS migration init container), so this step no longer
+      # needs `-w /workspace/app/migrator`, `-migrations-dir` (baked into the
+      # image) or the DB_HOST/PORT/USER/PASSWORD/SSLMODE flags (carried by the
+      # service definition). The APP_DB_USER / APP_DB_PASSWORD bare-name
+      # passthrough below is unchanged and is still why this job invokes
+      # compose directly instead of going through a Makefile target.
       - name: Create database + migrate up + provision app role (app/migrator)
         run: |
           TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
             -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
-            run --rm -w /workspace/app/migrator \
-            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
-            -e APP_DB_USER -e APP_DB_PASSWORD \
-            tools go run ./cmd/migrator -target api -command up -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
+            --profile migrate run --rm --build \
+            -e DB_NAME=api -e APP_DB_USER -e APP_DB_PASSWORD \
+            migrator -target api -command up
 
       - name: Permission boundary integration tests (build tag "integration")
         run: |
@@ -451,20 +459,30 @@ jobs:
       - name: Create test databases + migrate up (app/migrator, api_test/auth_test)
         run: make -C "$GITHUB_WORKSPACE" migrate-test
 
+      # SPEC-016: runs compose.yml's profile-gated `migrator` service -- the
+      # app/migrator *runtime image* (distroless static, non-root, read-only
+      # root filesystem, migrations baked in at /migrations/<target>) that ECS
+      # also uses as its migration init container -- instead of `go run
+      # ./cmd/migrator` inside the toolchain container. Hence no
+      # `-w /workspace/app/migrator`, no `-migrations-dir` (the binary defaults
+      # to the baked path) and no DB_* flags beyond DB_NAME (the service
+      # definition carries host/port/user/password/sslmode). `--build` is what
+      # makes a newly added migration file take effect, since the image bakes
+      # the SQL in; compose.tools.yml stays in the `-f` list so this resolves
+      # to the same compose project config as `make db-up` above (see the root
+      # Makefile's COMPOSE_DB_FILES comment).
       - name: Migration health check for api_test (down -> up)
         run: |
           TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
             -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
-            run --rm -w /workspace/app/migrator \
-            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api_test -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
-            tools go run ./cmd/migrator -target api -command down -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
+            --profile migrate run --rm --build -e DB_NAME=api_test \
+            migrator -target api -command down
           TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
             -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
-            run --rm -w /workspace/app/migrator \
-            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=api_test -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
-            tools go run ./cmd/migrator -target api -command up -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
+            --profile migrate run --rm --build -e DB_NAME=api_test \
+            migrator -target api -command up
 
       # REQUIRE_DB=1 (SPEC-013 plan §1.5 admin ruling): the正規経路 for
       # DB-backed tests must fail loudly (t.Fatal), never silently t.Skip,
@@ -517,20 +535,20 @@ jobs:
       - name: Create test databases + migrate up (app/migrator, api_test/auth_test)
         run: make -C "$GITHUB_WORKSPACE" migrate-test
 
+      # Same SPEC-016 migrator-runtime-image invocation as the api job above
+      # (see that step's comment for why the flags shrank).
       - name: Migration health check for auth_test (down -> up)
         run: |
           TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
             -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
-            run --rm -w /workspace/app/migrator \
-            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=auth_test -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
-            tools go run ./cmd/migrator -target auth -command down -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+            --profile migrate run --rm --build -e DB_NAME=auth_test \
+            migrator -target auth -command down
           TOOLBOX_UID=$(id -u) TOOLBOX_GID=$(id -g) COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_WORKSPACE="$GITHUB_WORKSPACE" TOOLBOX_CONTEXT="$GITHUB_WORKSPACE/.devcontainer/toolchain" \
           docker compose --env-file "$GITHUB_WORKSPACE/.devcontainer/versions.env" \
             -f "$GITHUB_WORKSPACE/compose.yml" -f "$GITHUB_WORKSPACE/.devcontainer/compose.tools.yml" \
-            run --rm -w /workspace/app/migrator \
-            -e DB_HOST=postgres -e DB_PORT=5432 -e DB_NAME=auth_test -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable \
-            tools go run ./cmd/migrator -target auth -command up -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+            --profile migrate run --rm --build -e DB_NAME=auth_test \
+            migrator -target auth -command up
 
       # Offline checks already ran above; only DB-backed tests run here
       # (ISSUE-028 §4 現象3 fix, mirroring the api job's split).

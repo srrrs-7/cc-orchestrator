@@ -94,17 +94,20 @@ clean: ## 停止・コンテナ・volume を削除する
 # Containerized toolchain wiring (SPEC-009 Phase B; foundation under
 # .devcontainer/: toolchain/, compose.tools.yml, versions.env). `migrate`
 # below and `deploy-web`'s build step (further down) previously
-# shelled out to a *host* language runtime (`go`/`bun`) -- both are
-# wrapped here to run inside the pinned toolchain image instead. `build`/
-# `up`/`up-d`/`down`/`logs`/`ps`/`restart`/`clean`, and `push-images`'s
-# `docker buildx` image build, are plain docker/compose *operations*, not
-# language-toolchain invocations, so they need no such wrapping (SPEC-009
-# plan §手順 フェーズ B). `db-up` is the one partial exception among these
-# "plain operation" targets: it still only ever starts the `postgres`
-# service (no toolchain container involved), but -- see COMPOSE_DB_FILES
-# just below -- its *compose file combination* must be aligned with
-# `migrate`'s, for a network-consistency reason unrelated to toolchain
-# wrapping itself.
+# shelled out to a *host* language runtime (`go`/`bun`); neither runs on the
+# host any more. `deploy-web`'s build goes through the pinned toolchain image
+# (app/web/Makefile). `migrate` went there too in Phase B, but SPEC-016 moved
+# it one step further: it now runs compose.yml's `migrator` service -- the
+# app/migrator *runtime image*, not the toolchain -- so the only thing left in
+# the toolchain lane here is `deploy-web`'s web build. `build`/`up`/`up-d`/
+# `down`/`logs`/`ps`/`restart`/`clean`, and `push-images`'s `docker buildx`
+# image build, are plain docker/compose *operations*, not language-toolchain
+# invocations, so they need no such wrapping (SPEC-009 plan §手順 フェーズ B).
+# `db-up` is the one partial exception among these "plain operation" targets:
+# it still only ever starts the `postgres` service, but -- see
+# COMPOSE_DB_FILES just below -- its *compose file combination* must be
+# aligned with `migrate`'s, for a network-consistency reason unrelated to
+# which container the migration itself runs in.
 # Pinned tool/runtime versions (SPEC-009's single source of truth), needed
 # here so `docker compose`'s own `${VAR}` substitution (compose.tools.yml's
 # build.args, compose.yml's postgres `image:`) can resolve them. This used
@@ -118,7 +121,7 @@ clean: ## 停止・コンテナ・volume を削除する
 DEVCONTAINER_DIR := $(CURDIR)/.devcontainer
 COMPOSE_TOOLS_FILE := $(DEVCONTAINER_DIR)/compose.tools.yml
 include $(DEVCONTAINER_DIR)/versions.env
-export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION
+export GO_VERSION BUN_VERSION GOLANGCI_LINT_VERSION TERRAFORM_VERSION TFLINT_VERSION TRIVY_VERSION SQLC_VERSION GOOSE_VERSION SWAG_VERSION GOIMPORTS_VERSION POSTGRES_VERSION POSTGRES_IMAGE_DIGEST
 
 TOOLBOX_UID := $(shell id -u)
 TOOLBOX_GID := $(shell id -g)
@@ -147,14 +150,15 @@ TOOLBOX_CONTEXT   := $(DEVCONTAINER_DIR)/toolchain
 TOOLBOX_ENV := COMPOSE_PROJECT_NAME=cc-orchestrator TOOLBOX_UID=$(TOOLBOX_UID) TOOLBOX_GID=$(TOOLBOX_GID) TOOLBOX_WORKSPACE=$(TOOLBOX_WORKSPACE) TOOLBOX_CONTEXT=$(TOOLBOX_CONTEXT)
 
 # Compose file combination shared by `db-up` below and `migrate`'s
-# DB_TOOLS_RUN further down: both MUST resolve to the *exact same*
+# MIGRATOR_RUN further down: both MUST resolve to the *exact same*
 # docker-compose project config (same exported version env, same
 # `-f ... -f ...` file list), so that the CLI computes an identical
 # config hash for the implicit default network on every invocation.
 #
 # Observed empirically during Phase B implementation: `db-up` originally
 # ran bare `$(COMPOSE) up -d --wait postgres` (compose.yml alone), while
-# `migrate` (via DB_TOOLS_RUN) ran `-f compose.yml -f .devcontainer/compose.tools.yml`.
+# `migrate` (then a toolchain `run`, today MIGRATOR_RUN) ran
+# `-f compose.yml -f .devcontainer/compose.tools.yml`.
 # Even though neither file declares an explicit top-level `networks:`
 # (both rely on the same implicit `<project>_default` network, and the
 # project name is identical either way -- derived from this directory,
@@ -188,42 +192,39 @@ COMPOSE_DB_FILES := -f compose.yml -f $(COMPOSE_TOOLS_FILE)
 db-up: ## postgres のみを起動し healthy になるまで待つ(migrate と同じ compose ファイル構成で network 整合を保つ)
 	$(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) up -d --wait postgres
 
-# `tools` (network enabled), merged with this same file's own
-# compose.yml so the container can reach its `postgres` service by name.
-# Used only by `migrate` below -- the one root-Makefile phase that needs
-# a real Postgres (SPEC-009 plan's network-要否 table: "root make
-# migrate(app/migrator 実行)" row is a `tools`(+compose.yml) exception,
-# not `tools-offline`). Shares COMPOSE_DB_FILES with `db-up` above so
-# both resolve to the identical compose project config (see that
-# variable's own comment for why this matters).
-DB_TOOLS_RUN := $(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) run --rm
+# The migration runner (SPEC-016 / ISSUE-057). Migrations used to be applied
+# by `go run ./cmd/migrator` inside the *toolchain* container (`tools` service,
+# `-w /workspace/app/migrator`, with app/{api,auth}'s schema/migrations read
+# through the /workspace bind mount). They now run compose.yml's own
+# `migrator` service -- the app/migrator/Dockerfile *runtime image* ECS uses
+# for its migration init container: distroless static, non-root, read-only
+# root filesystem, all capabilities dropped, migrations baked in at
+# /migrations/<target>, attached to `dbnet` (internal, no internet egress) and
+# carrying no bind mount of this repository at all. One artifact now serves
+# local, CI and production instead of three different ways to run the same
+# binary. See that service's own comment block in compose.yml.
+#
+# Why the flags are what they are:
+#   --profile migrate  the service is profile-gated so plain `up`/`ps`/`build`
+#                      ignore it (it is a task that exits, not a daemon).
+#   --build            the image bakes the migration SQL, so a newly added
+#                      migration file only takes effect once the image is
+#                      rebuilt. Cheap after the first run (layer cache).
+#   --rm               no leftover exited containers per invocation.
+# `-migrations-dir` is no longer passed: the binary defaults to
+# /migrations/<target>, which is exactly what the image bakes in.
+#
+# Shares COMPOSE_DB_FILES with `db-up` above so both invocations still resolve
+# to the identical compose project config (see that variable's own comment --
+# the network-recreation footgun it documents is unrelated to which service is
+# being run, so the file list must stay aligned even though the toolchain
+# services are no longer involved here).
+MIGRATOR_RUN := $(TOOLBOX_ENV) $(COMPOSE) $(COMPOSE_DB_FILES) --profile migrate run --rm --build
 
-# `tools-offline` (network_mode: none). Reserved for root Makefile targets
-# that need a one-off offline exec without going through a stack Makefile.
-# (Currently unused — stack Makefiles own their own OFFLINE delegation.)
-
-MIGRATOR_DB_ENV_FLAGS := -e DB_HOST=postgres -e DB_PORT=5432 -e DB_USER=app -e DB_PASSWORD=app -e DB_SSLMODE=disable
-
-# `go run ./cmd/migrator` now runs *inside* the `tools` container above
-# (DB_TOOLS_RUN), with `-w /workspace/app/migrator` as its working
-# directory -- app/migrator's own go.mod-rooted module, reached this way
-# instead of the previous host-side `go -C app/migrator run ...` (this
-# repo root has no go.mod of its own, so `-C`/`-w` into app/migrator's
-# module context is still required; only *where* that `go run` executes
-# has changed). `-migrations-dir` is therefore rooted at /workspace (the
-# container's bind-mounted view of this repo, per compose.tools.yml),
-# not $(CURDIR) (the host's view) -- app/api's and app/auth's
-# schema/migrations directories are bind-mounted at exactly
-# /workspace/app/{api,auth}/infra/postgres/schema/migrations. DB_HOST=postgres (a compose
-# service *name*, not 127.0.0.1) because this container joins the
-# postgres service's own compose network via the `-f compose.yml -f
-# compose.tools.yml` file overlay above, rather than reaching it through
-# compose.yml's host-published 127.0.0.1:5432 port the previous
-# host-side `go run` used.
 .PHONY: migrate
-migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提として実行。toolchain コンテナ内で go を実行し、postgres へは compose ネットワーク越しに到達する)
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_DB_ENV_FLAGS) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+migrate: db-up ## api/auth のデータベースをローカル compose の postgres に作成・マイグレーション適用する (compose の migrator サービス = app/migrator/Dockerfile の runtime イメージ。db-up を前提。ECS の migration init コンテナと同一アーティファクト)
+	$(MIGRATOR_RUN) migrator -target api
+	$(MIGRATOR_RUN) migrator -target auth
 
 # ---------------------------------------------------------------------------
 # SPEC-013 (テストの実 DB 一本化): dedicated *test* databases, kept fully
@@ -235,21 +236,19 @@ migrate: db-up ## api/auth のデータベースをローカル compose の post
 # (`domain/migration.ParseDatabaseName`, `^[a-z_][a-z0-9_]*$`) rejects a
 # hyphen outright (SPEC-013 §4 "test DB 命名").
 #
-# Mirrors `migrate` above exactly (same DB_TOOLS_RUN invocation shape, same
-# `-migrations-dir`s, same lack of any APP_DB_USER/APP_DB_PASSWORD role-
-# provisioning flags -- test databases have no least-privilege runtime role
-# to provision, unlike ISSUE-016's api_app/auth_app convention for the real
-# dev/prod databases), with only MIGRATOR_DB_ENV_FLAGS's DB_NAME overridden
-# per invocation (`-e DB_NAME=...` placed *after* the shared flags so it
-# wins -- `docker compose run -e` flags are applied left-to-right, last one
-# for a given name set takes effect).
-MIGRATOR_TEST_DB_ENV_FLAGS_API  := $(MIGRATOR_DB_ENV_FLAGS) -e DB_NAME=api_test
-MIGRATOR_TEST_DB_ENV_FLAGS_AUTH := $(MIGRATOR_DB_ENV_FLAGS) -e DB_NAME=auth_test
-
+# Mirrors `migrate` above exactly (same MIGRATOR_RUN invocation shape, same
+# lack of any APP_DB_USER/APP_DB_PASSWORD role-provisioning flags -- test
+# databases have no least-privilege runtime role to provision, unlike
+# ISSUE-016's api_app/auth_app convention for the real dev/prod databases),
+# with only DB_NAME overridden per invocation. `-e DB_NAME=...` overrides the
+# `migrator` service's own `environment:` block for that one run (compose
+# applies `-e` on top of the service definition), and must precede the service
+# name -- `docker compose run [OPTIONS] SERVICE [COMMAND...]` parses anything
+# after SERVICE as the in-container command.
 .PHONY: migrate-test
-migrate-test: db-up ## api_test/auth_test テスト用データベースをローカル compose の postgres に作成・マイグレーション適用する (app/migrator 経由。db-up を前提。開発用 api/auth データベースとは別。role provisioning env は渡さない)
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_TEST_DB_ENV_FLAGS_API) tools go run ./cmd/migrator -target api -migrations-dir /workspace/app/api/infra/postgres/schema/migrations
-	$(DB_TOOLS_RUN) -w /workspace/app/migrator $(MIGRATOR_TEST_DB_ENV_FLAGS_AUTH) tools go run ./cmd/migrator -target auth -migrations-dir /workspace/app/auth/infra/postgres/schema/migrations
+migrate-test: db-up ## api_test/auth_test テスト用データベースをローカル compose の postgres に作成・マイグレーション適用する (compose の migrator サービス経由。db-up を前提。開発用 api/auth データベースとは別。role provisioning env は渡さない)
+	$(MIGRATOR_RUN) -e DB_NAME=api_test migrator -target api
+	$(MIGRATOR_RUN) -e DB_NAME=auth_test migrator -target auth
 
 # Convenience target bundling the full local "run DB-backed tests" flow:
 # start Postgres + provision both test databases (`migrate-test`, which
