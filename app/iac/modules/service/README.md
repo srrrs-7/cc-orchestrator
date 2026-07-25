@@ -103,6 +103,17 @@ api はこの制約を受けないため複数タスク可。
   in-memory リポジトリ、auth はプロセス内で鍵生成)ため、権限を一切付与しない最小権限構成
   としている。将来 S3 等を使う場合はここに追加する
 
+### コンテナレベルの最小権限(ISSUE-056)
+
+`local.app_container` と `local.migration_container_defs` はいずれも
+`readonlyRootFilesystem = true` と `linuxParameters.capabilities.drop = ["ALL"]` を持つ
+(Fargate は両方サポートする)。api / auth / migrator(app/migrator)はいずれも distroless
+static nonroot の Go バイナリで、実行時にファイル書き込みも Linux capability も必要としないため
+(ISSUE-056 の調査で `os.Create`/`os.WriteFile`/`os.MkdirAll` 等の全探索を実施し、唯一のヒットは
+実行対象と別バイナリの `app/auth/cmd/keygen` のみと確認済み)、副作用なく適用できる。8080 を
+listen するのみで 1024 未満の特権ポートを使わないため `NET_BIND_SERVICE` 等の `cap_add` も不要。
+`envs/dev` 呼び出し側の変更は不要(モジュール内で完結)。
+
 ### ECR はサービスごとに 1 リポジトリ
 
 `${name_prefix}-${service_name}` の名前で `image scanning on` + 14 日 lifecycle policy 付きの

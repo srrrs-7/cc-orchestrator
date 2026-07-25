@@ -52,6 +52,15 @@ type Env struct {
 
 	DemoPassword string
 
+	// LogDemoPassword gates the startup log line that prints the demo
+	// user's plaintext password (ISSUE-051). It is the *sole* trigger
+	// for that log line: DEMO_PASSWORD being non-empty is NOT by
+	// itself sufficient to log it (that was the bug -- a non-secret
+	// value being set was silently conflated with "ok to log secrets").
+	// True only when DEMO_LOG_PASSWORD is exactly "1", an explicit
+	// local-development opt-in.
+	LogDemoPassword bool
+
 	// AdminAPIKey is the static Bearer token / X-Admin-Key value that
 	// protects the /admin/* routes (ISSUE-039). When empty, no admin
 	// routes are registered (fail-closed: missing key → no access).
@@ -101,6 +110,7 @@ func NewEnv() Env {
 		APIAudience:     orDefault(os.Getenv("API_AUDIENCE"), defaultAPIAudience),
 		SigningKeysFile: os.Getenv("SIGNING_KEYS_FILE"),
 		DemoPassword:    os.Getenv("DEMO_PASSWORD"),
+		LogDemoPassword: os.Getenv("DEMO_LOG_PASSWORD") == "1",
 		AdminAPIKey:     os.Getenv("ADMIN_API_KEY"),
 
 		DBHost:     os.Getenv("DB_HOST"),

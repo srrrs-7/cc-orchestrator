@@ -400,3 +400,68 @@ func TestValidate_WithReaderOverride_StaysValid(t *testing.T) {
 		t.Errorf("readerConfig().Host = %q, want %q", e.readerConfig().Host, "replica.internal")
 	}
 }
+
+// --- ISSUE-051: DEMO_LOG_PASSWORD -> Env.LogDemoPassword mapping -------
+//
+// LogDemoPassword gates the startup log line that prints the demo
+// user's plaintext password (see env.go's doc comment on the field).
+// DEMO_LOG_PASSWORD == "1" is its *sole* trigger: DEMO_PASSWORD being
+// non-empty must NOT by itself flip it to true (that was the bug this
+// consolidation fixed -- a non-secret opt-in flag being silently
+// conflated with "a real credential was configured").
+
+// TestNewEnv_LogDemoPassword is a table test covering DEMO_LOG_PASSWORD's
+// mapping into Env.LogDemoPassword: unset / "1" / "0" / any other value,
+// plus the regression case that DEMO_PASSWORD alone (with
+// DEMO_LOG_PASSWORD left unset) must not opt LogDemoPassword into true.
+func TestNewEnv_LogDemoPassword(t *testing.T) {
+	tests := []struct {
+		name            string
+		demoPassword    string
+		demoLogPassword string
+		want            bool
+	}{
+		{
+			name:            "unset defaults to false",
+			demoLogPassword: "",
+			want:            false,
+		},
+		{
+			name:            `"1" opts in (正常系)`,
+			demoLogPassword: "1",
+			want:            true,
+		},
+		{
+			name:            `"0" stays false`,
+			demoLogPassword: "0",
+			want:            false,
+		},
+		{
+			name:            `any other value ("true") stays false (strict "1" match)`,
+			demoLogPassword: "true",
+			want:            false,
+		},
+		{
+			name:            "DEMO_PASSWORD alone (DEMO_LOG_PASSWORD unset) must not opt in (ISSUE-051 regression)",
+			demoPassword:    "demo",
+			demoLogPassword: "",
+			want:            false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DEMO_PASSWORD", tt.demoPassword)
+			t.Setenv("DEMO_LOG_PASSWORD", tt.demoLogPassword)
+
+			e := NewEnv()
+
+			if e.LogDemoPassword != tt.want {
+				t.Errorf("NewEnv().LogDemoPassword = %v, want %v (DEMO_LOG_PASSWORD=%q, DEMO_PASSWORD=%q)", e.LogDemoPassword, tt.want, tt.demoLogPassword, tt.demoPassword)
+			}
+			if e.DemoPassword != tt.demoPassword {
+				t.Errorf("NewEnv().DemoPassword = %q, want %q", e.DemoPassword, tt.demoPassword)
+			}
+		})
+	}
+}

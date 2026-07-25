@@ -155,7 +155,12 @@ func run() error {
 	// SIGTERM) via the select's ctx.Done() arm; it does not block the
 	// server's graceful shutdown path.
 	go runPurgeTicker(ctx, purgeInterval, authCodePurger, refreshTokenPurger, sessionStore)
-	if e.DemoPassword != "" || os.Getenv("DEMO_LOG_PASSWORD") == "1" {
+	// ISSUE-051: DEMO_LOG_PASSWORD == "1" is the sole, explicit opt-in
+	// for this plaintext log line. DemoPassword being non-empty must
+	// NOT by itself trigger it (that was the bug: setting a real
+	// credential via DEMO_PASSWORD used to leak it into logs even
+	// without DEMO_LOG_PASSWORD).
+	if e.LogDemoPassword {
 		slog.Info("authz: demo user password", "username", demoUsername, "password", demoPassword)
 	}
 
