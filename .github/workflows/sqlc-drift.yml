@@ -52,8 +52,8 @@ jobs:
       api: ${{ steps.filter.outputs.api }}
       auth: ${{ steps.filter.outputs.auth }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           # Paths mirror .claude/rules/db.md's frontmatter `paths` (the
@@ -92,7 +92,7 @@ jobs:
       run:
         working-directory: app/api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       # `make sqlc` itself runs the sqlc binary (baked into the toolchain
@@ -150,7 +150,7 @@ jobs:
       run:
         working-directory: app/auth
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/build-toolchain-image
 
       - name: Warm Go module cache (app/auth)
